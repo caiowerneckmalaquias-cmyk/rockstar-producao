@@ -649,23 +649,6 @@ const [importMode, setImportMode] = useState("replace");
   const [programacaoSubAba, setProgramacaoSubAba] = useState("Pesponto");
   const [feriadosTexto, setFeriadosTexto] = useState("");
 
-  useEffect(() => {
-    console.log("APP INICIOU");
-
-    async function testarSupabase() {
-      console.log("TESTANDO SUPABASE...");
-      const { data, error } = await supabase
-        .from("produtos")
-        .select("*")
-        .limit(5);
-
-      console.log("SUPABASE DATA:", data);
-      console.log("SUPABASE ERROR:", error);
-    }
-
-    testarSupabase();
-  }, []);
-
   const refs = useMemo(() => rows.map((r) => `${r.ref}__${r.cor}`), [rows]);
 
   const previewBySelection = (form) => {
@@ -1063,7 +1046,31 @@ const [importMode, setImportMode] = useState("replace");
     }
   };
 
-  const executeImport = () => {
+
+
+  const salvarProdutosNoBanco = async (produtos) => {
+    try {
+      const { data, error } = await supabase
+        .from("produtos")
+        .upsert(produtos, { onConflict: "ref,cor" })
+        .select();
+
+      console.log("PRODUTOS ENVIADOS:", produtos);
+      console.log("RETORNO SUPABASE:", data);
+      console.log("ERRO AO SALVAR NO SUPABASE:", error);
+
+      if (!error) {
+        console.log("PRODUTOS SALVOS NO SUPABASE");
+      }
+
+      return { data, error };
+    } catch (err) {
+      console.log("ERRO GERAL AO SALVAR PRODUTOS:", err);
+      return { data: null, error: err };
+    }
+  };
+
+  const executeImport = async () => {
     if (importMode === "reset") {
       setRows((current) =>
         current.map((row) => ({
@@ -1081,6 +1088,11 @@ const [importMode, setImportMode] = useState("replace");
       );
     }
     const parsed = parseGcmRawText(importText);
+    const produtosParaSalvar = parsed.map((item) => ({
+      ref: item.ref,
+      cor: item.cor,
+    }));
+
     if (!parsed.length) {
       setImportFeedback("Não encontrei blocos válidos do GCM.");
       setImportPreview([]);
@@ -1198,6 +1210,7 @@ const [importMode, setImportMode] = useState("replace");
       totalPares: parsed.reduce((acc, item) => acc + (item.total || 0), 0),
       preview: parsed.slice(0, 8),
     });
+    await salvarProdutosNoBanco(produtosParaSalvar);
     setConfirmImport(false);
   };
 
