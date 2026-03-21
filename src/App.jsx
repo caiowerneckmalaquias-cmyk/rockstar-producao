@@ -195,8 +195,7 @@ function contarDiasUteisDoMesAteHoje(currentDate, feriadosList = []) {
 
 function parseGcmRawText(rawText) {
   const lines = String(rawText || "")
-    .split(/\r?
-/)
+    .split(/\r?\n/)
     .map((line) => line.replace(/\t+/g, " ").replace(/\s+/g, " ").trim())
     .filter(Boolean);
 
