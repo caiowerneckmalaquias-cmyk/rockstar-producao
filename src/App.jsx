@@ -850,6 +850,16 @@ const [importMode, setImportMode] = useState("replace");
       dataLancamento: new Date().toLocaleDateString("pt-BR"),
     };
 
+    const movsParaSalvar = items.map((item) => ({
+      tipo,
+      ref: form.ref,
+      cor: form.cor,
+      numero: item.size,
+      quantidade: item.qtd,
+      programacao: programacaoNome,
+      status: \"Em aberto\",
+    }));
+
     if (tipo === "Pesponto") {
       setPespontoLancamentos((c) => [payload, ...c]);
       setPespontoForm((f) => ({ ...f, grid: makeEmptyGrid() }));
@@ -858,6 +868,7 @@ const [importMode, setImportMode] = useState("replace");
       setMontagemForm((f) => ({ ...f, grid: makeEmptyGrid() }));
     }
 
+    salvarMovimentacao(movsParaSalvar);
     setConfirmMov(null);
   };
 
@@ -1091,6 +1102,23 @@ const [importMode, setImportMode] = useState("replace");
       return { data: null, error: err };
     }
   };
+
+  const salvarMovimentacao = async (movs) => {
+    try {
+      const { data, error } = await supabase
+        .from("movimentacoes")
+        .insert(movs)
+        .select();
+
+      console.log("MOVIMENTACOES ENVIADAS:", movs);
+      console.log("RETORNO MOV:", data);
+      console.log("ERRO MOV:", error);
+
+    } catch (err) {
+      console.log("ERRO GERAL MOV:", err);
+    }
+  };
+
 
   const executeImport = async () => {
     if (importMode === "reset") {
