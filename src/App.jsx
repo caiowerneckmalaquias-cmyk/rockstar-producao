@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import { supabase } from "./supabase";
 
 const sizes = [34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44];
 const navItems = [
@@ -647,6 +648,23 @@ const [importMode, setImportMode] = useState("replace");
   const [printRelatorioData, setPrintRelatorioData] = useState(null);
   const [programacaoSubAba, setProgramacaoSubAba] = useState("Pesponto");
   const [feriadosTexto, setFeriadosTexto] = useState("");
+
+  useEffect(() => {
+    console.log("APP INICIOU");
+
+    async function testarSupabase() {
+      console.log("TESTANDO SUPABASE...");
+      const { data, error } = await supabase
+        .from("produtos")
+        .select("*")
+        .limit(5);
+
+      console.log("SUPABASE DATA:", data);
+      console.log("SUPABASE ERROR:", error);
+    }
+
+    testarSupabase();
+  }, []);
 
   const refs = useMemo(() => rows.map((r) => `${r.ref}__${r.cor}`), [rows]);
 
