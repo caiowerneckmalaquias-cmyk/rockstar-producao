@@ -198,54 +198,6 @@ function parseGcmRawText(rawText) {
     .split(/\r?\n/)
     .map((line) => line.replace(/\t+/g, " ").replace(/\s+/g, " ").trim())
     .filter(Boolean);
-
-  const parsed = [];
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-    if (!line.includes(" - ")) continue;
-
-    const parts = line.split(" - ");
-    const ref = parts[0]?.trim().toUpperCase();
-    if (!ref || ref === "LISTAGEM DO ESTOQUE") continue;
-
-    let descricao = parts.slice(1).join(" - ");
-    descricao = descricao.replace(/-\s*MARCA\s*:.*/i, "").trim();
-
-    let cor = descricao;
-    if (/ADULTO/i.test(descricao)) {
-      cor = descricao.split(/ADULTO/i).pop().trim();
-    } else if (/INFANTIL/i.test(descricao)) {
-      cor = descricao.split(/INFANTIL/i).pop().trim();
-    }
-
-    let estoqueLine = "";
-    for (let j = i + 1; j < Math.min(lines.length, i + 8); j += 1) {
-      const clean = lines[j].toUpperCase().trim();
-      if (clean.startsWith("ESTOQUE") && !clean.includes("OVERLOQUE")) {
-        estoqueLine = lines[j];
-        break;
-      }
-    }
-    if (!estoqueLine) continue;
-
-    const nums = (estoqueLine.match(/-?\d+/g) || []).map(Number);
-    if (nums.length < sizes.length) continue;
-
-    const data = {};
-    sizes.forEach((size, idx) => {
-      data[size] = nums[idx] ?? 0;
-    });
-
-    parsed.push({
-      ref,
-      cor: cor || "Sem cor",
-      data,
-      total: sizes.reduce((acc, size) => acc + (data[size] || 0), 0),
-    });
-  }
-
-  return parsed;
 }
 
 function buildSuggestions(rows, minimos, vendas, tempoProducao) {
