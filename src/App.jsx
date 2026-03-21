@@ -195,7 +195,8 @@ function contarDiasUteisDoMesAteHoje(currentDate, feriadosList = []) {
 
 function parseGcmRawText(rawText) {
   const lines = String(rawText || "")
-    .split(/\r?\n/)
+    .split(/\r?
+/)
     .map((line) => line.replace(/\t+/g, " ").replace(/\s+/g, " ").trim())
     .filter(Boolean);
 
@@ -782,7 +783,8 @@ const [importMode, setImportMode] = useState("replace");
     );
   };
 
-  const executeMov = (tipo, form, force = false) => {
+  const executeMov = async (tipo, form, force = false) => {
+    console.log("EXECUTE MOV FOI CHAMADO", { tipo, form });
     const items = sizes
       .map((size) => ({ size, qtd: Number(form.grid[size]) || 0 }))
       .filter((x) => x.qtd > 0);
@@ -850,6 +852,8 @@ const [importMode, setImportMode] = useState("replace");
       dataLancamento: new Date().toLocaleDateString("pt-BR"),
     };
 
+    console.log("PAYLOAD CRIADO", payload);
+
     const movsParaSalvar = items.map((item) => ({
       tipo,
       ref: form.ref,
@@ -857,7 +861,7 @@ const [importMode, setImportMode] = useState("replace");
       numero: item.size,
       quantidade: item.qtd,
       programacao: programacaoNome,
-      status: \"Em aberto\",
+      status: "Em aberto",
     }));
 
     if (tipo === "Pesponto") {
@@ -868,7 +872,9 @@ const [importMode, setImportMode] = useState("replace");
       setMontagemForm((f) => ({ ...f, grid: makeEmptyGrid() }));
     }
 
-    salvarMovimentacao(movsParaSalvar);
+    console.log("ANTES DE SALVAR MOVIMENTACAO", movsParaSalvar);
+    await salvarMovimentacao(movsParaSalvar);
+    console.log("DEPOIS DE SALVAR");
     setConfirmMov(null);
   };
 
@@ -1105,17 +1111,27 @@ const [importMode, setImportMode] = useState("replace");
 
   const salvarMovimentacao = async (movs) => {
     try {
+      console.log("MOVIMENTACOES ENVIADAS:", movs);
+
       const { data, error } = await supabase
         .from("movimentacoes")
         .insert(movs)
         .select();
 
-      console.log("MOVIMENTACOES ENVIADAS:", movs);
       console.log("RETORNO MOV:", data);
       console.log("ERRO MOV:", error);
 
+      if (error) {
+        alert("Erro ao salvar movimentação. Veja o console.");
+      } else {
+        alert("Movimentação salva no banco.");
+      }
+
+      return { data, error };
     } catch (err) {
       console.log("ERRO GERAL MOV:", err);
+      alert("Erro geral ao salvar movimentação.");
+      return { data: null, error: err };
     }
   };
 
