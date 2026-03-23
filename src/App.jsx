@@ -124,72 +124,86 @@ function parseGcmRawText(rawText) {
 
   const resultado = [];
   let atual = null;
-  let aguardandoQtd = false;
-  let tamanhos = [];
+  let aguardandoQuantidades = false;
+  let tamanhosDaLinha = [];
+
+  const finalizarAtual = () => {
+    if (!atual) return;
+    atual.total = sizes.reduce((acc, s) => acc + (Number(atual.data[s]) || 0), 0);
+    resultado.push(atual);
+    atual = null;
+    aguardandoQuantidades = false;
+    tamanhosDaLinha = [];
+  };
+
+  const extrairCor = (texto) => {
+    const match = texto.match(
+      /\b(?:ADULTO|COURINO|INFANTIL)\b\s+(.*?)(?:\s*-\s*MARCA.*|\s*-\s*.*|$)/i
+    );
+    return match ? match[1].trim() : "";
+  };
 
   lines.forEach((line) => {
     const texto = line.toUpperCase();
 
+    // ignora overloque
     if (texto.includes("OVERLOQUE")) return;
 
-    if (/^[A-Z0-9]{5,}/.test(texto) && !texto.match(/^\d/)) {
-      if (atual) {
-        atual.total = sizes.reduce((acc, s) => acc + (atual.data[s] || 0), 0);
-        resultado.push(atual);
-      }
+    // cabeçalho do produto
+    if (
+      texto.includes("-") &&
+      (texto.includes("ADULTO") || texto.includes("COURINO") || texto.includes("INFANTIL"))
+    ) {
+      finalizarAtual();
+
+      const ref = texto.split("-")[0].trim();
+      const cor = extrairCor(texto);
 
       atual = {
-        ref: texto.split(" ")[0],
-        cor: "",
+        ref,
+        cor,
         data: Object.fromEntries(sizes.map((s) => [s, 0])),
         total: 0,
       };
 
-      tamanhos = [];
-      aguardandoQtd = false;
       return;
     }
 
     if (!atual) return;
 
-    if (!atual.cor && texto.includes("-")) {
-      atual.cor = texto.split("-")[0].trim();
+    // linha de tamanhos: ex. 34 35 36 37 ... QTDE
+    if (texto.includes("QTDE")) {
+      const nums = line
+        .split(" ")
+        .map((v) => Number(v))
+        .filter((n) => !Number.isNaN(n));
+
+      tamanhosDaLinha = nums.filter((n) => sizes.includes(n));
+
+      if (tamanhosDaLinha.length) {
+        aguardandoQuantidades = true;
+      }
+
       return;
     }
 
-    const possiveisNumeros = line
-      .split(" ")
-      .map((n) => Number(n))
-      .filter((n) => !isNaN(n));
-
-    if (
-      possiveisNumeros.length >= 5 &&
-      possiveisNumeros.every((n) => sizes.includes(n))
-    ) {
-      tamanhos = possiveisNumeros;
-      aguardandoQtd = true;
-      return;
-    }
-
-    if (aguardandoQtd) {
+    // linha de quantidades
+    if (aguardandoQuantidades) {
       const qtds = line
         .split(" ")
-        .map((n) => Number(n))
-        .filter((n) => !isNaN(n));
+        .map((v) => Number(v))
+        .filter((n) => !Number.isNaN(n));
 
-      tamanhos.forEach((size, idx) => {
+      tamanhosDaLinha.forEach((size, idx) => {
         atual.data[size] = qtds[idx] || 0;
       });
 
-      aguardandoQtd = false;
-      return;
+      aguardandoQuantidades = false;
+      tamanhosDaLinha = [];
     }
   });
 
-  if (atual) {
-    atual.total = sizes.reduce((acc, s) => acc + (atual.data[s] || 0), 0);
-    resultado.push(atual);
-  }
+  finalizarAtual();
 
   return resultado;
 }
