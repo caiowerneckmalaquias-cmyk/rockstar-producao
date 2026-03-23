@@ -616,6 +616,25 @@ const [importMode, setImportMode] = useState("replace");
     setVendasDraft(vendas);
   }, [vendas]);
 
+useEffect(() => {
+  const carregarDadosIniciais = async () => {
+    const minimosBanco = await carregarMinimosDoBanco();
+    const vendasBanco = await carregarVendasDoBanco();
+
+    if (minimosBanco) {
+      setMinimos(minimosBanco);
+      setDraftMinimos(minimosBanco);
+    }
+
+    if (vendasBanco) {
+      setVendas(vendasBanco);
+      setVendasDraft(vendasBanco);
+    }
+  };
+
+  carregarDadosIniciais();
+}, []);
+
   useEffect(() => {
     if (!printRelatorioData) return undefined;
 
@@ -1077,6 +1096,78 @@ const salvarVendasNoBanco = async (vendasData) => {
   }
 };
 
+const carregarMinimosDoBanco = async () => {
+  try {
+    const { data, error } = await supabase
+      .from("minimos")
+      .select("*")
+      .order("ref", { ascending: true })
+      .order("cor", { ascending: true })
+      .order("numero", { ascending: true });
+
+    if (error) {
+      console.log("ERRO AO CARREGAR MINIMOS:", error);
+      return null;
+    }
+
+    if (!data || !data.length) {
+      return null;
+    }
+
+    const estruturado = {};
+
+    data.forEach((item) => {
+      if (!estruturado[item.ref]) estruturado[item.ref] = {};
+      if (!estruturado[item.ref][item.cor]) estruturado[item.ref][item.cor] = {};
+
+      estruturado[item.ref][item.cor][item.numero] = {
+        pa: Number(item.min_pa) || 0,
+        prod: Number(item.min_prod) || 0,
+      };
+    });
+
+    console.log("MINIMOS CARREGADOS:", estruturado);
+    return estruturado;
+  } catch (err) {
+    console.log("ERRO GERAL AO CARREGAR MINIMOS:", err);
+    return null;
+  }
+};
+
+const carregarVendasDoBanco = async () => {
+  try {
+    const { data, error } = await supabase
+      .from("vendas")
+      .select("*")
+      .order("ref", { ascending: true })
+      .order("cor", { ascending: true })
+      .order("numero", { ascending: true });
+
+    if (error) {
+      console.log("ERRO AO CARREGAR VENDAS:", error);
+      return null;
+    }
+
+    if (!data || !data.length) {
+      return null;
+    }
+
+    const estruturado = {};
+
+    data.forEach((item) => {
+      if (!estruturado[item.ref]) estruturado[item.ref] = {};
+      if (!estruturado[item.ref][item.cor]) estruturado[item.ref][item.cor] = {};
+
+      estruturado[item.ref][item.cor][item.numero] = Number(item.qtd) || 0;
+    });
+
+    console.log("VENDAS CARREGADAS:", estruturado);
+    return estruturado;
+  } catch (err) {
+    console.log("ERRO GERAL AO CARREGAR VENDAS:", err);
+    return null;
+  }
+};
 
   const executeImport = async () => {
     if (importMode === "reset") {
