@@ -91,10 +91,6 @@ const initialVendas = {
   CRVTNCV: { "All Black": Object.fromEntries(sizes.map((s) => [s, 0])) },
 };
 
-const initialTempoProducao = {
-  pesponto: 3,
-  montagem: 2,
-};
 
 function statusFor(item, minimo) {
   const prod = item.est + item.m + item.p;
