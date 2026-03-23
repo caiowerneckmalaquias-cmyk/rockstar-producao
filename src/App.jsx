@@ -1064,6 +1064,74 @@ useEffect(() => {
   setConfirmAction(null);
 };
 
+function parseGcmSheet(sheet) {
+  const rowsSheet = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+
+  if (!rowsSheet || !rowsSheet.length) return [];
+
+  const normalize = (value) =>
+    String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toUpperCase();
+
+  const parseNum = (value) => {
+    const n = Number(String(value || "").replace(/[^\d.-]/g, "").replace(",", "."));
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const headerIndex = rowsSheet.findIndex((row) =>
+    row.some((cell) => normalize(cell) === "REF" || normalize(cell) === "REFERENCIA")
+  );
+
+  if (headerIndex === -1) return [];
+
+  const header = rowsSheet[headerIndex].map((cell) => normalize(cell));
+
+  const refIdx = header.findIndex((h) => h === "REF" || h === "REFERENCIA");
+  const corIdx = header.findIndex((h) => h === "COR");
+
+  const sizeIndexes = {};
+  sizes.forEach((size) => {
+    const idx = header.findIndex((h) => h === String(size));
+    if (idx !== -1) sizeIndexes[size] = idx;
+  });
+
+  if (refIdx === -1 || corIdx === -1) return [];
+
+  const resultado = [];
+
+  for (let i = headerIndex + 1; i < rowsSheet.length; i += 1) {
+    const row = rowsSheet[i];
+    const ref = String(row[refIdx] || "").trim();
+    const cor = String(row[corIdx] || "").trim();
+
+    if (!ref || !cor) continue;
+
+    const data = Object.fromEntries(sizes.map((size) => [size, 0]));
+
+    sizes.forEach((size) => {
+      const idx = sizeIndexes[size];
+      if (idx !== undefined) {
+        data[size] = parseNum(row[idx]);
+      }
+    });
+
+    const total = sizes.reduce((acc, size) => acc + (Number(data[size]) || 0), 0);
+
+    resultado.push({
+      ref,
+      cor,
+      data,
+      total,
+    });
+  }
+
+  return resultado;
+}
+
   const handleFileUpload = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -1072,7 +1140,7 @@ useEffect(() => {
       const workbook = XLSX.read(buffer, { type: "array" });
       const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
       const rawText = XLSX.utils.sheet_to_txt(firstSheet);
-      const parsed = parseGcmRawText(rawText);
+      const parsed = parseGcmSheet(firstSheet);
       setImportText(rawText);
       setImportFileName(file.name);
       setImportPreview(parsed);
@@ -1480,7 +1548,7 @@ return { pesponto, montagem, ajustesEst };
       );
     }
 
-    const parsed = parseGcmRawText(importText);
+    const parsed = importPreview;
 
     if (!parsed.length) {
       setImportFeedback("Não encontrei blocos válidos do GCM.");
@@ -1633,7 +1701,7 @@ return { pesponto, montagem, ajustesEst };
   };
 
   const applyImport = () => {
-    const parsed = parseGcmRawText(importText);
+  const parsed = importPreview;
     if (!parsed.length) {
       setImportFeedback("Não encontrei blocos válidos do GCM.");
       setImportPreview([]);
