@@ -917,36 +917,87 @@ useEffect(() => {
     setConfirmAction(null);
   };
 
-  const confirmFinalizarProgramacao = ({ tipo, programacao }) => {
-    const lancamentos = tipo === "Pesponto" ? pespontoLancamentos : montagemLancamentos;
-    const alvo = lancamentos.filter((l) => l.programacao === programacao && l.status !== "Finalizado");
+  const confirmFinalizarProgramacao = async ({ tipo, programacao }) => {
+  const lancamentos = tipo === "Pesponto" ? pespontoLancamentos : montagemLancamentos;
+  const alvo = lancamentos.filter(
+    (l) => l.programacao === programacao && l.status !== "Finalizado"
+  );
 
-    alvo.forEach((lancamento) => {
-      const updates = lancamento.items.flatMap((item) =>
-        tipo === "Pesponto"
-          ? [
-              { size: item.size, field: "p", delta: -item.qtd },
-              { size: item.size, field: "est", delta: item.qtd },
-            ]
-          : [
-              { size: item.size, field: "m", delta: -item.qtd },
-              { size: item.size, field: "pa", delta: item.qtd },
-            ]
-      );
+  const dataFinalizacao = new Date().toLocaleDateString("pt-BR");
 
-      applyGridDelta(lancamento.ref, lancamento.cor, updates);
+  const nextRows = rows.map((row) => {
+    const lancamentosDaLinha = alvo.filter(
+      (lancamento) => lancamento.ref === row.ref && lancamento.cor === row.cor
+    );
+
+    if (!lancamentosDaLinha.length) return row;
+
+    const nextData = { ...row.data };
+
+    lancamentosDaLinha.forEach((lancamento) => {
+      lancamento.items.forEach((item) => {
+        const atual = nextData[item.size] || { pa: 0, est: 0, m: 0, p: 0 };
+
+        if (tipo === "Pesponto") {
+          nextData[item.size] = {
+            ...atual,
+            p: Math.max(0, (atual.p || 0) - item.qtd),
+            est: (atual.est || 0) + item.qtd,
+          };
+        } else {
+          nextData[item.size] = {
+            ...atual,
+            m: Math.max(0, (atual.m || 0) - item.qtd),
+            pa: (atual.pa || 0) + item.qtd,
+          };
+        }
+      });
     });
 
-    const dataFinalizacao = new Date().toLocaleDateString("pt-BR");
+    return {
+      ...row,
+      data: nextData,
+    };
+  });
 
-    if (tipo === "Pesponto") {
-      setPespontoLancamentos((curr) => curr.map((l) => (l.programacao === programacao ? { ...l, status: "Finalizado", dataFinalizacao } : l)));
-    } else {
-      setMontagemLancamentos((curr) => curr.map((l) => (l.programacao === programacao ? { ...l, status: "Finalizado", dataFinalizacao } : l)));
-    }
+  setRows(nextRows);
 
-    setConfirmAction(null);
-  };
+  await salvarEstoqueNoBanco(
+    nextRows
+      .map((row) =>
+        Object.entries(row.data).map(([numero, valores]) => ({
+          ref: row.ref,
+          cor: row.cor,
+          numero: Number(numero),
+          pa: valores.pa || 0,
+          est: valores.est || 0,
+          m: valores.m || 0,
+          p: valores.p || 0,
+        }))
+      )
+      .flat()
+  );
+
+  if (tipo === "Pesponto") {
+    setPespontoLancamentos((curr) =>
+      curr.map((l) =>
+        l.programacao === programacao
+          ? { ...l, status: "Finalizado", dataFinalizacao }
+          : l
+      )
+    );
+  } else {
+    setMontagemLancamentos((curr) =>
+      curr.map((l) =>
+        l.programacao === programacao
+          ? { ...l, status: "Finalizado", dataFinalizacao }
+          : l
+      )
+    );
+  }
+
+  setConfirmAction(null);
+};
 
   const handleFileUpload = async (event) => {
     const file = event.target.files?.[0];
