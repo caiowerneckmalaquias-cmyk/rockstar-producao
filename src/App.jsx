@@ -119,24 +119,15 @@ function contarDiasUteisDoMesAteHoje(currentDate, feriadosList = []) {
 function parseGcmRawText(rawText) {
   const lines = String(rawText || "")
     .split(/\r?\n/)
-    .map((line) => line.replace(/\t+/g, " ").replace(/\s+/g, " ").trim())
+    .map((line) => line.trim())
     .filter(Boolean);
 
   const resultado = [];
   let atual = null;
   let tamanhos = [];
-  let coletandoEstoque = false;
-  let numerosEstoque = [];
 
-  const finalizarAtual = () => {
-    if (!atual) return;
-    atual.total = sizes.reduce((acc, s) => acc + (Number(atual.data[s]) || 0), 0);
-    resultado.push(atual);
-    atual = null;
-    tamanhos = [];
-    coletandoEstoque = false;
-    numerosEstoque = [];
-  };
+  const extrairNumeros = (texto) =>
+    (texto.match(/\d+/g) || []).map(Number);
 
   const extrairCor = (texto) => {
     const match = texto.match(
@@ -145,11 +136,11 @@ function parseGcmRawText(rawText) {
     return match ? match[1].trim() : "";
   };
 
-  const extrairNumeros = (texto) =>
-    texto
-      .split(" ")
-      .map((v) => Number(v))
-      .filter((n) => !Number.isNaN(n));
+  const finalizar = () => {
+    if (!atual) return;
+    atual.total = sizes.reduce((acc, s) => acc + (atual.data[s] || 0), 0);
+    resultado.push(atual);
+  };
 
   lines.forEach((line) => {
     const texto = line.toUpperCase();
@@ -157,12 +148,12 @@ function parseGcmRawText(rawText) {
     // ignora overloque
     if (texto.includes("OVERLOQUE")) return;
 
-    // cabeçalho do produto
+    // cabeçalho produto
     if (
       texto.includes("-") &&
       (texto.includes("ADULTO") || texto.includes("COURINO") || texto.includes("INFANTIL"))
     ) {
-      finalizarAtual();
+      finalizar();
 
       atual = {
         ref: texto.split("-")[0].trim(),
@@ -178,45 +169,23 @@ function parseGcmRawText(rawText) {
 
     // linha de tamanhos
     if (texto.includes("QTDE")) {
-      tamanhos = extrairNumeros(line).filter((n) => sizes.includes(n));
-      coletandoEstoque = false;
-      numerosEstoque = [];
+      tamanhos = extrairNumeros(texto).filter((n) => sizes.includes(n));
       return;
     }
 
-    // início da linha de estoque
-    if (texto.startsWith("ESTOQUE")) {
-      coletandoEstoque = true;
-      numerosEstoque = extrairNumeros(texto.replace("ESTOQUE", "").trim());
+    // linha de estoque
+    if (texto.includes("ESTOQUE")) {
+      const numeros = extrairNumeros(texto);
 
-      if (tamanhos.length && numerosEstoque.length >= tamanhos.length) {
-        tamanhos.forEach((size, idx) => {
-          atual.data[size] = numerosEstoque[idx] || 0;
-        });
-        coletandoEstoque = false;
-        numerosEstoque = [];
-      }
-
-      return;
-    }
-
-    // continuação das quantidades do estoque em linha seguinte
-    if (coletandoEstoque) {
-      numerosEstoque = [...numerosEstoque, ...extrairNumeros(line)];
-
-      if (tamanhos.length && numerosEstoque.length >= tamanhos.length) {
-        tamanhos.forEach((size, idx) => {
-          atual.data[size] = numerosEstoque[idx] || 0;
-        });
-        coletandoEstoque = false;
-        numerosEstoque = [];
-      }
+      tamanhos.forEach((size, idx) => {
+        atual.data[size] = numeros[idx] || 0;
+      });
 
       return;
     }
   });
 
-  finalizarAtual();
+  finalizar();
 
   return resultado;
 }
