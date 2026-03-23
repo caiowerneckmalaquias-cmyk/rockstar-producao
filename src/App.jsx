@@ -1009,6 +1009,74 @@ const [importMode, setImportMode] = useState("replace");
     }
   };
 
+const salvarMinimosNoBanco = async (minimosData) => {
+  try {
+    const linhas = [];
+
+    Object.keys(minimosData || {}).forEach((ref) => {
+      Object.keys(minimosData[ref] || {}).forEach((cor) => {
+        Object.keys(minimosData[ref][cor] || {}).forEach((numero) => {
+          const item = minimosData[ref][cor][numero] || {};
+          linhas.push({
+            ref,
+            cor,
+            numero: Number(numero),
+            min_pa: Number(item.pa) || 0,
+            min_prod: Number(item.prod) || 0,
+          });
+        });
+      });
+    });
+
+    const { data, error } = await supabase
+      .from("minimos")
+      .upsert(linhas, { onConflict: "ref,cor,numero" })
+      .select();
+
+    console.log("MINIMOS ENVIADOS:", linhas);
+    console.log("RETORNO MINIMOS:", data);
+    console.log("ERRO MINIMOS:", error);
+
+    return { data, error };
+  } catch (err) {
+    console.log("ERRO GERAL MINIMOS:", err);
+    return { data: null, error: err };
+  }
+};
+
+const salvarVendasNoBanco = async (vendasData) => {
+  try {
+    const linhas = [];
+
+    Object.keys(vendasData || {}).forEach((ref) => {
+      Object.keys(vendasData[ref] || {}).forEach((cor) => {
+        Object.keys(vendasData[ref][cor] || {}).forEach((numero) => {
+          linhas.push({
+            ref,
+            cor,
+            numero: Number(numero),
+            qtd: Number(vendasData[ref][cor][numero]) || 0,
+          });
+        });
+      });
+    });
+
+    const { data, error } = await supabase
+      .from("vendas")
+      .upsert(linhas, { onConflict: "ref,cor,numero" })
+      .select();
+
+    console.log("VENDAS ENVIADAS:", linhas);
+    console.log("RETORNO VENDAS:", data);
+    console.log("ERRO VENDAS:", error);
+
+    return { data, error };
+  } catch (err) {
+    console.log("ERRO GERAL VENDAS:", err);
+    return { data: null, error: err };
+  }
+};
+
 
   const executeImport = async () => {
     if (importMode === "reset") {
@@ -2247,11 +2315,12 @@ const [importMode, setImportMode] = useState("replace");
       setDirtyMinimos(true);
     };
 
-    const salvar = () => {
-      setMinimos(draftMinimos);
-      setTempoProducao(tempoProducaoDraft);
-      setDirtyMinimos(false);
-    };
+    const salvar = async () => {
+  setMinimos(draftMinimos);
+  setTempoProducao(tempoProducaoDraft);
+  await salvarMinimosNoBanco(draftMinimos);
+  setDirtyMinimos(false);
+};
 
     return (
       <PageShell title="Minimos" subtitle="Aba equivalente aos mínimos da planilha, com PA e PROD por referência, cor e numeração.">
