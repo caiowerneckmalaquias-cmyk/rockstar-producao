@@ -470,77 +470,87 @@ function PageShell({ children, title, subtitle, action }) {
 
 export default function ModuloProducaoPreviewRecuperado() {
   const [active, setActive] = useState("Dashboard");
-  const [rows, setRows] = useState(initialRows);
-  const [minimos, setMinimos] = useState(initialMinimos);
-  const [vendas, setVendas] = useState(initialVendas);
-  const [importText, setImportText] = useState("");
-  const [importFileName, setImportFileName] = useState("");
-  const [importFeedback, setImportFeedback] = useState("");
-  const [importPreview, setImportPreview] = useState([]);
-  const [ultimaImportacaoGcm, setUltimaImportacaoGcm] = useState(null);
-  const [salesImportFileName, setSalesImportFileName] = useState("");
-  const [salesImportFeedback, setSalesImportFeedback] = useState("");
-  const [salesImportPreview, setSalesImportPreview] = useState([]);
-  const [vendasDraft, setVendasDraft] = useState(initialVendas);
-  const [vendasDirty, setVendasDirty] = useState(false);
-  const [historicoVendasManuais, setHistoricoVendasManuais] = useState([]);
-  const [pespontoForm, setPespontoForm] = useState({ ref: "BTCV010", cor: "Preto", grid: makeEmptyGrid(), programacao: "Programação A" });
-  const [montagemForm, setMontagemForm] = useState({ ref: "BTCV010", cor: "Preto", grid: makeEmptyGrid(), programacao: "Programação A" });
-  const [pespontoLancamentos, setPespontoLancamentos] = useState([]);
-  const [montagemLancamentos, setMontagemLancamentos] = useState([]);
-  const [previewFicha, setPreviewFicha] = useState(null);
-  const [confirmImport, setConfirmImport] = useState(false);
+const [rows, setRows] = useState([]);
+const [minimos, setMinimos] = useState({});
+const [vendas, setVendas] = useState({});
+const [importText, setImportText] = useState("");
+const [importFileName, setImportFileName] = useState("");
+const [importFeedback, setImportFeedback] = useState("");
+const [importPreview, setImportPreview] = useState([]);
+const [ultimaImportacaoGcm, setUltimaImportacaoGcm] = useState(null);
+const [salesImportFileName, setSalesImportFileName] = useState("");
+const [salesImportFeedback, setSalesImportFeedback] = useState("");
+const [salesImportPreview, setSalesImportPreview] = useState([]);
+const [vendasDraft, setVendasDraft] = useState({});
+const [vendasDirty, setVendasDirty] = useState(false);
+const [historicoVendasManuais, setHistoricoVendasManuais] = useState([]);
+const [pespontoForm, setPespontoForm] = useState({
+  ref: "",
+  cor: "",
+  grid: makeEmptyGrid(),
+  programacao: "Programação A",
+});
+const [montagemForm, setMontagemForm] = useState({
+  ref: "",
+  cor: "",
+  grid: makeEmptyGrid(),
+  programacao: "Programação A",
+});
+const [pespontoLancamentos, setPespontoLancamentos] = useState([]);
+const [montagemLancamentos, setMontagemLancamentos] = useState([]);
+const [previewFicha, setPreviewFicha] = useState(null);
+const [confirmImport, setConfirmImport] = useState(false);
 const [importMode, setImportMode] = useState("replace");
-  const [movError, setMovError] = useState({ Pesponto: "", Montagem: "" });
-  const [confirmMov, setConfirmMov] = useState(null);
-  const [editingMov, setEditingMov] = useState(null);
-  const [controleFiltroRef, setControleFiltroRef] = useState("TODAS");
-  const [controleFiltroCor, setControleFiltroCor] = useState("TODAS");
-  const [controleFiltroNumero, setControleFiltroNumero] = useState("TODAS");
-  const [ajusteEstForm, setAjusteEstForm] = useState({
-    ref: "BTCV010",
-    cor: "Preto",
-    tipo: "entrada",
-    size: 34,
-    qtd: 0,
-    motivo: "",
-  });
-  const [ajustesEst, setAjustesEst] = useState([]);
-  const [ajusteEstErro, setAjusteEstErro] = useState("");
-  const [draftMinimos, setDraftMinimos] = useState(initialMinimos);
-  const [dirtyMinimos, setDirtyMinimos] = useState(false);
-  const [tempoProducao, setTempoProducao] = useState(initialTempoProducao);
-  const [tempoProducaoDraft, setTempoProducaoDraft] = useState(initialTempoProducao);
-  const [fichasAbertas, setFichasAbertas] = useState({});
-  const [programacaoDias, setProgramacaoDias] = useState(7);
-  const [confirmAction, setConfirmAction] = useState(null);
-  const [relatorioDataInicial, setRelatorioDataInicial] = useState("");
-  const [relatorioDataFinal, setRelatorioDataFinal] = useState("");
-  const [relatorioSetor, setRelatorioSetor] = useState("TODOS");
-  const [relatorioStatus, setRelatorioStatus] = useState("TODOS");
-  const [relatorioRef, setRelatorioRef] = useState("TODAS");
-  const [relatorioCor, setRelatorioCor] = useState("TODAS");
-  const [printRelatorioData, setPrintRelatorioData] = useState(null);
-  const [programacaoSubAba, setProgramacaoSubAba] = useState("Pesponto");
-  const [feriadosTexto, setFeriadosTexto] = useState("");
+const [movError, setMovError] = useState({ Pesponto: "", Montagem: "" });
+const [confirmMov, setConfirmMov] = useState(null);
+const [editingMov, setEditingMov] = useState(null);
+const [controleFiltroRef, setControleFiltroRef] = useState("TODAS");
+const [controleFiltroCor, setControleFiltroCor] = useState("TODAS");
+const [controleFiltroNumero, setControleFiltroNumero] = useState("TODAS");
+const [ajusteEstForm, setAjusteEstForm] = useState({
+  ref: "",
+  cor: "",
+  tipo: "entrada",
+  size: 34,
+  qtd: 0,
+  motivo: "",
+});
+const [ajustesEst, setAjustesEst] = useState([]);
+const [ajusteEstErro, setAjusteEstErro] = useState("");
+const [draftMinimos, setDraftMinimos] = useState({});
+const [dirtyMinimos, setDirtyMinimos] = useState(false);
+const [tempoProducao, setTempoProducao] = useState(initialTempoProducao);
+const [tempoProducaoDraft, setTempoProducaoDraft] = useState(initialTempoProducao);
+const [fichasAbertas, setFichasAbertas] = useState({});
+const [programacaoDias, setProgramacaoDias] = useState(7);
+const [confirmAction, setConfirmAction] = useState(null);
+const [relatorioDataInicial, setRelatorioDataInicial] = useState("");
+const [relatorioDataFinal, setRelatorioDataFinal] = useState("");
+const [relatorioSetor, setRelatorioSetor] = useState("TODOS");
+const [relatorioStatus, setRelatorioStatus] = useState("TODOS");
+const [relatorioRef, setRelatorioRef] = useState("TODAS");
+const [relatorioCor, setRelatorioCor] = useState("TODAS");
+const [printRelatorioData, setPrintRelatorioData] = useState(null);
+const [programacaoSubAba, setProgramacaoSubAba] = useState("Pesponto");
+const [feriadosTexto, setFeriadosTexto] = useState("");
 
-  const refs = useMemo(() => rows.map((r) => `${r.ref}__${r.cor}`), [rows]);
+const refs = useMemo(() => rows.map((r) => `${r.ref}__${r.cor}`), [rows]);
 
-  const previewBySelection = (form) => {
-    const row = rows.find((item) => item.ref === form.ref && item.cor === form.cor);
-    if (!row) return null;
+const previewBySelection = (form) => {
+  const row = rows.find((item) => item.ref === form.ref && item.cor === form.cor);
+  if (!row) return null;
 
-    const totalPesponto = sizes.reduce((acc, size) => acc + (row.data[size]?.p || 0), 0);
-    const totalMontagem = sizes.reduce((acc, size) => acc + (row.data[size]?.m || 0), 0);
-    const totalEst = sizes.reduce((acc, size) => acc + (row.data[size]?.est || 0), 0);
+  const totalPesponto = sizes.reduce((acc, size) => acc + (row.data[size]?.p || 0), 0);
+  const totalMontagem = sizes.reduce((acc, size) => acc + (row.data[size]?.m || 0), 0);
+  const totalEst = sizes.reduce((acc, size) => acc + (row.data[size]?.est || 0), 0);
 
-    return {
-      row,
-      totalPesponto,
-      totalMontagem,
-      totalEst,
-    };
+  return {
+    row,
+    totalPesponto,
+    totalMontagem,
+    totalEst,
   };
+};
 
   const vendaGridForRow = (row) => {
     const grid = vendasDraft?.[row.ref]?.[row.cor] || vendas?.[row.ref]?.[row.cor];
