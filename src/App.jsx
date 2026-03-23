@@ -1289,33 +1289,34 @@ const salvarVendasNoBanco = async (vendasData) => {
     setVendasDirty(true);
   };
 
-  const salvarVendasManuais = () => {
-    setVendas(vendasDraft);
+const salvarVendasManuais = async () => {
+  setVendas(vendasDraft);
+  await salvarVendasNoBanco(vendasDraft);
 
-    const resumo = sortedRowsByRefCor
-      .map((row) => {
-        const atual = vendasDraft?.[row.ref]?.[row.cor] || makeEmptyGrid();
-        const total = sizes.reduce((acc, size) => acc + (Number(atual[size]) || 0), 0);
-        return total > 0 ? { ref: row.ref, cor: row.cor, total } : null;
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 8);
+  const resumo = sortedRowsByRefCor
+    .map((row) => {
+      const atual = vendasDraft?.[row.ref]?.[row.cor] || makeEmptyGrid();
+      const total = sizes.reduce((acc, size) => acc + (Number(atual[size]) || 0), 0);
+      return total > 0 ? { ref: row.ref, cor: row.cor, total } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 8);
 
-    setHistoricoVendasManuais((curr) => [
-      {
-        id: `vendas-manual-${Date.now()}`,
-        dataHora: new Date().toLocaleString("pt-BR"),
-        itens: resumo.length,
-        totalPares: resumo.reduce((acc, item) => acc + item.total, 0),
-        resumo,
-      },
-      ...curr,
-    ]);
+  setHistoricoVendasManuais((curr) => [
+    {
+      id: `vendas-manual-${Date.now()}`,
+      dataHora: new Date().toLocaleString("pt-BR"),
+      itens: resumo.length,
+      totalPares: resumo.reduce((acc, item) => acc + item.total, 0),
+      resumo,
+    },
+    ...curr,
+  ]);
 
-    setVendasDirty(false);
-    setSalesImportFeedback("Vendas manuais salvas com sucesso.");
-  };
+  setVendasDirty(false);
+  setSalesImportFeedback("Vendas manuais salvas com sucesso.");
+};
 
   const handleSalesFileUpload = async (event) => {
     const file = event.target.files?.[0];
