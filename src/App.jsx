@@ -940,18 +940,19 @@ useEffect(() => {
         const atual = nextData[item.size] || { pa: 0, est: 0, m: 0, p: 0 };
 
         if (tipo === "Pesponto") {
-          nextData[item.size] = {
-            ...atual,
-            p: Math.max(0, (atual.p || 0) - item.qtd),
-            est: (atual.est || 0) + item.qtd,
-          };
-        } else {
-          nextData[item.size] = {
-            ...atual,
-            m: Math.max(0, (atual.m || 0) - item.qtd),
-            pa: (atual.pa || 0) + item.qtd,
-          };
-        }
+  nextData[item.size] = {
+    ...atual,
+    p: Math.max(0, (atual.p || 0) - item.qtd),
+    est: (atual.est || 0) + item.qtd,
+  };
+} else {
+  nextData[item.size] = {
+    ...atual,
+    est: Math.max(0, (atual.est || 0) - item.qtd),
+    m: Math.max(0, (atual.m || 0) - item.qtd),
+    pa: (atual.pa || 0) + item.qtd,
+  };
+}
       });
     });
 
