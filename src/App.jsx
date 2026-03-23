@@ -621,6 +621,7 @@ useEffect(() => {
     const estoqueBanco = await carregarEstoqueDoBanco();
     const minimosBanco = await carregarMinimosDoBanco();
     const vendasBanco = await carregarVendasDoBanco();
+    const movimentacoesBanco = await carregarMovimentacoesDoBanco();
 
     if (estoqueBanco) {
       setRows(estoqueBanco);
@@ -634,6 +635,11 @@ useEffect(() => {
     if (vendasBanco) {
       setVendas(vendasBanco);
       setVendasDraft(vendasBanco);
+    }
+
+    if (movimentacoesBanco) {
+      setPespontoLancamentos(movimentacoesBanco.pesponto || []);
+      setMontagemLancamentos(movimentacoesBanco.montagem || []);
     }
   };
 
@@ -1237,6 +1243,77 @@ const carregarEstoqueDoBanco = async () => {
   } catch (err) {
     console.log("ERRO GERAL AO CARREGAR ESTOQUE:", err);
     return null;
+  }
+};
+
+const carregarMovimentacoesDoBanco = async () => {
+  try {
+    const { data, error } = await supabase
+      .from("movimentacoes")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.log("ERRO AO CARREGAR MOVIMENTACOES:", error);
+      return { pesponto: [], montagem: [] };
+    }
+
+    if (!data || !data.length) {
+      return { pesponto: [], montagem: [] };
+    }
+
+    const agrupar = (lista, tipo) => {
+      const mapa = new Map();
+
+      lista
+        .filter((item) => item.tipo === tipo)
+        .forEach((item) => {
+          const programacao = item.programacao || "Sem programação";
+          const ref = item.ref || "";
+          const cor = item.cor || "";
+          const status = item.status || "Em aberto";
+          const dataLancamento =
+            item.created_at
+              ? new Date(item.created_at).toLocaleDateString("pt-BR")
+              : new Date().toLocaleDateString("pt-BR");
+
+          const chave = `${tipo}__${programacao}__${ref}__${cor}__${status}__${dataLancamento}`;
+
+          if (!mapa.has(chave)) {
+            mapa.set(chave, {
+              id: chave,
+              programacao,
+              ref,
+              cor,
+              items: [],
+              total: 0,
+              status,
+              dataLancamento,
+            });
+          }
+
+          const grupo = mapa.get(chave);
+          const qtd = Number(item.quantidade) || 0;
+          const numero = Number(item.numero) || 0;
+
+          grupo.items.push({
+            size: numero,
+            qtd,
+          });
+
+          grupo.total += qtd;
+        });
+
+      return Array.from(mapa.values());
+    };
+
+    const pesponto = agrupar(data, "Pesponto");
+    const montagem = agrupar(data, "Montagem");
+
+    return { pesponto, montagem };
+  } catch (err) {
+    console.log("ERRO GERAL AO CARREGAR MOVIMENTACOES:", err);
+    return { pesponto: [], montagem: [] };
   }
 };
 
