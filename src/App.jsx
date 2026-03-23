@@ -124,16 +124,12 @@ function parseGcmRawText(rawText) {
 
   const resultado = [];
   let atual = null;
-  let aguardandoQuantidades = false;
-  let tamanhosDaLinha = [];
+  let tamanhos = [];
 
-  const finalizarAtual = () => {
+  const finalizar = () => {
     if (!atual) return;
-    atual.total = sizes.reduce((acc, s) => acc + (Number(atual.data[s]) || 0), 0);
+    atual.total = sizes.reduce((acc, s) => acc + (atual.data[s] || 0), 0);
     resultado.push(atual);
-    atual = null;
-    aguardandoQuantidades = false;
-    tamanhosDaLinha = [];
   };
 
   const extrairCor = (texto) => {
@@ -146,64 +142,57 @@ function parseGcmRawText(rawText) {
   lines.forEach((line) => {
     const texto = line.toUpperCase();
 
-    // ignora overloque
+    // ❌ ignora overloque
     if (texto.includes("OVERLOQUE")) return;
 
-    // cabeçalho do produto
+    // 🔥 cabeçalho produto
     if (
       texto.includes("-") &&
       (texto.includes("ADULTO") || texto.includes("COURINO") || texto.includes("INFANTIL"))
     ) {
-      finalizarAtual();
-
-      const ref = texto.split("-")[0].trim();
-      const cor = extrairCor(texto);
+      finalizar();
 
       atual = {
-        ref,
-        cor,
+        ref: texto.split("-")[0].trim(),
+        cor: extrairCor(texto),
         data: Object.fromEntries(sizes.map((s) => [s, 0])),
         total: 0,
       };
 
+      tamanhos = [];
       return;
     }
 
     if (!atual) return;
 
-    // linha de tamanhos: ex. 34 35 36 37 ... QTDE
+    // 🔥 linha de tamanhos
     if (texto.includes("QTDE")) {
-      const nums = line
+      tamanhos = line
         .split(" ")
         .map((v) => Number(v))
-        .filter((n) => !Number.isNaN(n));
-
-      tamanhosDaLinha = nums.filter((n) => sizes.includes(n));
-
-      if (tamanhosDaLinha.length) {
-        aguardandoQuantidades = true;
-      }
+        .filter((n) => sizes.includes(n));
 
       return;
     }
 
-    // linha de quantidades
-    if (aguardandoQuantidades) {
-      const qtds = line
+    // 🔥 linha ESTOQUE (aqui está o pulo do gato)
+    if (texto.startsWith("ESTOQUE")) {
+      const numeros = line
+        .replace("ESTOQUE", "")
+        .trim()
         .split(" ")
         .map((v) => Number(v))
-        .filter((n) => !Number.isNaN(n));
+        .filter((n) => !isNaN(n));
 
-      tamanhosDaLinha.forEach((size, idx) => {
-        atual.data[size] = qtds[idx] || 0;
+      tamanhos.forEach((size, idx) => {
+        atual.data[size] = numeros[idx] || 0;
       });
 
-      aguardandoQuantidades = false;
-      tamanhosDaLinha = [];
+      return;
     }
   });
 
-  finalizarAtual();
+  finalizar();
 
   return resultado;
 }
