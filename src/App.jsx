@@ -638,8 +638,9 @@ useEffect(() => {
     }
 
     if (movimentacoesBanco) {
-      setPespontoLancamentos(movimentacoesBanco.pesponto || []);
-      setMontagemLancamentos(movimentacoesBanco.montagem || []);
+  setPespontoLancamentos(movimentacoesBanco.pesponto || []);
+  setMontagemLancamentos(movimentacoesBanco.montagem || []);
+  setAjustesEst(movimentacoesBanco.ajustesEst || []);
     }
   };
 
@@ -1378,11 +1379,24 @@ const carregarMovimentacoesDoBanco = async () => {
     const pesponto = agrupar(data, "Pesponto");
     const montagem = agrupar(data, "Montagem");
 
-    return { pesponto, montagem };
+const ajustesEst = data
+  .filter((item) => String(item.tipo || "") === "Costura Pronta")
+  .map((item, index) => ({
+    id: item.id || `ajuste-${index}`,
+    data: new Date().toLocaleDateString("pt-BR"),
+    ref: item.ref || "",
+    cor: item.cor || "",
+    tipo: String(item.programacao || "").toLowerCase().includes("saida") ? "saida" : "entrada",
+    size: Number(item.numero) || 0,
+    qtd: Number(item.q) || 0,
+    motivo: item.programacao || "Sem motivo informado",
+  }));
+
+return { pesponto, montagem, ajustesEst };
 
   } catch (err) {
-    console.log("ERRO GERAL AO CARREGAR MOVIMENTACOES:", err);
-    return { pesponto: [], montagem: [] };
+  console.log("ERRO GERAL AO CARREGAR MOVIMENTACOES:", err);
+  return { pesponto: [], montagem: [], ajustesEst: [] };
   }
 };
 
@@ -2416,46 +2430,87 @@ const salvarVendasManuais = async () => {
     );
   };
 
-  const aplicarAjusteEst = () => {
-    const qtd = Number(ajusteEstForm.qtd) || 0;
-    if (!qtd) {
-      setAjusteEstErro("Informe uma quantidade válida para o ajuste.");
-      return;
-    }
+  const aplicarAjusteEst = async () => {
+  const qtd = Number(ajusteEstForm.qtd) || 0;
+  if (!qtd) {
+    setAjusteEstErro("Informe uma quantidade válida para o ajuste.");
+    return;
+  }
 
-    const row = rows.find((item) => item.ref === ajusteEstForm.ref && item.cor === ajusteEstForm.cor);
-    const atual = row?.data?.[ajusteEstForm.size]?.est || 0;
+  const row = rows.find((item) => item.ref === ajusteEstForm.ref && item.cor === ajusteEstForm.cor);
+  const atual = row?.data?.[ajusteEstForm.size]?.est || 0;
 
-    if (ajusteEstForm.tipo === "saida" && qtd > atual) {
-      setAjusteEstErro(`A saída não pode ser maior que o saldo atual da costura pronta (${atual}).`);
-      return;
-    }
+  if (ajusteEstForm.tipo === "saida" && qtd > atual) {
+    setAjusteEstErro(`A saída não pode ser maior que o saldo atual da costura pronta (${atual}).`);
+    return;
+  }
 
-    setAjusteEstErro("");
-    applyGridDelta(ajusteEstForm.ref, ajusteEstForm.cor, [
-      {
-        size: ajusteEstForm.size,
-        field: "est",
-        delta: ajusteEstForm.tipo === "entrada" ? qtd : -qtd,
-      },
-    ]);
+  setAjusteEstErro("");
 
-    setAjustesEst((curr) => [
-      {
-        id: `ajuste-est-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        data: new Date().toLocaleDateString("pt-BR"),
-        ref: ajusteEstForm.ref,
-        cor: ajusteEstForm.cor,
-        tipo: ajusteEstForm.tipo,
-        size: ajusteEstForm.size,
-        qtd,
-        motivo: ajusteEstForm.motivo || "Sem motivo informado",
-      },
-      ...curr,
-    ]);
+  const delta = ajusteEstForm.tipo === "entrada" ? qtd : -qtd;
 
-    setAjusteEstForm((curr) => ({ ...curr, qtd: 0, motivo: "" }));
+  const nextRows = rows.map((item) => {
+    if (item.ref !== ajusteEstForm.ref || item.cor !== ajusteEstForm.cor) return item;
+
+    const nextData = { ...item.data };
+    const atualNumero = nextData[ajusteEstForm.size] || { pa: 0, est: 0, m: 0, p: 0 };
+
+    nextData[ajusteEstForm.size] = {
+      ...atualNumero,
+      est: Math.max(0, (atualNumero.est || 0) + delta),
+    };
+
+    return {
+      ...item,
+      data: nextData,
+    };
+  });
+
+  setRows(nextRows);
+
+  await salvarEstoqueNoBanco(
+    nextRows
+      .map((row) =>
+        Object.entries(row.data).map(([numero, valores]) => ({
+          ref: row.ref,
+          cor: row.cor,
+          numero: Number(numero),
+          pa: valores.pa || 0,
+          est: valores.est || 0,
+          m: valores.m || 0,
+          p: valores.p || 0,
+        }))
+      )
+      .flat()
+  );
+
+  const ajuste = {
+    id: `ajuste-est-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    data: new Date().toLocaleDateString("pt-BR"),
+    ref: ajusteEstForm.ref,
+    cor: ajusteEstForm.cor,
+    tipo: ajusteEstForm.tipo,
+    size: ajusteEstForm.size,
+    qtd,
+    motivo: ajusteEstForm.motivo || "Sem motivo informado",
   };
+
+  setAjustesEst((curr) => [ajuste, ...curr]);
+
+  await salvarMovimentacao([
+    {
+      tipo: "Costura Pronta",
+      ref: ajusteEstForm.ref,
+      cor: ajusteEstForm.cor,
+      numero: ajusteEstForm.size,
+      q: qtd,
+      programacao: `Ajuste manual - ${ajusteEstForm.tipo}`,
+      status: "Lançado",
+    },
+  ]);
+
+  setAjusteEstForm((curr) => ({ ...curr, qtd: 0, motivo: "" }));
+};
 
   const renderCosturaPronta = () => (
     <PageShell title="Costura Pronta" subtitle="Etapa intermediária alimentada pelo Pesponto finalizado.">
