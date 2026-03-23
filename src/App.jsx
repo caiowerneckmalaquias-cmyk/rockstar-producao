@@ -618,8 +618,13 @@ const [importMode, setImportMode] = useState("replace");
 
 useEffect(() => {
   const carregarDadosIniciais = async () => {
+    const estoqueBanco = await carregarEstoqueDoBanco();
     const minimosBanco = await carregarMinimosDoBanco();
     const vendasBanco = await carregarVendasDoBanco();
+
+    if (estoqueBanco) {
+      setRows(estoqueBanco);
+    }
 
     if (minimosBanco) {
       setMinimos(minimosBanco);
@@ -1165,6 +1170,72 @@ const carregarVendasDoBanco = async () => {
     return estruturado;
   } catch (err) {
     console.log("ERRO GERAL AO CARREGAR VENDAS:", err);
+    return null;
+  }
+};
+
+const carregarEstoqueDoBanco = async () => {
+  try {
+    const { data, error } = await supabase
+      .from("estoque")
+      .select("*")
+      .order("ref", { ascending: true })
+      .order("cor", { ascending: true })
+      .order("numero", { ascending: true });
+
+    if (error) {
+      console.log("ERRO AO CARREGAR ESTOQUE:", error);
+      return null;
+    }
+
+    if (!data || !data.length) {
+      return null;
+    }
+
+    const agrupado = {};
+
+    data.forEach((item) => {
+      const key = `${item.ref}__${item.cor}`;
+
+      if (!agrupado[key]) {
+        agrupado[key] = {
+          ref: item.ref,
+          cor: item.cor,
+          data: {},
+        };
+      }
+
+      agrupado[key].data[item.numero] = {
+        pa: Number(item.pa) || 0,
+        est: Number(item.est) || 0,
+        m: Number(item.m) || 0,
+        p: Number(item.p) || 0,
+      };
+    });
+
+    const rowsEstruturadas = Object.values(agrupado).map((row) => {
+      const dataCompleta = {};
+
+      sizes.forEach((size) => {
+        dataCompleta[size] = row.data[size] || {
+          pa: 0,
+          est: 0,
+          m: 0,
+          p: 0,
+        };
+      });
+
+      return {
+        ref: row.ref,
+        cor: row.cor,
+        data: dataCompleta,
+      };
+    });
+
+    console.log("ESTOQUE CARREGADO:", rowsEstruturadas);
+    return rowsEstruturadas;
+  } catch (err) {
+    console.log("ERRO GERAL AO CARREGAR ESTOQUE:", err);
     return null;
   }
 };
