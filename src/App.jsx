@@ -130,11 +130,23 @@ function parseGcmRawText(rawText) {
     (texto.match(/\d+/g) || []).map(Number);
 
   const extrairCor = (texto) => {
-    const match = texto.match(
-      /\b(?:ADULTO|COURINO|INFANTIL)\b\s+(.*?)(?:\s*-\s*MARCA.*|\s*-\s*.*|$)/i
-    );
-    return match ? match[1].trim() : "";
-  };
+  const partes = texto.split("-");
+
+  // pega a parte principal (onde tem ADULTO / COURINO / INFANTIL)
+  const descricao = partes[1] || "";
+
+  const palavras = descricao.trim().split(" ");
+
+  // encontra onde começa a cor
+  const idx = palavras.findIndex((p) =>
+    ["ADULTO", "COURINO", "INFANTIL"].includes(p)
+  );
+
+  if (idx === -1) return "";
+
+  // tudo depois disso é cor
+  return palavras.slice(idx + 1).join(" ").trim();
+};
 
   const finalizar = () => {
     if (!atual) return;
