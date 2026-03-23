@@ -1085,57 +1085,56 @@ function parseGcmSheet(sheet) {
 
   if (!rowsSheet || !rowsSheet.length) return [];
 
-  const normalize = (value) =>
-    String(value || "")
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .toUpperCase();
-
-  const parseNum = (value) => {
-    const n = Number(String(value || "").replace(/[^\d.-]/g, "").replace(",", "."));
-    return Number.isFinite(n) ? n : 0;
-  };
-
-  const headerIndex = rowsSheet.findIndex((row) =>
-    row.some((cell) => normalize(cell) === "REF" || normalize(cell) === "REFERENCIA")
-  );
-
-  if (headerIndex === -1) return [];
-
-  const header = rowsSheet[headerIndex].map((cell) => normalize(cell));
-
-  const refIdx = header.findIndex((h) => h === "REF" || h === "REFERENCIA");
-  const corIdx = header.findIndex((h) => h === "COR");
-
-  const sizeIndexes = {};
-  sizes.forEach((size) => {
-    const idx = header.findIndex((h) => h === String(size));
-    if (idx !== -1) sizeIndexes[size] = idx;
-  });
-
-  if (refIdx === -1 || corIdx === -1) return [];
-
   const resultado = [];
 
-  for (let i = headerIndex + 1; i < rowsSheet.length; i += 1) {
+  const extrairNumeros = (valor) =>
+    String(valor || "")
+      .match(/-?\d+/g)?.map(Number) || [];
+
+  const extrairCor = (texto) => {
+    const match = String(texto || "").match(
+      /\b(?:ADULTO|COURINO|INFANTIL)\b\s+(.*?)(?:\s*-\s*MARCA.*|\s*-\s*.*|$)/i
+    );
+    return match ? match[1].trim() : "";
+  };
+
+  for (let i = 0; i < rowsSheet.length; i += 1) {
     const row = rowsSheet[i];
-    const ref = String(row[refIdx] || "").trim();
-    const cor = String(row[corIdx] || "").trim();
 
-    if (!ref || !cor) continue;
+    const descricao = String(row[2] || "").trim(); // coluna C
+    const tamanhosTexto = String(row[7] || "").trim(); // coluna H
+    const qtdeTexto = String(row[14] || "").trim(); // coluna O, só total
 
-    const data = Object.fromEntries(sizes.map((size) => [size, 0]));
+    if (
+      !descricao ||
+      !(descricao.includes("-")) ||
+      !/(ADULTO|COURINO|INFANTIL)/i.test(descricao)
+    ) {
+      continue;
+    }
 
-    sizes.forEach((size) => {
-      const idx = sizeIndexes[size];
-      if (idx !== undefined) {
-        data[size] = parseNum(row[idx]);
-      }
+    const ref = descricao.split("-")[0].trim().toUpperCase();
+    const cor = extrairCor(descricao).toUpperCase();
+
+    const tamanhos = extrairNumeros(tamanhosTexto).filter((n) => sizes.includes(n));
+    if (!tamanhos.length) continue;
+
+    const proximaRow = rowsSheet[i + 1] || [];
+    const linhaEstoqueLabel = String(proximaRow[2] || "").trim().toUpperCase(); // coluna C
+    const linhaEstoqueTexto = String(proximaRow[7] || "").trim(); // coluna H
+
+    if (!linhaEstoqueLabel.includes("ESTOQUE")) continue;
+
+    const quantidades = extrairNumeros(linhaEstoqueTexto);
+
+    const data = Object.fromEntries(sizes.map((s) => [s, 0]));
+    tamanhos.forEach((size, idx) => {
+      data[size] = quantidades[idx] || 0;
     });
 
-    const total = sizes.reduce((acc, size) => acc + (Number(data[size]) || 0), 0);
+    const total =
+      Number(String(qtdeTexto).replace(/[^\d-]/g, "")) ||
+      sizes.reduce((acc, s) => acc + (data[s] || 0), 0);
 
     resultado.push({
       ref,
@@ -1149,23 +1148,25 @@ function parseGcmSheet(sheet) {
 }
 
   const handleFileUpload = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    try {
-      const buffer = await file.arrayBuffer();
-      const workbook = XLSX.read(buffer, { type: "array" });
-      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-      const rawText = XLSX.utils.sheet_to_txt(firstSheet);
-      const parsed = parseGcmRawText(rawText);
-      setImportText(rawText);
-      setImportFileName(file.name);
-      setImportPreview(parsed);
-      setImportFeedback(`Arquivo carregado com ${parsed.length} bloco(s) do GCM.`);
-    } catch {
-      setImportFeedback("Não consegui ler esse arquivo.");
-      setImportPreview([]);
-    }
-  };
+  const file = event.target.files?.[0];
+  if (!file) return;
+  try {
+    const buffer = await file.arrayBuffer();
+    const workbook = XLSX.read(buffer, { type: "array" });
+    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rawText = XLSX.utils.sheet_to_txt(firstSheet);
+    const parsed = parseGcmSheet(firstSheet);
+
+    setImportText(rawText);
+    setImportFileName(file.name);
+    setImportPreview(parsed);
+    setImportFeedback(`Arquivo carregado com ${parsed.length} bloco(s) do GCM.`);
+  } catch (err) {
+    console.log("ERRO AO LER GCM:", err);
+    setImportFeedback("Não consegui ler esse arquivo.");
+    setImportPreview([]);
+  }
+};
 
 
 
