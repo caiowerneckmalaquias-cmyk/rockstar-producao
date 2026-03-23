@@ -125,11 +125,17 @@ function parseGcmRawText(rawText) {
   const resultado = [];
   let atual = null;
   let tamanhos = [];
+  let coletandoEstoque = false;
+  let numerosEstoque = [];
 
-  const finalizar = () => {
+  const finalizarAtual = () => {
     if (!atual) return;
-    atual.total = sizes.reduce((acc, s) => acc + (atual.data[s] || 0), 0);
+    atual.total = sizes.reduce((acc, s) => acc + (Number(atual.data[s]) || 0), 0);
     resultado.push(atual);
+    atual = null;
+    tamanhos = [];
+    coletandoEstoque = false;
+    numerosEstoque = [];
   };
 
   const extrairCor = (texto) => {
@@ -139,18 +145,24 @@ function parseGcmRawText(rawText) {
     return match ? match[1].trim() : "";
   };
 
+  const extrairNumeros = (texto) =>
+    texto
+      .split(" ")
+      .map((v) => Number(v))
+      .filter((n) => !Number.isNaN(n));
+
   lines.forEach((line) => {
     const texto = line.toUpperCase();
 
-    // ❌ ignora overloque
+    // ignora overloque
     if (texto.includes("OVERLOQUE")) return;
 
-    // 🔥 cabeçalho produto
+    // cabeçalho do produto
     if (
       texto.includes("-") &&
       (texto.includes("ADULTO") || texto.includes("COURINO") || texto.includes("INFANTIL"))
     ) {
-      finalizar();
+      finalizarAtual();
 
       atual = {
         ref: texto.split("-")[0].trim(),
@@ -159,40 +171,52 @@ function parseGcmRawText(rawText) {
         total: 0,
       };
 
-      tamanhos = [];
       return;
     }
 
     if (!atual) return;
 
-    // 🔥 linha de tamanhos
+    // linha de tamanhos
     if (texto.includes("QTDE")) {
-      tamanhos = line
-        .split(" ")
-        .map((v) => Number(v))
-        .filter((n) => sizes.includes(n));
+      tamanhos = extrairNumeros(line).filter((n) => sizes.includes(n));
+      coletandoEstoque = false;
+      numerosEstoque = [];
+      return;
+    }
+
+    // início da linha de estoque
+    if (texto.startsWith("ESTOQUE")) {
+      coletandoEstoque = true;
+      numerosEstoque = extrairNumeros(texto.replace("ESTOQUE", "").trim());
+
+      if (tamanhos.length && numerosEstoque.length >= tamanhos.length) {
+        tamanhos.forEach((size, idx) => {
+          atual.data[size] = numerosEstoque[idx] || 0;
+        });
+        coletandoEstoque = false;
+        numerosEstoque = [];
+      }
 
       return;
     }
 
-    // 🔥 linha ESTOQUE (aqui está o pulo do gato)
-    if (texto.startsWith("ESTOQUE")) {
-      const numeros = line
-        .replace("ESTOQUE", "")
-        .trim()
-        .split(" ")
-        .map((v) => Number(v))
-        .filter((n) => !isNaN(n));
+    // continuação das quantidades do estoque em linha seguinte
+    if (coletandoEstoque) {
+      numerosEstoque = [...numerosEstoque, ...extrairNumeros(line)];
 
-      tamanhos.forEach((size, idx) => {
-        atual.data[size] = numeros[idx] || 0;
-      });
+      if (tamanhos.length && numerosEstoque.length >= tamanhos.length) {
+        tamanhos.forEach((size, idx) => {
+          atual.data[size] = numerosEstoque[idx] || 0;
+        });
+        coletandoEstoque = false;
+        numerosEstoque = [];
+      }
 
       return;
     }
   });
 
-  finalizar();
+  finalizarAtual();
 
   return resultado;
 }
