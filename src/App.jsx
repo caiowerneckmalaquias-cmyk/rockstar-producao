@@ -1293,7 +1293,7 @@ const carregarMovimentacoesDoBanco = async () => {
           }
 
           const grupo = mapa.get(chave);
-          const qtd = Number(item.quantidade) || 0;
+          const qtd = Number(item.q) || 0;
           const numero = Number(item.numero) || 0;
 
           grupo.items.push({
