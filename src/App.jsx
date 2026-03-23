@@ -124,42 +124,65 @@ function parseGcmRawText(rawText) {
 
   const resultado = [];
   let atual = null;
+  let aguardandoQtd = false;
+  let tamanhos = [];
 
   lines.forEach((line) => {
     const texto = line.toUpperCase();
 
-    // 🔥 IGNORA OVERLOQUE
     if (texto.includes("OVERLOQUE")) return;
 
-    // 🔥 IDENTIFICA REF + COR
-    const match = texto.match(/^([A-Z0-9]+)\s+(.*)$/i);
-
-    if (match && !line.match(/^\d/)) {
+    if (/^[A-Z0-9]{5,}/.test(texto) && !texto.match(/^\d/)) {
       if (atual) {
         atual.total = sizes.reduce((acc, s) => acc + (atual.data[s] || 0), 0);
         resultado.push(atual);
       }
 
       atual = {
-        ref: match[1],
-        cor: match[2],
+        ref: texto.split(" ")[0],
+        cor: "",
         data: Object.fromEntries(sizes.map((s) => [s, 0])),
         total: 0,
       };
 
+      tamanhos = [];
+      aguardandoQtd = false;
       return;
     }
 
-    // 🔥 LINHAS DE TAMANHO
-    const parts = line.split(" ").filter(Boolean);
-    const size = Number(parts[0]);
+    if (!atual) return;
 
-    if (sizes.includes(size) && atual) {
-      const numeros = parts.slice(1).map((v) => Number(v) || 0);
+    if (!atual.cor && texto.includes("-")) {
+      atual.cor = texto.split("-")[0].trim();
+      return;
+    }
 
-      const qtd = numeros[numeros.length - 1] || 0;
+    const possiveisNumeros = line
+      .split(" ")
+      .map((n) => Number(n))
+      .filter((n) => !isNaN(n));
 
-      atual.data[size] = qtd;
+    if (
+      possiveisNumeros.length >= 5 &&
+      possiveisNumeros.every((n) => sizes.includes(n))
+    ) {
+      tamanhos = possiveisNumeros;
+      aguardandoQtd = true;
+      return;
+    }
+
+    if (aguardandoQtd) {
+      const qtds = line
+        .split(" ")
+        .map((n) => Number(n))
+        .filter((n) => !isNaN(n));
+
+      tamanhos.forEach((size, idx) => {
+        atual.data[size] = qtds[idx] || 0;
+      });
+
+      aguardandoQtd = false;
+      return;
     }
   });
 
