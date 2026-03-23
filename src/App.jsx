@@ -4,21 +4,15 @@ import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { supabase } from "./supabase";
 
-const sizes = [34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44];
-const navItems = [
-  "Dashboard",
-  "Controle Geral",
-  "Importar GCM",
-  "Pesponto",
-  "Montagem",
-  "Costura Pronta",
-  "Minimos",
-  "Vendas",
-  "Sugestoes",
-  "Gerador de Fichas",
-  "Programação do Dia",
-  "Relatório de Produção",
-];
+import {
+  sizes,
+  navItems,
+  initialRows,
+  initialMinimos,
+  initialVendas,
+  initialTempoProducao,
+  LIMITE_PROGRAMACAO_DIA
+} from "./constants/production";
 
 const makeEmptyGrid = () => Object.fromEntries(sizes.map((s) => [s, 0]));
 const calcTotal = (item) => item.pa + item.est + item.m + item.p;
