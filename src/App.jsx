@@ -1250,8 +1250,7 @@ const carregarMovimentacoesDoBanco = async () => {
   try {
     const { data, error } = await supabase
       .from("movimentacoes")
-      .select("*")
-      .order("created_at", { ascending: false });
+      .select("*");
 
     if (error) {
       console.log("ERRO AO CARREGAR MOVIMENTACOES:", error);
@@ -1266,18 +1265,14 @@ const carregarMovimentacoesDoBanco = async () => {
       const mapa = new Map();
 
       lista
-        .filter((item) => item.tipo === tipo)
+        .filter((item) => String(item.tipo || "") === tipo)
         .forEach((item) => {
-          const programacao = item.programacao || "Sem programação";
-          const ref = item.ref || "";
-          const cor = item.cor || "";
-          const status = item.status || "Em aberto";
-          const dataLancamento =
-            item.created_at
-              ? new Date(item.created_at).toLocaleDateString("pt-BR")
-              : new Date().toLocaleDateString("pt-BR");
+          const programacao = String(item.programacao || "Sem programação");
+          const ref = String(item.ref || "");
+          const cor = String(item.cor || "");
+          const status = String(item.status || "Em aberto");
 
-          const chave = `${tipo}__${programacao}__${ref}__${cor}__${status}__${dataLancamento}`;
+          const chave = `${tipo}__${programacao}__${ref}__${cor}`;
 
           if (!mapa.has(chave)) {
             mapa.set(chave, {
@@ -1288,7 +1283,7 @@ const carregarMovimentacoesDoBanco = async () => {
               items: [],
               total: 0,
               status,
-              dataLancamento,
+              dataLancamento: new Date().toLocaleDateString("pt-BR"),
             });
           }
 
@@ -1304,8 +1299,21 @@ const carregarMovimentacoesDoBanco = async () => {
           grupo.total += qtd;
         });
 
-      return Array.from(mapa.values());
+      return Array.from(mapa.values()).sort((a, b) =>
+        String(a.programacao).localeCompare(String(b.programacao), "pt-BR")
+      );
     };
+
+    const pesponto = agrupar(data, "Pesponto");
+    const montagem = agrupar(data, "Montagem");
+
+    console.log("MOVIMENTACOES CARREGADAS:", { pesponto, montagem });
+    return { pesponto, montagem };
+  } catch (err) {
+    console.log("ERRO GERAL AO CARREGAR MOVIMENTACOES:", err);
+    return { pesponto: [], montagem: [] };
+  }
+};
 
     const pesponto = agrupar(data, "Pesponto");
     const montagem = agrupar(data, "Montagem");
