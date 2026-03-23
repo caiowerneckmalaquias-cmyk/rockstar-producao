@@ -1299,26 +1299,14 @@ const carregarMovimentacoesDoBanco = async () => {
           grupo.total += qtd;
         });
 
-      return Array.from(mapa.values()).sort((a, b) =>
-        String(a.programacao).localeCompare(String(b.programacao), "pt-BR")
-      );
+      return Array.from(mapa.values());
     };
 
     const pesponto = agrupar(data, "Pesponto");
     const montagem = agrupar(data, "Montagem");
 
-    console.log("MOVIMENTACOES CARREGADAS:", { pesponto, montagem });
     return { pesponto, montagem };
-  } catch (err) {
-    console.log("ERRO GERAL AO CARREGAR MOVIMENTACOES:", err);
-    return { pesponto: [], montagem: [] };
-  }
-};
 
-    const pesponto = agrupar(data, "Pesponto");
-    const montagem = agrupar(data, "Montagem");
-
-    return { pesponto, montagem };
   } catch (err) {
     console.log("ERRO GERAL AO CARREGAR MOVIMENTACOES:", err);
     return { pesponto: [], montagem: [] };
