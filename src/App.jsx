@@ -978,6 +978,8 @@ useEffect(() => {
       .flat()
   );
 
+  await atualizarStatusMovimentacoesNoBanco(tipo, programacao);
+
   if (tipo === "Pesponto") {
     setPespontoLancamentos((curr) =>
       curr.map((l) =>
@@ -1154,6 +1156,26 @@ const salvarVendasNoBanco = async (vendasData) => {
     return { data, error };
   } catch (err) {
     console.log("ERRO GERAL VENDAS:", err);
+    return { data: null, error: err };
+  }
+};
+
+const atualizarStatusMovimentacoesNoBanco = async (tipo, programacao) => {
+  try {
+    const { data, error } = await supabase
+      .from("movimentacoes")
+      .update({ status: "Finalizado" })
+      .eq("tipo", tipo)
+      .eq("programacao", programacao)
+      .eq("status", "Em aberto")
+      .select();
+
+    console.log("STATUS MOVIMENTACOES ATUALIZADO:", data);
+    console.log("ERRO AO ATUALIZAR STATUS:", error);
+
+    return { data, error };
+  } catch (err) {
+    console.log("ERRO GERAL AO ATUALIZAR STATUS DAS MOVIMENTACOES:", err);
     return { data: null, error: err };
   }
 };
