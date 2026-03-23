@@ -119,8 +119,59 @@ function contarDiasUteisDoMesAteHoje(currentDate, feriadosList = []) {
 function parseGcmRawText(rawText) {
   const lines = String(rawText || "")
     .split(/\r?\n/)
-    .map((line) => line.replace(/\t+/g, " ").replace(/\s+/g, " ").trim())
+    .map((line) => line.replace(/\t+/g, " ").trim())
     .filter(Boolean);
+
+  const resultado = [];
+  let atual = null;
+
+  const extrairNumero = (valor) => {
+    const n = Number(String(valor || "").replace(/[^\d.-]/g, ""));
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  lines.forEach((line) => {
+    const normalizada = line.replace(/\s+/g, " ").trim();
+
+    const matchCabecalho = normalizada.match(/^([A-Z0-9]+)\s*[-–]\s*(.+)$/i);
+    if (matchCabecalho) {
+      if (atual) {
+        atual.total = sizes.reduce((acc, size) => acc + (Number(atual.data[size]) || 0), 0);
+        resultado.push(atual);
+      }
+
+      atual = {
+        ref: matchCabecalho[1].trim(),
+        cor: matchCabecalho[2].trim(),
+        data: Object.fromEntries(sizes.map((size) => [size, 0])),
+        total: 0,
+      };
+      return;
+    }
+
+    if (!atual) return;
+
+    const matchLinhaNumero = normalizada.match(/^(\d{2})\s+(.+)$/);
+    if (matchLinhaNumero) {
+      const size = Number(matchLinhaNumero[1]);
+      if (!sizes.includes(size)) return;
+
+      const resto = matchLinhaNumero[2]
+        .trim()
+        .split(/\s+/)
+        .map(extrairNumero)
+        .filter((n) => Number.isFinite(n));
+
+      atual.data[size] = resto.length ? resto[resto.length - 1] : 0;
+    }
+  });
+
+  if (atual) {
+    atual.total = sizes.reduce((acc, size) => acc + (Number(atual.data[size]) || 0), 0);
+    resultado.push(atual);
+  }
+
+  return resultado;
 }
 
 function buildSuggestions(rows, minimos, vendas, tempoProducao) {
