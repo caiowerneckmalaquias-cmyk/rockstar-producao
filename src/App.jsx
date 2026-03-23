@@ -119,55 +119,52 @@ function contarDiasUteisDoMesAteHoje(currentDate, feriadosList = []) {
 function parseGcmRawText(rawText) {
   const lines = String(rawText || "")
     .split(/\r?\n/)
-    .map((line) => line.replace(/\t+/g, " ").trim())
+    .map((line) => line.replace(/\t+/g, " ").replace(/\s+/g, " ").trim())
     .filter(Boolean);
 
   const resultado = [];
   let atual = null;
 
-  const extrairNumero = (valor) => {
-    const n = Number(String(valor || "").replace(/[^\d.-]/g, ""));
-    return Number.isFinite(n) ? n : 0;
-  };
-
   lines.forEach((line) => {
-    const normalizada = line.replace(/\s+/g, " ").trim();
+    const texto = line.toUpperCase();
 
-    const matchCabecalho = normalizada.match(/^([A-Z0-9]+)\s*[-–]\s*(.+)$/i);
-    if (matchCabecalho) {
+    // 🔥 IGNORA OVERLOQUE
+    if (texto.includes("OVERLOQUE")) return;
+
+    // 🔥 IDENTIFICA REF + COR
+    const match = texto.match(/^([A-Z0-9]+)\s+(.*)$/i);
+
+    if (match && !line.match(/^\d/)) {
       if (atual) {
-        atual.total = sizes.reduce((acc, size) => acc + (Number(atual.data[size]) || 0), 0);
+        atual.total = sizes.reduce((acc, s) => acc + (atual.data[s] || 0), 0);
         resultado.push(atual);
       }
 
       atual = {
-        ref: matchCabecalho[1].trim(),
-        cor: matchCabecalho[2].trim(),
-        data: Object.fromEntries(sizes.map((size) => [size, 0])),
+        ref: match[1],
+        cor: match[2],
+        data: Object.fromEntries(sizes.map((s) => [s, 0])),
         total: 0,
       };
+
       return;
     }
 
-    if (!atual) return;
+    // 🔥 LINHAS DE TAMANHO
+    const parts = line.split(" ").filter(Boolean);
+    const size = Number(parts[0]);
 
-    const matchLinhaNumero = normalizada.match(/^(\d{2})\s+(.+)$/);
-    if (matchLinhaNumero) {
-      const size = Number(matchLinhaNumero[1]);
-      if (!sizes.includes(size)) return;
+    if (sizes.includes(size) && atual) {
+      const numeros = parts.slice(1).map((v) => Number(v) || 0);
 
-      const resto = matchLinhaNumero[2]
-        .trim()
-        .split(/\s+/)
-        .map(extrairNumero)
-        .filter((n) => Number.isFinite(n));
+      const qtd = numeros[numeros.length - 1] || 0;
 
-      atual.data[size] = resto.length ? resto[resto.length - 1] : 0;
+      atual.data[size] = qtd;
     }
   });
 
   if (atual) {
-    atual.total = sizes.reduce((acc, size) => acc + (Number(atual.data[size]) || 0), 0);
+    atual.total = sizes.reduce((acc, s) => acc + (atual.data[s] || 0), 0);
     resultado.push(atual);
   }
 
@@ -1140,7 +1137,7 @@ function parseGcmSheet(sheet) {
       const workbook = XLSX.read(buffer, { type: "array" });
       const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
       const rawText = XLSX.utils.sheet_to_txt(firstSheet);
-      const parsed = parseGcmSheet(firstSheet);
+      const parsed = parseGcmRawText(rawText);
       setImportText(rawText);
       setImportFileName(file.name);
       setImportPreview(parsed);
