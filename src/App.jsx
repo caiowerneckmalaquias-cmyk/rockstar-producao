@@ -1094,59 +1094,64 @@ useEffect(() => {
 
 function parseGcmSheet(sheet) {
   const rowsSheet = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
-
-  if (!rowsSheet || !rowsSheet.length) return [];
-
   const resultado = [];
 
-  const extrairNumeros = (valor) =>
-    String(valor || "")
-      .match(/-?\d+/g)?.map(Number) || [];
+  const toText = (v) => String(v || "").trim();
+  const upper = (v) => toText(v).toUpperCase();
 
   const extrairCor = (texto) => {
     const match = String(texto || "").match(
       /\b(?:ADULTO|COURINO|INFANTIL)\b\s+(.*?)(?:\s*-\s*MARCA.*|\s*-\s*.*|$)/i
     );
-    return match ? match[1].trim() : "";
+    return match ? match[1].trim().toUpperCase() : "";
   };
 
   for (let i = 0; i < rowsSheet.length; i += 1) {
     const row = rowsSheet[i];
 
-    const descricao = String(row[2] || "").trim(); // coluna C
-    const tamanhosTexto = String(row[7] || "").trim(); // coluna H
-    const qtdeTexto = String(row[14] || "").trim(); // coluna O, só total
+    // acha a célula que tem a descrição do produto
+    const descricaoCell = row.find((cell) =>
+      /(ADULTO|COURINO|INFANTIL)/i.test(toText(cell)) &&
+      toText(cell).includes("-")
+    );
 
-    if (
-      !descricao ||
-      !(descricao.includes("-")) ||
-      !/(ADULTO|COURINO|INFANTIL)/i.test(descricao)
-    ) {
-      continue;
-    }
+    if (!descricaoCell) continue;
 
-    const ref = descricao.split("-")[0].trim().toUpperCase();
-    const cor = extrairCor(descricao).toUpperCase();
+    const descricao = upper(descricaoCell);
 
-    const tamanhos = extrairNumeros(tamanhosTexto).filter((n) => sizes.includes(n));
+    // ignora se por algum motivo vier overloque no cabeçalho
+    if (descricao.includes("OVERLOQUE")) continue;
+
+    const ref = descricao.split("-")[0].trim();
+    const cor = extrairCor(descricao);
+
+    // na mesma linha do cabeçalho, pega os tamanhos 34..44
+    const tamanhos = row
+      .map((cell) => Number(cell))
+      .filter((n) => sizes.includes(n));
+
     if (!tamanhos.length) continue;
 
-    const proximaRow = rowsSheet[i + 1] || [];
-    const linhaEstoqueLabel = String(proximaRow[2] || "").trim().toUpperCase(); // coluna C
-    const linhaEstoqueTexto = String(proximaRow[7] || "").trim(); // coluna H
+    // próxima linha deve ser ESTOQUE
+    const prox = rowsSheet[i + 1] || [];
+    const proxTemEstoque = prox.some((cell) => upper(cell).includes("ESTOQUE"));
+    if (!proxTemEstoque) continue;
 
-    if (!linhaEstoqueLabel.includes("ESTOQUE")) continue;
+    // pega só números da linha ESTOQUE
+    const quantidades = prox
+      .map((cell) => {
+        const n = Number(cell);
+        return Number.isFinite(n) ? n : null;
+      })
+      .filter((n) => n !== null);
 
-    const quantidades = extrairNumeros(linhaEstoqueTexto);
-
+    // usa apenas a quantidade correspondente aos tamanhos
     const data = Object.fromEntries(sizes.map((s) => [s, 0]));
     tamanhos.forEach((size, idx) => {
       data[size] = quantidades[idx] || 0;
     });
 
-    const total =
-      Number(String(qtdeTexto).replace(/[^\d-]/g, "")) ||
-      sizes.reduce((acc, s) => acc + (data[s] || 0), 0);
+    const total = sizes.reduce((acc, s) => acc + (data[s] || 0), 0);
 
     resultado.push({
       ref,
