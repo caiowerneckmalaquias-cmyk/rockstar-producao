@@ -1095,58 +1095,56 @@ useEffect(() => {
 function parseGcmSheet(sheet) {
   const rowsSheet = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
 
-  if (!rowsSheet || !rowsSheet.length) return [];
-
   const resultado = [];
 
-  const extrairNumeros = (valor) =>
-    String(valor || "")
-      .match(/-?\d+/g)?.map(Number) || [];
-
-  const extrairCor = (texto) => {
-    const match = String(texto || "").match(
-      /\b(?:ADULTO|COURINO|INFANTIL)\b\s+(.*?)(?:\s*-\s*MARCA.*|\s*-\s*.*|$)/i
-    );
-    return match ? match[1].trim() : "";
-  };
+  const toText = (v) => String(v ?? "").trim();
+  const upper = (v) => toText(v).toUpperCase();
 
   for (let i = 0; i < rowsSheet.length; i += 1) {
-    const row = rowsSheet[i];
+    const row = Array.isArray(rowsSheet[i]) ? rowsSheet[i] : [];
+    const linha1 = row.map(toText);
 
-    const descricao = String(row[2] || "").trim(); // coluna C
-    const tamanhosTexto = String(row[7] || "").trim(); // coluna H
-    const qtdeTexto = String(row[14] || "").trim(); // coluna O, só total
+    if (!linha1.length) continue;
 
-    if (
-      !descricao ||
-      !(descricao.includes("-")) ||
-      !/(ADULTO|COURINO|INFANTIL)/i.test(descricao)
-    ) {
-      continue;
-    }
+    const cabecalho = upper(linha1[0]);
 
-    const ref = descricao.split("-")[0].trim().toUpperCase();
-    const cor = extrairCor(descricao).toUpperCase();
+    // precisa ser algo tipo "BTCV010 - AZUL BB"
+    if (!cabecalho.includes("-")) continue;
+    if (cabecalho.startsWith("ESTOQUE")) continue;
+    if (cabecalho.includes("QTDE")) continue;
 
-    const tamanhos = extrairNumeros(tamanhosTexto).filter((n) => sizes.includes(n));
+    const partes = linha1[0].split("-");
+    if (partes.length < 2) continue;
+
+    const ref = toText(partes[0]).toUpperCase();
+    const cor = toText(partes.slice(1).join("-")).toUpperCase();
+
+    // tamanhos ficam na mesma linha a partir da coluna 2
+    const tamanhos = linha1
+      .slice(1)
+      .map((v) => Number(v))
+      .filter((n) => sizes.includes(n));
+
     if (!tamanhos.length) continue;
 
-    const proximaRow = rowsSheet[i + 1] || [];
-    const linhaEstoqueLabel = String(proximaRow[2] || "").trim().toUpperCase(); // coluna C
-    const linhaEstoqueTexto = String(proximaRow[7] || "").trim(); // coluna H
+    // próxima linha tem que começar com ESTOQUE
+    const prox = Array.isArray(rowsSheet[i + 1]) ? rowsSheet[i + 1] : [];
+    const linha2 = prox.map(toText);
 
-    if (!linhaEstoqueLabel.includes("ESTOQUE")) continue;
+    if (!upper(linha2[0]).startsWith("ESTOQUE")) continue;
 
-    const quantidades = extrairNumeros(linhaEstoqueTexto);
+    const quantidades = linha2
+      .slice(1)
+      .map((v) => Number(v))
+      .filter((n) => !Number.isNaN(n));
 
     const data = Object.fromEntries(sizes.map((s) => [s, 0]));
+
     tamanhos.forEach((size, idx) => {
       data[size] = quantidades[idx] || 0;
     });
 
-    const total =
-      Number(String(qtdeTexto).replace(/[^\d-]/g, "")) ||
-      sizes.reduce((acc, s) => acc + (data[s] || 0), 0);
+    const total = sizes.reduce((acc, s) => acc + (data[s] || 0), 0);
 
     resultado.push({
       ref,
