@@ -858,15 +858,20 @@ useEffect(() => {
 
     setMovError((curr) => ({ ...curr, [tipo]: "" }));
 
-    applyGridDelta(
-      form.ref,
-      form.cor,
-      items.map((item) => ({
-        size: item.size,
-        field: tipo === "Pesponto" ? "p" : "m",
-        delta: item.qtd,
-      }))
-    );
+ applyGridDelta(
+  form.ref,
+  form.cor,
+  items.flatMap((item) =>
+    tipo === "Pesponto"
+      ? [
+          { size: item.size, field: "p", delta: item.qtd },
+        ]
+      : [
+          { size: item.size, field: "est", delta: -item.qtd },
+          { size: item.size, field: "m", delta: item.qtd },
+        ]
+  )
+);
 
     const payload = {
       id: `${tipo}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -947,11 +952,16 @@ useEffect(() => {
   };
 
   const revertLancamentoImpacto = (tipo, lancamento) => {
-    const updates = lancamento.items.map((item) => ({
-      size: item.size,
-      field: tipo === "Pesponto" ? "p" : "m",
-      delta: -item.qtd,
-    }));
+    const updates = lancamento.items.flatMap((item) =>
+  tipo === "Pesponto"
+    ? [
+        { size: item.size, field: "p", delta: -item.qtd },
+      ]
+    : [
+        { size: item.size, field: "est", delta: item.qtd },
+        { size: item.size, field: "m", delta: -item.qtd },
+      ]
+);
     applyGridDelta(lancamento.ref, lancamento.cor, updates);
   };
 
@@ -1070,7 +1080,6 @@ useEffect(() => {
 } else {
   nextData[item.size] = {
     ...atual,
-    est: Math.max(0, (atual.est || 0) - item.qtd),
     m: Math.max(0, (atual.m || 0) - item.qtd),
     pa: (atual.pa || 0) + item.qtd,
   };
