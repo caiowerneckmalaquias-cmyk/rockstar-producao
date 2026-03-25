@@ -887,14 +887,14 @@ useEffect(() => {
     console.log("PAYLOAD CRIADO", payload);
 
     const movsParaSalvar = items.map((item) => ({
-  tipo,
-  ref: form.ref,
-  cor: form.cor,
-  numero: item.size,
-  quantidade: item.qtd,
-  programacao: programacaoNome,
-  status: "Em aberto",
-}));
+      tipo,
+      ref: form.ref,
+      cor: form.cor,
+      numero: item.size,
+      quantidade: item.qtd,
+      programacao: programacaoNome,
+      status: "Em aberto",
+    }));
 
     if (tipo === "Pesponto") {
       setPespontoLancamentos((c) => [payload, ...c]);
@@ -1362,14 +1362,9 @@ const salvarVendasNoBanco = async (vendasData) => {
 
 const atualizarStatusMovimentacoesNoBanco = async (tipo, programacao) => {
   try {
-    const dataFinalizacao = new Date().toLocaleDateString("pt-BR");
-
     const { data, error } = await supabase
       .from("movimentacoes")
-      .update({
-        status: "Finalizado",
-        dataFinalizacao: dataFinalizacao,
-      })
+      .update({ status: "Finalizado" })
       .eq("tipo", tipo)
       .eq("programacao", programacao)
       .eq("status", "Em aberto")
@@ -1550,17 +1545,20 @@ const carregarMovimentacoesDoBanco = async () => {
           const cor = String(item.cor || "");
           const status = String(item.status || "Em aberto");
 
-          mapa.set(chave, {
-  id: chave,
-  programacao,
-  ref,
-  cor,
-  items: [],
-  total: 0,
-  status,
-  dataLancamento: item.dataLancamento || "",
-  dataFinalizacao: item.dataFinalizacao || "",
-});
+          const chave = `${tipo}__${programacao}__${ref}__${cor}`;
+
+          if (!mapa.has(chave)) {
+            mapa.set(chave, {
+              id: chave,
+              programacao,
+              ref,
+              cor,
+              items: [],
+              total: 0,
+              status,
+              dataLancamento: new Date().toLocaleDateString("pt-BR"),
+            });
+          }
 
           const grupo = mapa.get(chave);
           const qtd = Number(item.quantidade) || 0;
