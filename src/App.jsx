@@ -1637,27 +1637,6 @@ const carregarMovimentacoesDoBanco = async () => {
   }
 };
 
-const ajustesEst = data
-  .filter((item) => String(item.tipo || "") === "Costura Pronta")
-  .map((item, index) => ({
-    id: item.id || `ajuste-${index}`,
-    data: new Date().toLocaleDateString("pt-BR"),
-    ref: item.ref || "",
-    cor: item.cor || "",
-    tipo: String(item.programacao || "").toLowerCase().includes("saida") ? "saida" : "entrada",
-    size: Number(item.numero) || 0,
-    qtd: Number(item.q) || 0,
-    motivo: item.programacao || "Sem motivo informado",
-  }));
-
-return { pesponto, montagem, ajustesEst };
-
-  } catch (err) {
-  console.log("ERRO GERAL AO CARREGAR MOVIMENTACOES:", err);
-  return { pesponto: [], montagem: [], ajustesEst: [] };
-  }
-};
-
   const executeImport = async () => {
     if (importMode === "reset") {
       setRows((current) =>
