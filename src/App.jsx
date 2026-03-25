@@ -1557,7 +1557,8 @@ const carregarMovimentacoesDoBanco = async () => {
   try {
     const { data, error } = await supabase
       .from("movimentacoes")
-      .select("*");
+      .select("*")
+      .order("data_lancamento", { ascending: false }); // 🔥 MAIS NOVOS PRIMEIRO
 
     if (error) {
       console.log("ERRO AO CARREGAR MOVIMENTACOES:", error);
@@ -1590,7 +1591,9 @@ const carregarMovimentacoesDoBanco = async () => {
               items: [],
               total: 0,
               status,
-              dataLancamento: new Date().toLocaleDateString("pt-BR"),
+              dataLancamento: item.data_lancamento
+                ? new Date(item.data_lancamento).toLocaleDateString("pt-BR")
+                : "",
             });
           }
 
@@ -1611,6 +1614,13 @@ const carregarMovimentacoesDoBanco = async () => {
 
     const pesponto = agrupar(data, "Pesponto");
     const montagem = agrupar(data, "Montagem");
+
+    return { pesponto, montagem };
+  } catch (err) {
+    console.log("ERRO GERAL AO CARREGAR MOVIMENTACOES:", err);
+    return { pesponto: [], montagem: [] };
+  }
+};
 
 const ajustesEst = data
   .filter((item) => String(item.tipo || "") === "Costura Pronta")
