@@ -722,13 +722,28 @@ const previewBySelection = (form) => {
   const fichasMontagem = useMemo(() => splitIntoFichas(suggestions.montagem, vendas), [suggestions, vendas]);
   const fichasPesponto = useMemo(() => splitIntoFichas(suggestions.pesponto, vendas), [suggestions, vendas]);
   const programacaoMontagem = useMemo(
-    () => buildProgramacaoPeriodo(fichasMontagem, suggestions.montagem, 396, programacaoDias, "Montagem"),
-    [fichasMontagem, suggestions, programacaoDias]
-  );
-  const programacaoPesponto = useMemo(
-    () => buildProgramacaoPeriodo(fichasPesponto, suggestions.pesponto, 396, programacaoDias, "Pesponto"),
-    [fichasPesponto, suggestions, programacaoDias]
-  );
+  () =>
+    buildProgramacaoPeriodo(
+      fichasMontagem,
+      suggestions.montagem,
+      Number(capacidadeMontagemDia) || 396,
+      programacaoDias,
+      "Montagem"
+    ),
+  [fichasMontagem, suggestions, programacaoDias, capacidadeMontagemDia]
+);
+
+const programacaoPesponto = useMemo(
+  () =>
+    buildProgramacaoPeriodo(
+      fichasPesponto,
+      suggestions.pesponto,
+      Number(capacidadePespontoDia) || 396,
+      programacaoDias,
+      "Pesponto"
+    ),
+  [fichasPesponto, suggestions, programacaoDias, capacidadePespontoDia]
+);
 
   useEffect(() => {
     setDraftMinimos(minimos);
@@ -2908,44 +2923,82 @@ const salvarVendasManuais = async () => {
   );
 
   const renderConfig = () => {
-    const updateLocal = (ref, cor, size, key, value) => {
-      setDraftMinimos((curr) => ({
-        ...curr,
-        [ref]: {
-          ...(curr?.[ref] || {}),
-          [cor]: {
-            ...(curr?.[ref]?.[cor] || {}),
-            [size]: {
-              ...((curr?.[ref]?.[cor]?.[size]) || { pa: 0, prod: 0 }),
-              [key]: Number(value) || 0,
-            },
+  const updateLocal = (ref, cor, size, key, value) => {
+    setDraftMinimos((curr) => ({
+      ...curr,
+      [ref]: {
+        ...(curr?.[ref] || {}),
+        [cor]: {
+          ...(curr?.[ref]?.[cor] || {}),
+          [size]: {
+            ...((curr?.[ref]?.[cor]?.[size]) || { pa: 0, prod: 0 }),
+            [key]: Number(value) || 0,
           },
         },
-      }));
-      setDirtyMinimos(true);
-    };
+      },
+    }));
+    setDirtyMinimos(true);
+  };
 
-    const salvar = async () => {
-  setMinimos(draftMinimos);
-  setTempoProducao(tempoProducaoDraft);
-  await salvarMinimosNoBanco(draftMinimos);
-  setDirtyMinimos(false);
-};
+  const salvar = async () => {
+    setMinimos(draftMinimos);
+    setTempoProducao(tempoProducaoDraft);
+    await salvarMinimosNoBanco(draftMinimos);
+    setDirtyMinimos(false);
+  };
 
-    return (
-      <PageShell title="Minimos" subtitle="Aba equivalente aos mínimos da planilha, com PA e PROD por referência, cor e numeração.">
-        <div className="space-y-4">
-          <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
-            <div className="flex items-center justify-between gap-4 mb-4">
-              <div>
-                <div className="font-bold text-lg">Tempo de Produção</div>
-                <div className="text-sm text-slate-500 mt-1">Esses tempos entram na lógica das sugestões para antecipar risco de falta antes de virar PA.</div>
-              </div>
-              <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-right">
-                <div className="text-xs text-slate-500">Tempo total</div>
-                <div className="text-2xl font-bold text-slate-900">{(Number(tempoProducaoDraft.pesponto) || 0) + (Number(tempoProducaoDraft.montagem) || 0)} dias</div>
+  return (
+    <PageShell title="Minimos" subtitle="Aba equivalente aos mínimos da planilha, com PA e PROD por referência, cor e numeração.">
+      <div className="space-y-4">
+
+        <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <div>
+              <h2 className="font-bold text-lg">Capacidade diária de produção</h2>
+              <p className="text-sm text-slate-500 mt-1">
+                Ajuste quantos pares cada setor consegue produzir por dia.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <label className="text-sm font-medium text-slate-700">
+              Pesponto por dia
+              <input
+                type="number"
+                min="0"
+                value={capacidadePespontoDia}
+                onChange={(e) => setCapacidadePespontoDia(Number(e.target.value) || 0)}
+                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
+              />
+            </label>
+
+            <label className="text-sm font-medium text-slate-700">
+              Montagem por dia
+              <input
+                type="number"
+                min="0"
+                value={capacidadeMontagemDia}
+                onChange={(e) => setCapacidadeMontagemDia(Number(e.target.value) || 0)}
+                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
+          <div className="flex items-center justify-between gap-4 mb-4">
+            <div>
+              <div className="font-bold text-lg">Tempo de Produção</div>
+              <div className="text-sm text-slate-500 mt-1">Esses tempos entram na lógica das sugestões para antecipar risco de falta antes de virar PA.</div>
+            </div>
+            <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-right">
+              <div className="text-xs text-slate-500">Tempo total</div>
+              <div className="text-2xl font-bold text-slate-900">
+                {(Number(tempoProducaoDraft.pesponto) || 0) + (Number(tempoProducaoDraft.montagem) || 0)} dias
               </div>
             </div>
+          </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <label className="text-sm font-medium">
