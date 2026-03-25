@@ -761,6 +761,7 @@ useEffect(() => {
     const minimosBanco = await carregarMinimosDoBanco();
     const vendasBanco = await carregarVendasDoBanco();
     const movimentacoesBanco = await carregarMovimentacoesDoBanco();
+    const configProducao = await carregarConfiguracoesProducaoDoBanco();
 
     if (estoqueBanco) {
       setRows(estoqueBanco);
@@ -777,9 +778,24 @@ useEffect(() => {
     }
 
     if (movimentacoesBanco) {
-  setPespontoLancamentos(movimentacoesBanco.pesponto || []);
-  setMontagemLancamentos(movimentacoesBanco.montagem || []);
-  setAjustesEst(movimentacoesBanco.ajustesEst || []);
+      setPespontoLancamentos(movimentacoesBanco.pesponto || []);
+      setMontagemLancamentos(movimentacoesBanco.montagem || []);
+      setAjustesEst(movimentacoesBanco.ajustesEst || []);
+    }
+
+    if (configProducao) {
+      setCapacidadePespontoDia(Number(configProducao.capacidade_pesponto_dia) || 396);
+      setCapacidadeMontagemDia(Number(configProducao.capacidade_montagem_dia) || 396);
+
+      setTempoProducao({
+        pesponto: Number(configProducao.dias_pesponto) || 3,
+        montagem: Number(configProducao.dias_montagem) || 2,
+      });
+
+      setTempoProducaoDraft({
+        pesponto: Number(configProducao.dias_pesponto) || 3,
+        montagem: Number(configProducao.dias_montagem) || 2,
+      });
     }
   };
 
@@ -1603,27 +1619,29 @@ const carregarMovimentacoesDoBanco = async () => {
           const chave = `${tipo}__${programacao}__${ref}__${cor}`;
 
           if (!mapa.has(chave)) {
-  mapa.set(chave, {
-    id: chave,
-    programacao,
-    ref,
-    cor,
-    items: [],
-    total: 0,
-    status,
-    dataLancamento: item.data_lancamento
-      ? new Date(item.data_lancamento).toLocaleDateString("pt-BR")
-      : "",
-    dataFinalizacao: item.data_finalizacao
-      ? new Date(item.data_finalizacao).toLocaleDateString("pt-BR")
-      : "",
-  });
-}
+            mapa.set(chave, {
+              id: chave,
+              programacao,
+              ref,
+              cor,
+              items: [],
+              total: 0,
+              status,
+              dataLancamento: item.data_lancamento
+                ? new Date(item.data_lancamento).toLocaleDateString("pt-BR")
+                : "",
+              dataFinalizacao: item.data_finalizacao
+                ? new Date(item.data_finalizacao).toLocaleDateString("pt-BR")
+                : "",
+            });
+          }
 
           const grupo = mapa.get(chave);
-if (!grupo.dataFinalizacao && item.data_finalizacao) {
-  grupo.dataFinalizacao = new Date(item.data_finalizacao).toLocaleDateString("pt-BR");
-}
+
+          if (!grupo.dataFinalizacao && item.data_finalizacao) {
+            grupo.dataFinalizacao = new Date(item.data_finalizacao).toLocaleDateString("pt-BR");
+          }
+
           const qtd = Number(item.quantidade) || 0;
           const numero = Number(item.numero) || 0;
 
@@ -1660,6 +1678,27 @@ if (!grupo.dataFinalizacao && item.data_finalizacao) {
   } catch (err) {
     console.log("ERRO GERAL AO CARREGAR MOVIMENTACOES:", err);
     return { pesponto: [], montagem: [], ajustesEst: [] };
+  }
+};
+
+const carregarConfiguracoesProducaoDoBanco = async () => {
+  try {
+    const { data, error } = await supabase
+      .from("configuracoes_producao")
+      .select("*")
+      .order("id", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.log("ERRO AO CARREGAR CONFIGURACOES DE PRODUCAO:", error);
+      return null;
+    }
+
+    return data;
+  } catch (err) {
+    console.log("ERRO GERAL AO CARREGAR CONFIGURACOES DE PRODUCAO:", err);
+    return null;
   }
 };
 
