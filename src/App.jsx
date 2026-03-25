@@ -1558,15 +1558,15 @@ const carregarMovimentacoesDoBanco = async () => {
     const { data, error } = await supabase
       .from("movimentacoes")
       .select("*")
-      .order("data_lancamento", { ascending: false }); // 🔥 MAIS NOVOS PRIMEIRO
+      .order("data_lancamento", { ascending: false });
 
     if (error) {
       console.log("ERRO AO CARREGAR MOVIMENTACOES:", error);
-      return { pesponto: [], montagem: [] };
+      return { pesponto: [], montagem: [], ajustesEst: [] };
     }
 
     if (!data || !data.length) {
-      return { pesponto: [], montagem: [] };
+      return { pesponto: [], montagem: [], ajustesEst: [] };
     }
 
     const agrupar = (lista, tipo) => {
@@ -1615,10 +1615,25 @@ const carregarMovimentacoesDoBanco = async () => {
     const pesponto = agrupar(data, "Pesponto");
     const montagem = agrupar(data, "Montagem");
 
-    return { pesponto, montagem };
+    const ajustesEst = data
+      .filter((item) => String(item.tipo || "") === "Costura Pronta")
+      .map((item, index) => ({
+        id: item.id || `ajuste-${index}`,
+        ref: String(item.ref || ""),
+        cor: String(item.cor || ""),
+        size: Number(item.numero) || 0,
+        qtd: Number(item.quantidade) || 0,
+        motivo: String(item.programacao || ""),
+        dataLancamento: item.data_lancamento
+          ? new Date(item.data_lancamento).toLocaleDateString("pt-BR")
+          : "",
+        tipo: String(item.status || "entrada"),
+      }));
+
+    return { pesponto, montagem, ajustesEst };
   } catch (err) {
     console.log("ERRO GERAL AO CARREGAR MOVIMENTACOES:", err);
-    return { pesponto: [], montagem: [] };
+    return { pesponto: [], montagem: [], ajustesEst: [] };
   }
 };
 
