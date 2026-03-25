@@ -894,7 +894,6 @@ useEffect(() => {
   quantidade: item.qtd,
   programacao: programacaoNome,
   status: "Em aberto",
-  dataLancamento: new Date().toLocaleDateString("pt-BR"),
 }));
 
     if (tipo === "Pesponto") {
