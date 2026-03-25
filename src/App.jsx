@@ -1031,24 +1031,58 @@ useEffect(() => {
     });
   };
 
-  const confirmDeleteLancamento = ({ tipo, lancamentoId }) => {
-    const source = tipo === "Pesponto" ? pespontoLancamentos : montagemLancamentos;
-    const alvo = source.find((item) => item.id === lancamentoId);
-    if (!alvo || alvo.status === "Finalizado") {
-      setConfirmAction(null);
-      return;
+  const excluirMovimentacoesNoBanco = async (tipo, alvo) => {
+  try {
+    for (const item of alvo.items) {
+      const { error } = await supabase
+        .from("movimentacoes")
+        .delete()
+        .eq("tipo", tipo)
+        .eq("programacao", alvo.programacao)
+        .eq("ref", alvo.ref)
+        .eq("cor", alvo.cor)
+        .eq("numero", item.size)
+        .eq("quantidade", item.qtd)
+        .eq("status", "Em aberto");
+
+      if (error) {
+        console.log("ERRO AO EXCLUIR MOVIMENTACAO:", error);
+        alert("Erro ao excluir movimentação no banco.");
+        return false;
+      }
     }
 
-    revertLancamentoImpacto(tipo, alvo);
+    console.log("MOVIMENTACOES EXCLUIDAS DO BANCO");
+    return true;
+  } catch (err) {
+    console.log("ERRO GERAL AO EXCLUIR MOVIMENTACAO:", err);
+    alert("Erro geral ao excluir movimentação.");
+    return false;
+  }
+};
 
-    if (tipo === "Pesponto") {
-      setPespontoLancamentos((curr) => curr.filter((item) => item.id !== lancamentoId));
-    } else {
-      setMontagemLancamentos((curr) => curr.filter((item) => item.id !== lancamentoId));
-    }
+const confirmDeleteLancamento = async ({ tipo, lancamentoId }) => {
+  const source = tipo === "Pesponto" ? pespontoLancamentos : montagemLancamentos;
+  const alvo = source.find((item) => item.id === lancamentoId);
 
+  if (!alvo || alvo.status === "Finalizado") {
     setConfirmAction(null);
-  };
+    return;
+  }
+
+  const ok = await excluirMovimentacoesNoBanco(tipo, alvo);
+  if (!ok) return;
+
+  revertLancamentoImpacto(tipo, alvo);
+
+  if (tipo === "Pesponto") {
+    setPespontoLancamentos((curr) => curr.filter((item) => item.id !== lancamentoId));
+  } else {
+    setMontagemLancamentos((curr) => curr.filter((item) => item.id !== lancamentoId));
+  }
+
+  setConfirmAction(null);
+};
 
   const confirmFinalizarProgramacao = async ({ tipo, programacao }) => {
   const lancamentos = tipo === "Pesponto" ? pespontoLancamentos : montagemLancamentos;
