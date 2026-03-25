@@ -1398,7 +1398,10 @@ const atualizarStatusMovimentacoesNoBanco = async (tipo, programacao) => {
   try {
     const { data, error } = await supabase
       .from("movimentacoes")
-      .update({ status: "Finalizado" })
+      .update({
+        status: "Finalizado",
+        data_finalizacao: new Date().toISOString(),
+      })
       .eq("tipo", tipo)
       .eq("programacao", programacao)
       .eq("status", "Em aberto")
