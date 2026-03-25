@@ -1583,21 +1583,27 @@ const carregarMovimentacoesDoBanco = async () => {
           const chave = `${tipo}__${programacao}__${ref}__${cor}`;
 
           if (!mapa.has(chave)) {
-            mapa.set(chave, {
-              id: chave,
-              programacao,
-              ref,
-              cor,
-              items: [],
-              total: 0,
-              status,
-              dataLancamento: item.data_lancamento
-                ? new Date(item.data_lancamento).toLocaleDateString("pt-BR")
-                : "",
-            });
-          }
+  mapa.set(chave, {
+    id: chave,
+    programacao,
+    ref,
+    cor,
+    items: [],
+    total: 0,
+    status,
+    dataLancamento: item.data_lancamento
+      ? new Date(item.data_lancamento).toLocaleDateString("pt-BR")
+      : "",
+    dataFinalizacao: item.data_finalizacao
+      ? new Date(item.data_finalizacao).toLocaleDateString("pt-BR")
+      : "",
+  });
+}
 
           const grupo = mapa.get(chave);
+if (!grupo.dataFinalizacao && item.data_finalizacao) {
+  grupo.dataFinalizacao = new Date(item.data_finalizacao).toLocaleDateString("pt-BR");
+}
           const qtd = Number(item.quantidade) || 0;
           const numero = Number(item.numero) || 0;
 
