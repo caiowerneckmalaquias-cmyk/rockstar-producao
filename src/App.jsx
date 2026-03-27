@@ -202,6 +202,20 @@ function parseGcmRawText(rawText) {
   return resultado;
 }
 
+const sizes = [34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44];
+
+function makeEmptyGrid() {
+  return sizes.reduce((acc, size) => {
+    acc[size] = 0;
+    return acc;
+  }, {});
+}
+
+function round12(value) {
+  if (value <= 0) return 0;
+  return Math.ceil(value / 12) * 12;
+}
+
 function buildSuggestions(rows, minimos, vendas, tempoProducao) {
   const montagem = [];
   const pesponto = [];
@@ -216,9 +230,11 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
 
     const montSizes = makeEmptyGrid();
     const pespSizes = makeEmptyGrid();
+
     let montTotal = 0;
     let pespTotal = 0;
-    let prioridade = 0;
+    let prioridadeMontagem = 0;
+    let prioridadePesponto = 0;
 
     sizes.forEach((size) => {
       const item = row?.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 };
@@ -226,38 +242,72 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
       const vendaMes = Number(sales?.[size]) || 0;
       const vendaDia = vendaMes / 30;
 
-      const consumoDuranteMontagem = Math.ceil(vendaDia * diasMontagem);
-      const consumoDuranteCicloTotal = Math.ceil(vendaDia * diasTotal);
+      const pa = Number(item?.pa) || 0;
+      const est = Number(item?.est) || 0;
+      const m = Number(item?.m) || 0;
+      const p = Number(item?.p) || 0;
 
-      const needPA = Math.max(
+      const minimoPA = Number(minimo?.pa) || 0;
+      const minimoProd = Number(minimo?.prod) || 0;
+
+      const coberturaCurta = pa + est;
+      const coberturaTotal = pa + est + m + p;
+      const pipeline = est + m + p;
+
+      const consumoMontagem = Math.ceil(vendaDia * diasMontagem);
+      const consumoTotal = Math.ceil(vendaDia * diasTotal);
+
+      const faltaPA = Math.max(0, minimoPA - pa);
+      const faltaVendaCurta = Math.max(0, consumoMontagem - pa);
+
+      const faltaCoberturaCurta = Math.max(
         0,
-        ((minimo?.pa || 0) + consumoDuranteMontagem) - (item?.pa || 0)
+        minimoPA + consumoMontagem - coberturaCurta
       );
 
-      const prodAtual = (item?.est || 0) + (item?.m || 0) + (item?.p || 0);
+      const needMont = Math.max(faltaPA, faltaVendaCurta, faltaCoberturaCurta);
+      const mont = Math.min(est, round12(needMont));
 
-      const needProd = Math.max(
+      const faltaFluxoTotal = Math.max(
         0,
-        ((minimo?.prod || 0) + consumoDuranteCicloTotal) - prodAtual
+        minimoProd + consumoTotal - coberturaTotal
       );
 
-      const mont = Math.min(item?.est || 0, round12(needPA));
-      const pesp = round12(needProd);
+      const needPesp = Math.max(0, faltaFluxoTotal - mont);
+      const pesp = round12(needPesp);
 
       montSizes[size] = mont;
       pespSizes[size] = pesp;
+
       montTotal += mont;
       pespTotal += pesp;
 
-      const riscoMontagem = Math.max(0, consumoDuranteMontagem - (item?.pa || 0));
-      const riscoProducao = Math.max(0, consumoDuranteCicloTotal - prodAtual);
+      const pesoPAZerado = pa === 0 ? 100 : 0;
+      const pesoPABaixo = pa > 0 && pa < minimoPA ? 50 : 0;
+      const pesoVendaMont = vendaDia * 10;
+      const pesoCoberturaCurta = faltaCoberturaCurta * 6;
+      const pesoTempoMont = diasMontagem * 2;
 
-      prioridade +=
-        vendaDia +
-        needPA +
-        needProd +
-        riscoMontagem * 2 +
-        riscoProducao * 2;
+      prioridadeMontagem +=
+        pesoPAZerado +
+        pesoPABaixo +
+        faltaPA * 12 +
+        faltaVendaCurta * 8 +
+        pesoVendaMont +
+        pesoCoberturaCurta +
+        pesoTempoMont;
+
+      const pesoPipelineBaixo = pipeline < minimoProd ? 25 : 0;
+      const pesoVendaPesp = vendaDia * 8;
+      const pesoFluxo = faltaFluxoTotal * 5;
+      const pesoTempoPesp = diasTotal * 2;
+
+      prioridadePesponto +=
+        pesoPipelineBaixo +
+        pesoVendaPesp +
+        Math.max(0, minimoProd - pipeline) * 6 +
+        pesoFluxo +
+        pesoTempoPesp;
     });
 
     if (montTotal > 0) {
@@ -267,7 +317,7 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
         cor: row.cor,
         sizes: montSizes,
         total: montTotal,
-        prioridade,
+        prioridade: prioridadeMontagem,
       });
     }
 
@@ -278,13 +328,20 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
         cor: row.cor,
         sizes: pespSizes,
         total: pespTotal,
-        prioridade,
+        prioridade: prioridadePesponto,
       });
     }
   });
 
-  montagem.sort((a, b) => b.prioridade - a.prioridade || b.total - a.total);
-  pesponto.sort((a, b) => b.prioridade - a.prioridade || b.total - a.total);
+  montagem.sort((a, b) => {
+    if (b.prioridade !== a.prioridade) return b.prioridade - a.prioridade;
+    return b.total - a.total;
+  });
+
+  pesponto.sort((a, b) => {
+    if (b.prioridade !== a.prioridade) return b.prioridade - a.prioridade;
+    return b.total - a.total;
+  });
 
   return { montagem, pesponto };
 }
