@@ -892,19 +892,50 @@ useEffect(() => {
 
     setMovError((curr) => ({ ...curr, [tipo]: "" }));
 
- applyGridDelta(
-  form.ref,
-  form.cor,
-  items.flatMap((item) =>
-    tipo === "Pesponto"
-      ? [
-          { size: item.size, field: "p", delta: item.qtd },
-        ]
-      : [
-          { size: item.size, field: "est", delta: -item.qtd },
-          { size: item.size, field: "m", delta: item.qtd },
-        ]
-  )
+ const nextRows = rows.map((row) => {
+  if (row.ref !== form.ref || row.cor !== form.cor) return row;
+
+  const nextData = { ...row.data };
+
+  items.forEach((item) => {
+    const atual = nextData[item.size] || { pa: 0, est: 0, m: 0, p: 0 };
+
+    if (tipo === "Pesponto") {
+      nextData[item.size] = {
+        ...atual,
+        p: (atual.p || 0) + item.qtd,
+      };
+    } else {
+      nextData[item.size] = {
+        ...atual,
+        est: Math.max(0, (atual.est || 0) - item.qtd),
+        m: (atual.m || 0) + item.qtd,
+      };
+    }
+  });
+
+  return {
+    ...row,
+    data: nextData,
+  };
+});
+
+setRows(nextRows);
+
+await salvarEstoqueNoBanco(
+  nextRows
+    .map((row) =>
+      Object.entries(row.data).map(([numero, valores]) => ({
+        ref: row.ref,
+        cor: row.cor,
+        numero: Number(numero),
+        pa: valores.pa || 0,
+        est: valores.est || 0,
+        m: valores.m || 0,
+        p: valores.p || 0,
+      }))
+    )
+    .flat()
 );
 
     const payload = {
