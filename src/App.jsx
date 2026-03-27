@@ -1709,26 +1709,30 @@ const carregarMovimentacoesDoBanco = async () => {
     const pesponto = agrupar(data, "Pesponto");
     const montagem = agrupar(data, "Montagem");
 
-    const ajustesEst = data
-      .filter((item) => String(item.tipo || "") === "Costura Pronta")
-      .map((item, index) => ({
-        id: item.id || `ajuste-${index}`,
-        ref: String(item.ref || ""),
-        cor: String(item.cor || ""),
-        size: Number(item.numero) || 0,
-        qtd: Number(item.quantidade) || 0,
-        motivo: String(item.programacao || ""),
-        dataLancamento: item.data_lancamento
-          ? new Date(item.data_lancamento).toLocaleDateString("pt-BR")
-          : "",
-        tipo: String(item.status || "entrada"),
-      }));
+const ajustesEst = data
+  .filter(
+    (item) =>
+      String(item.tipo || "") === "Pesponto" &&
+      String(item.status || "") === "Finalizado"
+  )
+  .map((item, index) => ({
+    id: item.id || `ajuste-${index}`,
+    ref: String(item.ref || ""),
+    cor: String(item.cor || ""),
+    size: Number(item.numero) || 0,
+    qtd: Number(item.quantidade) || 0,
+    motivo: String(item.programacao || ""),
+    dataLancamento: item.data_lancamento
+      ? new Date(item.data_lancamento).toLocaleDateString("pt-BR")
+      : "",
+    tipo: "entrada",
+  }));
 
-    return { pesponto, montagem, ajustesEst };
-  } catch (err) {
-    console.log("ERRO GERAL AO CARREGAR MOVIMENTACOES:", err);
-    return { pesponto: [], montagem: [], ajustesEst: [] };
-  }
+return { pesponto, montagem, ajustesEst };
+} catch (err) {
+  console.log("ERRO GERAL AO CARREGAR MOVIMENTACOES:", err);
+  return { pesponto: [], montagem: [], ajustesEst: [] };
+}
 };
 
 const carregarConfiguracoesProducaoDoBanco = async () => {
