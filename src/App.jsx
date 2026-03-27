@@ -1713,7 +1713,7 @@ const ajustesEst = data
   .filter(
     (item) =>
       String(item.tipo || "") === "Pesponto" &&
-      String(item.status || "") === "Finalizado"
+      String(item.status || "").trim().toLowerCase() === "finalizado"
   )
   .map((item, index) => ({
     id: item.id || `ajuste-${index}`,
@@ -3000,7 +3000,7 @@ const salvarVendasManuais = async () => {
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <div className="font-semibold">{ajuste.ref} • {ajuste.cor}</div>
-                        <div className="text-xs text-slate-500 mt-1">{ajuste.data} • Numeração {ajuste.size}</div>
+                        <div className="text-xs text-slate-500 mt-1">{ajuste.dataLancamento} • Numeração {ajuste.size}</div>
                       </div>
                       <span className={`px-3 py-1 rounded-full border text-xs font-semibold ${ajuste.tipo === "entrada" ? "bg-emerald-100 text-emerald-700 border-emerald-200" : "bg-red-100 text-red-700 border-red-200"}`}>
                         {ajuste.tipo === "entrada" ? `+${ajuste.qtd}` : `-${ajuste.qtd}`}
