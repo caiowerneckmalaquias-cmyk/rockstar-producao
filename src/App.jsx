@@ -202,20 +202,6 @@ function parseGcmRawText(rawText) {
   return resultado;
 }
 
-const sizes = [34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44];
-
-function makeEmptyGrid() {
-  return sizes.reduce((acc, size) => {
-    acc[size] = 0;
-    return acc;
-  }, {});
-}
-
-function round12(value) {
-  if (value <= 0) return 0;
-  return Math.ceil(value / 12) * 12;
-}
-
 function buildSuggestions(rows, minimos, vendas, tempoProducao) {
   const montagem = [];
   const pesponto = [];
