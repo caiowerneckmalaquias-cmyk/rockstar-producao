@@ -1394,6 +1394,55 @@ const salvarMinimosNoBanco = async (minimosData) => {
   }
 };
 
+const salvarConfiguracoesProducaoNoBanco = async ({
+  capacidadePespontoDia,
+  capacidadeMontagemDia,
+  diasPesponto,
+  diasMontagem,
+}) => {
+  try {
+    const atual = await carregarConfiguracoesProducaoDoBanco();
+
+    if (atual?.id) {
+      const { data, error } = await supabase
+        .from("configuracoes_producao")
+        .update({
+          capacidade_pesponto_dia: Number(capacidadePespontoDia) || 396,
+          capacidade_montagem_dia: Number(capacidadeMontagemDia) || 396,
+          dias_pesponto: Number(diasPesponto) || 3,
+          dias_montagem: Number(diasMontagem) || 2,
+        })
+        .eq("id", atual.id)
+        .select()
+        .single();
+
+      console.log("CONFIG PRODUCAO ATUALIZADA:", data);
+      console.log("ERRO CONFIG PRODUCAO:", error);
+
+      return { data, error };
+    }
+
+    const { data, error } = await supabase
+      .from("configuracoes_producao")
+      .insert({
+        capacidade_pesponto_dia: Number(capacidadePespontoDia) || 396,
+        capacidade_montagem_dia: Number(capacidadeMontagemDia) || 396,
+        dias_pesponto: Number(diasPesponto) || 3,
+        dias_montagem: Number(diasMontagem) || 2,
+      })
+      .select()
+      .single();
+
+    console.log("CONFIG PRODUCAO CRIADA:", data);
+    console.log("ERRO CONFIG PRODUCAO:", error);
+
+    return { data, error };
+  } catch (err) {
+    console.log("ERRO GERAL AO SALVAR CONFIG PRODUCAO:", err);
+    return { data: null, error: err };
+  }
+};
+
 const salvarVendasNoBanco = async (vendasData) => {
   try {
     const linhas = [];
@@ -2982,11 +3031,20 @@ const salvarVendasManuais = async () => {
   };
 
   const salvar = async () => {
-    setMinimos(draftMinimos);
-    setTempoProducao(tempoProducaoDraft);
-    await salvarMinimosNoBanco(draftMinimos);
-    setDirtyMinimos(false);
-  };
+  setMinimos(draftMinimos);
+  setTempoProducao(tempoProducaoDraft);
+
+  await salvarMinimosNoBanco(draftMinimos);
+
+  await salvarConfiguracoesProducaoNoBanco({
+    capacidadePespontoDia,
+    capacidadeMontagemDia,
+    diasPesponto: tempoProducaoDraft.pesponto,
+    diasMontagem: tempoProducaoDraft.montagem,
+  });
+
+  setDirtyMinimos(false);
+};
 
   return (
     <PageShell title="Minimos" subtitle="Aba equivalente aos mínimos da planilha, com PA e PROD por referência, cor e numeração.">
