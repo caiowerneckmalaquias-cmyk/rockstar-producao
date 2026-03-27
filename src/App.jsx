@@ -218,8 +218,7 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
     const pespSizes = makeEmptyGrid();
     let montTotal = 0;
     let pespTotal = 0;
-    let prioridadeMontagem = 0;
-    let prioridadePesponto = 0;
+    let prioridade = 0;
 
     sizes.forEach((size) => {
       const item = row?.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 };
@@ -227,30 +226,22 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
       const vendaMes = Number(sales?.[size]) || 0;
       const vendaDia = vendaMes / 30;
 
-      const pa = Number(item?.pa) || 0;
-      const est = Number(item?.est) || 0;
-      const m = Number(item?.m) || 0;
-      const p = Number(item?.p) || 0;
-
-      const minimoPA = Number(minimo?.pa) || 0;
-      const minimoProd = Number(minimo?.prod) || 0;
-
       const consumoDuranteMontagem = Math.ceil(vendaDia * diasMontagem);
       const consumoDuranteCicloTotal = Math.ceil(vendaDia * diasTotal);
 
       const needPA = Math.max(
         0,
-        (minimoPA + consumoDuranteMontagem) - pa
+        ((minimo?.pa || 0) + consumoDuranteMontagem) - (item?.pa || 0)
       );
 
-      const prodAtual = est + m + p;
+      const prodAtual = (item?.est || 0) + (item?.m || 0) + (item?.p || 0);
 
       const needProd = Math.max(
         0,
-        (minimoProd + consumoDuranteCicloTotal) - prodAtual
+        ((minimo?.prod || 0) + consumoDuranteCicloTotal) - prodAtual
       );
 
-      const mont = Math.min(est, round12(needPA));
+      const mont = Math.min(item?.est || 0, round12(needPA));
       const pesp = round12(needProd);
 
       montSizes[size] = mont;
@@ -258,29 +249,15 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
       montTotal += mont;
       pespTotal += pesp;
 
-      const riscoMontagem = Math.max(0, consumoDuranteMontagem - pa);
+      const riscoMontagem = Math.max(0, consumoDuranteMontagem - (item?.pa || 0));
       const riscoProducao = Math.max(0, consumoDuranteCicloTotal - prodAtual);
 
-      const pesoPAZerado = pa === 0 ? 30 : 0;
-      const pesoPABaixo = pa > 0 && pa < minimoPA ? 15 : 0;
-      const pesoVenda = vendaDia;
-      const pesoNeedPA = needPA * 3;
-      const pesoNeedProd = needProd;
-      const pesoRiscoMontagem = riscoMontagem * 3;
-      const pesoRiscoProducao = riscoProducao * 2;
-
-      prioridadeMontagem +=
-        pesoPAZerado +
-        pesoPABaixo +
-        pesoVenda +
-        pesoNeedPA +
-        pesoRiscoMontagem;
-
-      prioridadePesponto +=
-        pesoVenda +
-        pesoNeedProd +
-        pesoRiscoProducao +
-        (pa === 0 ? 8 : 0);
+      prioridade +=
+        vendaDia +
+        needPA +
+        needProd +
+        riscoMontagem * 2 +
+        riscoProducao * 2;
     });
 
     if (montTotal > 0) {
@@ -290,7 +267,7 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
         cor: row.cor,
         sizes: montSizes,
         total: montTotal,
-        prioridade: prioridadeMontagem,
+        prioridade,
       });
     }
 
@@ -301,7 +278,7 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
         cor: row.cor,
         sizes: pespSizes,
         total: pespTotal,
-        prioridade: prioridadePesponto,
+        prioridade,
       });
     }
   });
