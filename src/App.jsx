@@ -40,6 +40,26 @@ function tone(status) {
   return "bg-white";
 }
 
+const calcularFinalizadoPesponto = (data) => {
+  const mapa = {};
+
+  data
+    .filter(item =>
+      item.tipo === "Pesponto" &&
+      String(item.status || "").trim().toLowerCase() === "finalizado"
+    )
+    .forEach(item => {
+      const chave = item.ref + "__" + item.cor;
+
+      if (!mapa[chave]) mapa[chave] = {};
+
+      mapa[chave][item.numero] =
+        (mapa[chave][item.numero] || 0) + item.quantidade;
+    });
+
+  return mapa;
+};
+
 function badge(status) {
   if (status === "CRÍTICO") return "bg-red-100 text-red-700 border-red-200";
   if (status === "ATENÇÃO PA") return "bg-amber-100 text-amber-700 border-amber-200";
@@ -2899,8 +2919,27 @@ const salvarVendasManuais = async () => {
   setAjusteEstForm((curr) => ({ ...curr, qtd: 0, motivo: "" }));
 };
 
-  const renderCosturaPronta = () => (
-    <PageShell title="Costura Pronta" subtitle="Etapa intermediária alimentada pelo Pesponto finalizado.">
+  const renderCosturaPronta = () => {
+
+  const finalizadoMap = calcularFinalizadoPesponto(
+    pespontoLancamentos
+      .filter((item) =>
+        String(item.status || "").trim().toLowerCase() === "finalizado"
+      )
+      .flatMap((item) =>
+        item.items.map((subItem) => ({
+          tipo: "Pesponto",
+          status: item.status,
+          ref: item.ref,
+          cor: item.cor,
+          numero: subItem.size,
+          quantidade: subItem.qtd,
+        }))
+      )
+  );
+
+  return (
+    <PageShell title="Costura Pronta" subtitle="Visualização do total finalizado no Pesponto por referência, cor e numeração.">
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-6 items-start">
         <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm overflow-auto p-6">
           <table className="min-w-[1200px] w-full border-collapse text-sm">
@@ -2909,7 +2948,7 @@ const salvarVendasManuais = async () => {
                 <th className="border px-4 py-3 text-left">Ref</th>
                 <th className="border px-4 py-3 text-left">Cor</th>
                 {sizes.map((s) => <th key={s} className="border px-3 py-3 text-center">{s}</th>)}
-                <th className="border px-4 py-3 text-center">Total Est Pto</th>
+                <th className="border px-4 py-3 text-center">Total Finalizado</th>
               </tr>
             </thead>
             <tbody>
@@ -2917,8 +2956,12 @@ const salvarVendasManuais = async () => {
                 <tr key={`cp-${row.ref}-${row.cor}`}>
                   <td className="border px-4 py-3 font-semibold">{row.ref}</td>
                   <td className="border px-4 py-3">{row.cor}</td>
-                  {sizes.map((size) => <td key={size} className="border px-3 py-3 text-center">{row.data[size].est}</td>)}
-                  <td className="border px-4 py-3 text-center font-bold">{sizes.reduce((acc, size) => acc + row.data[size].est, 0)}</td>
+                  {sizes.map((size) => <td key={size} className="border px-3 py-3 text-center">{finalizadoMap[`${row.ref}__${row.cor}`]?.[size] || 0}</td>)}
+                  <td className="border px-4 py-3 text-center font-bold">{sizes.reduce(
+  (acc, size) =>
+    acc + (finalizadoMap[`${row.ref}__${row.cor}`]?.[size] || 0),
+  0
+)}</td>
                 </tr>
               ))}
             </tbody>
@@ -3014,8 +3057,8 @@ const salvarVendasManuais = async () => {
           <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="font-bold text-lg">Histórico de ajustes</div>
-                <div className="text-sm text-slate-500 mt-1">Registro dos últimos movimentos manuais.</div>
+                <div className="font-bold text-lg">Histórico da Costura Pronta</div>
+                <div className="text-sm text-slate-500 mt-1">Registro das entradas vindas do Pesponto e dos ajustes manuais</div>
               </div>
               <span className="text-sm text-slate-500">{ajustesEst.length} ajuste(s)</span>
             </div>
@@ -3023,7 +3066,7 @@ const salvarVendasManuais = async () => {
             <div className="mt-4 space-y-3 max-h-[420px] overflow-auto pr-1">
               {ajustesEst.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500">
-                  Nenhum ajuste manual registrado ainda.
+                  Nenhum movimento registrado ainda.
                 </div>
               ) : (
                 ajustesEst.map((ajuste) => (
@@ -3047,6 +3090,7 @@ const salvarVendasManuais = async () => {
       </div>
     </PageShell>
   );
+};
 
   const renderConfig = () => {
   const updateLocal = (ref, cor, size, key, value) => {
