@@ -830,25 +830,29 @@ const previewBySelection = (form) => {
   }, [rows]);
 
   const metrics = useMemo(() => {
-    let criticos = 0;
-    let atencaoPA = 0;
-    let atencaoProd = 0;
-    let ok = 0;
-    let costura = 0;
-    rows.forEach((row) => {
-      sizes.forEach((size) => {
-        const item = row.data[size];
-        costura += item.est;
-        const minimo = minimos?.[row.ref]?.[row.cor]?.[size] || { pa: 0, prod: 0 };
-        const st = statusFor(item, minimo);
-        if (st === "CRÍTICO") criticos += 1;
-        else if (st === "ATENÇÃO PA") atencaoPA += 1;
-        else if (st === "ATENÇÃO PROD") atencaoProd += 1;
-        else ok += 1;
-      });
+  let criticos = 0;
+  let atencaoPA = 0;
+  let atencaoProd = 0;
+  let ok = 0;
+  let costura = 0;
+
+  rows.forEach((row) => {
+    sizes.forEach((size) => {
+      const item = row.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 };
+      costura += item.est || 0;
+
+      const minimo = minimos?.[row.ref]?.[row.cor]?.[size] || { pa: 0, prod: 0 };
+      const st = statusFor(item, minimo);
+
+      if (st === "CRÍTICO") criticos += 1;
+      else if (st === "ATENÇÃO PA") atencaoPA += 1;
+      else if (st === "ATENÇÃO PROD") atencaoProd += 1;
+      else ok += 1;
     });
-    return { criticos, atencaoPA, atencaoProd, ok, costura };
-  }, [rows, minimos]);
+  });
+
+  return { criticos, atencaoPA, atencaoProd, ok, costura };
+}, [rows, minimos]);
 
   const suggestions = useMemo(() => buildSuggestions(rows, minimos, vendas, tempoProducao), [rows, minimos, vendas, tempoProducao]);
   const fichasMontagem = useMemo(() => splitIntoFichas(suggestions.montagem, vendas), [suggestions, vendas]);
@@ -2513,11 +2517,11 @@ const salvarVendasManuais = async () => {
                 {controleRows.map((row) => (
                   <tr key={`${row.ref}-${row.cor}`} className="hover:bg-slate-50/70">
                     <td className="sticky left-0 z-10 bg-white border-b border-r border-slate-200 px-4 py-4 font-semibold">{row.ref}</td>
-                    <td className="sticky left-[120px] z-10 bg-white border-b border-r border-slate-200 px-4 py-4">{row.cor}</td>
-                    {visibleSizesControle.flatMap((size) => {
-                      const item = row.data[size];
-                      const minimo = minimos?.[row.ref]?.[row.cor]?.[size] || { pa: 0, prod: 0 };
-                      const st = statusFor(item, minimo);
+                   <td className="sticky left-[120px] z-10 bg-white border-b border-r border-slate-200 px-4 py-4">{row.cor}</td>
+{visibleSizesControle.flatMap((size) => {
+  const item = row.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 };
+  const minimo = minimos?.[row.ref]?.[row.cor]?.[size] || { pa: 0, prod: 0 };
+  const st = statusFor(item, minimo);
                       return [
                         <td key={`${row.ref}-${size}-pa`} className={`border-b border-r border-slate-200 px-3 py-3 text-center text-sm ${tone(st)}`}>{item.pa}</td>,
                         <td key={`${row.ref}-${size}-est`} className={`border-b border-r border-slate-200 px-3 py-3 text-center text-sm ${tone(st)}`}>{item.est}</td>,
@@ -3545,11 +3549,19 @@ const salvarVendasManuais = async () => {
       const vendasRow = vendas[row.ref]?.[row.cor] || {};
       const totalVendido = sizes.reduce((acc, size) => acc + (Number(vendasRow[size]) || 0), 0);
       const totalPA = sizes.reduce((acc, size) => acc + (row.data[size]?.pa || 0), 0);
-      const totalProd = sizes.reduce((acc, size) => acc + (row.data[size]?.est || 0) + (row.data[size]?.m || 0) + (row.data[size]?.p || 0), 0);
-      const ruptura = sizes.some((size) => {
-        const item = row.data[size];
-        const minimo = minimos?.[row.ref]?.[row.cor]?.[size] || { pa: 0, prod: 0 };
-        return item.pa < minimo.pa;
+      const totalProd = sizes.reduce(
+  (acc, size) =>
+    acc +
+    (row.data?.[size]?.est || 0) +
+    (row.data?.[size]?.m || 0) +
+    (row.data?.[size]?.p || 0),
+  0
+);
+
+const ruptura = sizes.some((size) => {
+  const item = row.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 };
+  const minimo = minimos?.[row.ref]?.[row.cor]?.[size] || { pa: 0, prod: 0 };
+  return item.pa < minimo.pa;
       });
       return {
         ref: row.ref,
