@@ -228,17 +228,11 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
 
   const diasPesponto = Number(tempoProducao?.pesponto) || 0;
   const diasMontagem = Number(tempoProducao?.montagem) || 0;
-  const diasTotal = diasPesponto + diasMontagem;
+  const tempoTotal = diasPesponto + diasMontagem;
 
   rows.forEach((row) => {
     const mins = minimos?.[row.ref]?.[row.cor] || {};
     const sales = vendas?.[row.ref]?.[row.cor] || {};
-
-    const montSizes = makeEmptyGrid();
-    const pespSizes = makeEmptyGrid();
-    let montTotal = 0;
-    let pespTotal = 0;
-    let prioridade = 0;
 
     sizes.forEach((size) => {
       const item = row?.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 };
@@ -246,67 +240,120 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
       const vendaMes = Number(sales?.[size]) || 0;
       const vendaDia = vendaMes / 30;
 
-      const consumoDuranteMontagem = Math.ceil(vendaDia * diasMontagem);
-      const consumoDuranteCicloTotal = Math.ceil(vendaDia * diasTotal);
+      const pa = Number(item.pa) || 0;
+      const est = Number(item.est) || 0;
+      const m = Number(item.m) || 0;
+      const p = Number(item.p) || 0;
 
-      const needPA = Math.max(
-        0,
-        ((minimo?.pa || 0) + consumoDuranteMontagem) - (item?.pa || 0)
-      );
+      const prodAtual = est + m + p;
 
-      const prodAtual = (item?.est || 0) + (item?.m || 0) + (item?.p || 0);
+      const faltaPa = Math.max(0, (Number(minimo.pa) || 0) - pa);
+      const faltaProd = Math.max(0, (Number(minimo.prod) || 0) - prodAtual);
 
-      const needProd = Math.max(
-        0,
-        ((minimo?.prod || 0) + consumoDuranteCicloTotal) - prodAtual
-      );
+      const paZerado = pa === 0;
+      const abaixoMinimoPa = pa < (Number(minimo.pa) || 0);
 
-      const mont = Math.min(item?.est || 0, round12(needPA));
-      const pesp = round12(needProd);
+      // dominante = produto muito crítico + alto giro
+      const dominante =
+        (pa === 0 || pa <= Math.max(1, Math.floor((Number(minimo.pa) || 0) * 0.5))) &&
+        vendaDia >= 1.5;
 
-      montSizes[size] = mont;
-      pespSizes[size] = pesp;
-      montTotal += mont;
-      pespTotal += pesp;
+      let prioridade = 0;
 
-      const riscoMontagem = Math.max(0, consumoDuranteMontagem - (item?.pa || 0));
-      const riscoProducao = Math.max(0, consumoDuranteCicloTotal - prodAtual);
+      // 1. PA zerado
+      if (paZerado) prioridade += 10000;
 
-      prioridade +=
-        vendaDia +
-        needPA +
-        needProd +
-        riscoMontagem * 2 +
-        riscoProducao * 2;
+      // 2. PA abaixo do mínimo
+      if (abaixoMinimoPa) prioridade += 5000;
+
+      // 3. maior venda diária
+      prioridade += vendaDia * 100;
+
+      // 4. maior tempo de ciclo
+      prioridade += tempoTotal * 20;
+
+      // dominante ganha um empurrão forte
+      if (dominante) prioridade += 15000;
+
+      // se não tem nenhuma necessidade real, ignora
+      if (faltaPa <= 0 && faltaProd <= 0 && vendaDia <= 0) return;
+
+      // sugestão para pesponto
+      const necessidadePesponto = Math.max(faltaPa, faltaProd);
+
+      if (necessidadePesponto > 0) {
+        pesponto.push({
+          ref: row.ref,
+          cor: row.cor,
+          size,
+          pa,
+          est,
+          m,
+          p,
+          minimoPa: Number(minimo.pa) || 0,
+          minimoProd: Number(minimo.prod) || 0,
+          vendaMes,
+          vendaDia,
+          faltaPa,
+          faltaProd,
+          necessidade: necessidadePesponto,
+          prioridade,
+          dominante,
+          tempoCiclo: tempoTotal,
+        });
+      }
+
+      // sugestão para montagem:
+      // só faz sentido se já houver algo em costura pronta
+      const necessidadeMontagem = Math.max(faltaPa, 0);
+
+      if (necessidadeMontagem > 0 && est > 0) {
+        montagem.push({
+          ref: row.ref,
+          cor: row.cor,
+          size,
+          pa,
+          est,
+          m,
+          p,
+          minimoPa: Number(minimo.pa) || 0,
+          minimoProd: Number(minimo.prod) || 0,
+          vendaMes,
+          vendaDia,
+          faltaPa,
+          faltaProd,
+          necessidade: Math.min(necessidadeMontagem, est),
+          prioridade,
+          dominante,
+          tempoCiclo: tempoTotal,
+        });
+      }
     });
-
-    if (montTotal > 0) {
-      montagem.push({
-        tipo: "Montagem",
-        ref: row.ref,
-        cor: row.cor,
-        sizes: montSizes,
-        total: montTotal,
-        prioridade,
-      });
-    }
-
-    if (pespTotal > 0) {
-      pesponto.push({
-        tipo: "Pesponto",
-        ref: row.ref,
-        cor: row.cor,
-        sizes: pespSizes,
-        total: pespTotal,
-        prioridade,
-      });
-    }
   });
 
-  montagem.sort((a, b) => b.prioridade - a.prioridade || b.total - a.total);
-  pesponto.sort((a, b) => b.prioridade - a.prioridade || b.total - a.total);
+  const ordenar = (a, b) => {
+    // dominante sempre vem primeiro
+    if (a.dominante !== b.dominante) return a.dominante ? -1 : 1;
 
-  return { montagem, pesponto };
+    // maior prioridade primeiro
+    if (b.prioridade !== a.prioridade) return b.prioridade - a.prioridade;
+
+    // maior necessidade primeiro
+    if (b.necessidade !== a.necessidade) return b.necessidade - a.necessidade;
+
+    // maior venda diária primeiro
+    if (b.vendaDia !== a.vendaDia) return b.vendaDia - a.vendaDia;
+
+    // maior tempo de ciclo primeiro
+    if (b.tempoCiclo !== a.tempoCiclo) return b.tempoCiclo - a.tempoCiclo;
+
+    return 0;
+  };
+
+  pesponto.sort(ordenar);
+  montagem.sort(ordenar);
+
+  return { pesponto, montagem };
 }
 
 function splitIntoFichas(list, vendas) {
@@ -461,24 +508,31 @@ function buildProgramacaoPeriodo(fichasBase, suggestionsBase, capacidadeDia = 39
   const prioridadeMap = new Map();
 
   (suggestionsBase || []).forEach((item) => {
-    prioridadeMap.set(`${item.ref}__${item.cor}`, item.prioridade || 0);
+    prioridadeMap.set(`${item.ref}__${item.cor}`, {
+      prioridade: item.prioridade || 0,
+      dominante: !!item.dominante,
+    });
   });
 
   const grupos = {};
   (fichasBase || []).forEach((ficha) => {
     const key = `${ficha.ref}__${ficha.cor}`;
+    const infoPrioridade = prioridadeMap.get(key) || { prioridade: 0, dominante: false };
+
     if (!grupos[key]) {
       grupos[key] = {
         key,
         tipo,
         ref: ficha.ref,
         cor: ficha.cor,
-        prioridade: prioridadeMap.get(key) || 0,
-        peso: Math.max(1, prioridadeMap.get(key) || 0),
+        prioridade: infoPrioridade.prioridade || 0,
+        dominante: !!infoPrioridade.dominante,
+        peso: Math.max(1, infoPrioridade.prioridade || 0),
         current: 0,
         fichas: [],
       };
     }
+
     grupos[key].fichas.push({ ...ficha, tipo });
   });
 
@@ -491,10 +545,40 @@ function buildProgramacaoPeriodo(fichasBase, suggestionsBase, capacidadeDia = 39
   const diasProgramados = [];
   let ultimoGrupoGlobal = "";
 
-  const escolherGrupo = (gruposDisponiveis, restante, ultimoGrupoDia) => {
-    const candidatos = gruposDisponiveis.filter(
-      (grupo) => grupo.fichas.length > 0 && grupo.fichas.some((ficha) => ficha.total <= restante)
-    );
+  // 60% da capacidade do dia, arredondado para baixo em múltiplos de 12
+  
+const gruposComFicha = Object.values(grupos).filter((grupo) => grupo.fichas.length > 0);
+
+const temDominante = gruposComFicha.some((grupo) => grupo.dominante);
+const temOutrosRelevantes = gruposComFicha.some(
+  (grupo) => !grupo.dominante && (grupo.prioridade || 0) > 0
+);
+
+const limiteDominanteDia =
+  temDominante && temOutrosRelevantes
+    ? Math.floor((capacidadeDia * 0.6) / 12) * 12
+    : capacidadeDia;
+
+const modoDominante = temDominante
+  ? temOutrosRelevantes
+    ? "limitado_60"
+    : "livre_100"
+  : "sem_dominante";
+
+  const escolherGrupo = (gruposDisponiveis, restante, ultimoGrupoDia, usadoDominanteNoDia) => {
+    const candidatos = gruposDisponiveis.filter((grupo) => {
+      if (!grupo.fichas.length) return false;
+
+      return grupo.fichas.some((ficha) => {
+        if (ficha.total > restante) return false;
+
+        if (grupo.dominante && usadoDominanteNoDia + ficha.total > limiteDominanteDia) {
+          return false;
+        }
+
+        return true;
+      });
+    });
 
     if (!candidatos.length) return null;
 
@@ -505,6 +589,8 @@ function buildProgramacaoPeriodo(fichasBase, suggestionsBase, capacidadeDia = 39
     const ordenados = [...candidatos].sort((a, b) => {
       const penalA = (a.key === ultimoGrupoDia ? 1 : 0) + (a.key === ultimoGrupoGlobal ? 1 : 0);
       const penalB = (b.key === ultimoGrupoDia ? 1 : 0) + (b.key === ultimoGrupoGlobal ? 1 : 0);
+
+      if (a.dominante !== b.dominante) return a.dominante ? -1 : 1;
       if (penalA !== penalB) return penalA - penalB;
       if (b.current !== a.current) return b.current - a.current;
       if (b.prioridade !== a.prioridade) return b.prioridade - a.prioridade;
@@ -521,14 +607,26 @@ function buildProgramacaoPeriodo(fichasBase, suggestionsBase, capacidadeDia = 39
   for (let dia = 1; dia <= dias; dia += 1) {
     let restante = capacidadeDia;
     let ultimoGrupoDia = "";
+    let usadoDominanteNoDia = 0;
     const selecionadas = [];
 
     while (restante >= 12) {
-      const grupoEscolhido = escolherGrupo(ativos, restante, ultimoGrupoDia);
+      const grupoEscolhido = escolherGrupo(ativos, restante, ultimoGrupoDia, usadoDominanteNoDia);
       if (!grupoEscolhido) break;
 
       const fichaEscolhida = [...grupoEscolhido.fichas]
-        .filter((ficha) => ficha.total <= restante)
+        .filter((ficha) => {
+          if (ficha.total > restante) return false;
+
+          if (
+            grupoEscolhido.dominante &&
+            usadoDominanteNoDia + ficha.total > limiteDominanteDia
+          ) {
+            return false;
+          }
+
+          return true;
+        })
         .sort((a, b) => b.total - a.total || a.nome.localeCompare(b.nome, "pt-BR"))[0];
 
       if (!fichaEscolhida) {
@@ -537,11 +635,18 @@ function buildProgramacaoPeriodo(fichasBase, suggestionsBase, capacidadeDia = 39
       }
 
       grupoEscolhido.fichas = grupoEscolhido.fichas.filter((f) => f.nome !== fichaEscolhida.nome);
+
       selecionadas.push({
         ...fichaEscolhida,
         prioridade: grupoEscolhido.prioridade,
         grupoKey: grupoEscolhido.key,
+        dominante: grupoEscolhido.dominante,
       });
+
+      if (grupoEscolhido.dominante) {
+        usadoDominanteNoDia += fichaEscolhida.total;
+      }
+
       restante -= fichaEscolhida.total;
       ultimoGrupoDia = grupoEscolhido.key;
       ultimoGrupoGlobal = grupoEscolhido.key;
@@ -552,6 +657,8 @@ function buildProgramacaoPeriodo(fichasBase, suggestionsBase, capacidadeDia = 39
       capacidadeDia,
       totalProgramado: capacidadeDia - restante,
       restante,
+      usadoDominanteNoDia,
+      limiteDominanteDia,
       fichas: selecionadas,
     });
   }
@@ -559,14 +666,16 @@ function buildProgramacaoPeriodo(fichasBase, suggestionsBase, capacidadeDia = 39
   const todasFichas = diasProgramados.flatMap((item) => item.fichas);
 
   return {
-    tipo,
-    dias,
-    capacidadeDia,
-    totalProgramado: todasFichas.reduce((acc, item) => acc + item.total, 0),
-    totalRestante: diasProgramados.reduce((acc, item) => acc + item.restante, 0),
-    diasProgramados,
-    totalFichas: todasFichas.length,
-  };
+  tipo,
+  dias,
+  capacidadeDia,
+  limiteDominanteDia,
+  modoDominante,
+  totalProgramado: todasFichas.reduce((acc, item) => acc + item.total, 0),
+  totalRestante: diasProgramados.reduce((acc, item) => acc + item.restante, 0),
+  diasProgramados,
+  totalFichas: todasFichas.length,
+};
 }
 
 function SummaryCard({ title, value, subtitle }) {
@@ -3762,6 +3871,26 @@ const salvarVendasManuais = async () => {
           <SummaryCard title="Saldo" value={programacao.totalRestante} subtitle="Capacidade ainda livre" />
           <SummaryCard title="Fichas" value={programacao.totalFichas} subtitle="Fichas distribuídas no período" />
         </div>
+<div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-4">
+  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+    <div>
+      <div className="font-bold text-base">Regra do dominante</div>
+      <div className="text-sm text-slate-500 mt-1">
+        {programacao.modoDominante === "limitado_60" &&
+          "Existe mais de um item relevante no dia. O produto dominante pode ocupar até 60% da capacidade diária."}
+        {programacao.modoDominante === "livre_100" &&
+          "Não há outros itens relevantes competindo no dia. O produto dominante pode ocupar até 100% da capacidade diária."}
+        {programacao.modoDominante === "sem_dominante" &&
+          "Nenhum item foi marcado como dominante para este período."}
+      </div>
+    </div>
+
+    <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-right">
+      <div className="text-xs text-slate-500">Limite do dominante</div>
+      <div className="text-xl font-bold text-slate-900">{programacao.limiteDominanteDia}</div>
+    </div>
+  </div>
+</div>
 
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6 items-start">
           <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
