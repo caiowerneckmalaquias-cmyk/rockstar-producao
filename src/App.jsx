@@ -784,9 +784,9 @@ const previewBySelection = (form) => {
   const row = rows.find((item) => item.ref === form.ref && item.cor === form.cor);
   if (!row) return null;
 
-  const totalPesponto = sizes.reduce((acc, size) => acc + (row.data[size]?.p || 0), 0);
-  const totalMontagem = sizes.reduce((acc, size) => acc + (row.data[size]?.m || 0), 0);
-  const totalEst = sizes.reduce((acc, size) => acc + (row.data[size]?.est || 0), 0);
+  const totalPesponto = sizes.reduce((acc, size) => acc + (row.data?.[size]?.p || 0), 0);
+const totalMontagem = sizes.reduce((acc, size) => acc + (row.data?.[size]?.m || 0), 0);
+const totalEst = sizes.reduce((acc, size) => acc + (row.data?.[size]?.est || 0), 0);
 
   return {
     row,
@@ -1780,7 +1780,7 @@ const carregarEstoqueDoBanco = async () => {
       const dataCompleta = {};
 
       sizes.forEach((size) => {
-        dataCompleta[size] = row.data[size] || {
+        dataCompleta[size] = row.data?.[size] || {
           pa: 0,
           est: 0,
           m: 0,
@@ -1929,7 +1929,7 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
             sizes.map((size) => [
               size,
               {
-                ...row.data[size],
+                ...row.data?.[size],
                 pa: 0,
               },
             ])
@@ -2224,10 +2224,10 @@ const salvarVendasManuais = async () => {
   const renderDashboard = () => {
     const tempoTotal = (Number(tempoProducao?.pesponto) || 0) + (Number(tempoProducao?.montagem) || 0);
 
-    const totalPA = rows.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.pa || 0), 0), 0);
-    const totalEst = rows.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.est || 0), 0), 0);
-    const totalMontagemAtual = rows.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.m || 0), 0), 0);
-    const totalPespontoAtual = rows.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.p || 0), 0), 0);
+    const totalPA = rows.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data?.[size]?.pa || 0), 0), 0);
+const totalEst = rows.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data?.[size]?.est || 0), 0), 0);
+const totalMontagemAtual = rows.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data?.[size]?.m || 0), 0), 0);
+const totalPespontoAtual = rows.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data?.[size]?.p || 0), 0), 0);
     const vendaMensalTotal = rows.reduce((acc, row) => {
       const vendasRow = vendas?.[row.ref]?.[row.cor] || {};
       return acc + sizes.reduce((sum, size) => sum + (Number(vendasRow[size]) || 0), 0);
@@ -2271,8 +2271,8 @@ const salvarVendasManuais = async () => {
     const menorCobertura = rows
       .flatMap((row) => sizes.map((size) => {
         const vendaMes = Number(vendas?.[row.ref]?.[row.cor]?.[size]) || 0;
-        const cobertura = coberturaDias(row.data[size]?.pa || 0, vendaMes);
-        return { ref: row.ref, cor: row.cor, size, cobertura, pa: row.data[size]?.pa || 0, vendaMes };
+        const cobertura = coberturaDias(row.data?.[size]?.pa || 0, vendaMes);
+return { ref: row.ref, cor: row.cor, size, cobertura, pa: row.data?.[size]?.pa || 0, vendaMes };
       }))
       .filter((item) => item.cobertura !== null)
       .sort((a, b) => a.cobertura - b.cobertura)
@@ -2282,7 +2282,7 @@ const salvarVendasManuais = async () => {
       .map((row) => {
         const vendasRow = vendas?.[row.ref]?.[row.cor] || {};
         const totalVendido = sizes.reduce((acc, size) => acc + (Number(vendasRow[size]) || 0), 0);
-        const totalPARef = sizes.reduce((acc, size) => acc + (row.data[size]?.pa || 0), 0);
+        const totalPARef = sizes.reduce((acc, size) => acc + (row.data?.[size]?.pa || 0), 0);
         return { ref: row.ref, cor: row.cor, totalVendido, totalPA: totalPARef };
       })
       .sort((a, b) => b.totalVendido - a.totalVendido || a.totalPA - b.totalPA)
@@ -2454,7 +2454,7 @@ const salvarVendasManuais = async () => {
     const coberturaCritica = controleRows
       .flatMap((row) => sizes.map((size) => {
         const vendaMes = Number(vendas?.[row.ref]?.[row.cor]?.[size]) || 0;
-        const cobertura = coberturaDias(row.data[size]?.pa || 0, vendaMes);
+        const cobertura = coberturaDias(row.data?.[size]?.pa || 0, vendaMes);
         return { row, size, cobertura, vendaMes };
       }))
       .filter((item) => item.cobertura !== null)
@@ -2541,7 +2541,16 @@ const salvarVendasManuais = async () => {
           <h2 className="font-bold text-lg">Prioridades</h2>
           <div className="mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             {controleRows
-              .flatMap((row) => sizes.map((size) => ({ row, size, status: statusFor(row.data[size], minimos?.[row.ref]?.[row.cor]?.[size] || { pa: 0, prod: 0 }) })))
+              .flatMap((row) =>
+  sizes.map((size) => ({
+    row,
+    size,
+    status: statusFor(
+      row.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 },
+      minimos?.[row.ref]?.[row.cor]?.[size] || { pa: 0, prod: 0 }
+    ),
+  }))
+)
               .filter((x) => x.status !== "OK")
               .slice(0, 9)
               .map((item, idx) => {
@@ -2929,7 +2938,7 @@ const salvarVendasManuais = async () => {
                     <span className="text-3xl font-bold text-slate-900">{selectionPreview.totalEst}</span>
                   </div>
                   <div className="flex items-center justify-between rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
-                    <span>Na Montagem</span>
+                    <div className="mt-1">P: {selectionPreview.row.data?.[size]?.p || 0}</div>
                     <span className="text-3xl font-bold text-slate-900">{selectionPreview.totalMontagem}</span>
                   </div>
                 </div>
@@ -3548,7 +3557,7 @@ const salvarVendasManuais = async () => {
     const analise = rows.map((row) => {
       const vendasRow = vendas[row.ref]?.[row.cor] || {};
       const totalVendido = sizes.reduce((acc, size) => acc + (Number(vendasRow[size]) || 0), 0);
-      const totalPA = sizes.reduce((acc, size) => acc + (row.data[size]?.pa || 0), 0);
+      const totalPA = sizes.reduce((acc, size) => acc + (row.data?.[size]?.pa || 0), 0);
       const totalProd = sizes.reduce(
   (acc, size) =>
     acc +
@@ -3591,12 +3600,12 @@ const ruptura = sizes.some((size) => {
     const coberturaAnalise = rows
       .flatMap((row) => sizes.map((size) => {
         const vendaMes = Number(vendas?.[row.ref]?.[row.cor]?.[size]) || 0;
-        const cobertura = coberturaDias(row.data[size]?.pa || 0, vendaMes);
+        const cobertura = coberturaDias(row.data?.[size]?.pa || 0, vendaMes);
         return {
           ref: row.ref,
           cor: row.cor,
           size,
-          pa: row.data[size]?.pa || 0,
+          pa: row.data?.[size]?.pa || 0,
           vendaMes,
           cobertura,
         };
