@@ -40,6 +40,25 @@ function tone(status) {
   return "bg-white";
 }
 
+const normalizarRows = (lista) =>
+  (lista || []).map((row) => {
+    const dataCompleta = {};
+
+    sizes.forEach((size) => {
+      dataCompleta[size] = row.data?.[size] || {
+        pa: 0,
+        est: 0,
+        m: 0,
+        p: 0,
+      };
+    });
+
+    return {
+      ...row,
+      data: dataCompleta,
+    };
+  });
+
 const calcularFinalizadoPesponto = (data) => {
   const mapa = {};
 
