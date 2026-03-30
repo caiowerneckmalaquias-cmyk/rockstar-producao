@@ -40,45 +40,6 @@ function tone(status) {
   return "bg-white";
 }
 
-const normalizarRows = (lista) =>
-  (lista || []).map((row) => {
-    const dataCompleta = {};
-
-    sizes.forEach((size) => {
-      dataCompleta[size] = row.data?.[size] || {
-        pa: 0,
-        est: 0,
-        m: 0,
-        p: 0,
-      };
-    });
-
-    return {
-      ...row,
-      data: dataCompleta,
-    };
-  });
-
-const calcularFinalizadoPesponto = (data) => {
-  const mapa = {};
-
-  data
-    .filter(item =>
-      item.tipo === "Pesponto" &&
-      String(item.status || "").trim().toLowerCase() === "finalizado"
-    )
-    .forEach(item => {
-      const chave = item.ref + "__" + item.cor;
-
-      if (!mapa[chave]) mapa[chave] = {};
-
-      mapa[chave][item.numero] =
-        (mapa[chave][item.numero] || 0) + item.quantidade;
-    });
-
-  return mapa;
-};
-
 function badge(status) {
   if (status === "CRÍTICO") return "bg-red-100 text-red-700 border-red-200";
   if (status === "ATENÇÃO PA") return "bg-amber-100 text-amber-700 border-amber-200";
@@ -247,306 +208,412 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
 
   const diasPesponto = Number(tempoProducao?.pesponto) || 0;
   const diasMontagem = Number(tempoProducao?.montagem) || 0;
-  const tempoTotal = diasPesponto + diasMontagem;
+  const diasTotal = diasPesponto + diasMontagem;
+  
+    const LIMITE_POR_NUMERO = 84;
+
+  const roundUp12 = (value) => {
+    const numero = Number(value) || 0;
+    if (numero <= 0) return 0;
+    return Math.ceil(numero / 12) * 12;
+  };
+
+  const getVendaDia = (vendaMes) => (Number(vendaMes) || 0) / 30;
+
+  const getCoberturaDias = (estoque, vendaDia) => {
+    if (vendaDia <= 0) return estoque > 0 ? 999 : 0;
+    return estoque / vendaDia;
+  };
 
   rows.forEach((row) => {
     const mins = minimos?.[row.ref]?.[row.cor] || {};
     const sales = vendas?.[row.ref]?.[row.cor] || {};
 
+    const montSizes = makeEmptyGrid();
+    const pespSizes = makeEmptyGrid();
+
+    let montTotal = 0;
+    let pespTotal = 0;
+
+    let prioridadeMontagem = 0;
+    let prioridadePesponto = 0;
+
+    let itemUrgenteMontagem = false;
+    let itemUrgentePesponto = false;
+
+    let itemRecuperacaoMontagem = false;
+    let itemRecuperacaoPesponto = false;
+
+    let tamanhosCriticosMontagem = 0;
+    let tamanhosPendentesMontagem = 0;
+
+    let tamanhosCriticosPesponto = 0;
+    let tamanhosPendentesPesponto = 0;
+
+    let vendaTotalRefCor = 0;
+
     sizes.forEach((size) => {
       const item = row?.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 };
       const minimo = mins?.[size] || { pa: 0, prod: 0 };
       const vendaMes = Number(sales?.[size]) || 0;
-      const vendaDia = vendaMes / 30;
+      const vendaDia = getVendaDia(vendaMes);
 
-      const pa = Number(item.pa) || 0;
-      const est = Number(item.est) || 0;
-      const m = Number(item.m) || 0;
-      const p = Number(item.p) || 0;
+      vendaTotalRefCor += vendaMes;
+
+      const pa = Number(item?.pa) || 0;
+      const est = Number(item?.est) || 0;
+      const m = Number(item?.m) || 0;
+      const p = Number(item?.p) || 0;
+
+      const minPA = Number(minimo?.pa) || 0;
+      const minProd = Number(minimo?.prod) || 0;
 
       const prodAtual = est + m + p;
 
-      const faltaPa = Math.max(0, (Number(minimo.pa) || 0) - pa);
-      const faltaProd = Math.max(0, (Number(minimo.prod) || 0) - prodAtual);
+      const itemRelevante =
+        vendaMes > 0 ||
+        minPA > 0 ||
+        minProd > 0;
 
-      const paZerado = pa === 0;
-      const abaixoMinimoPa = pa < (Number(minimo.pa) || 0);
-
-      // dominante = produto muito crítico + alto giro
-      const dominante =
-        (pa === 0 || pa <= Math.max(1, Math.floor((Number(minimo.pa) || 0) * 0.5))) &&
-        vendaDia >= 1.5;
-
-      let prioridade = 0;
-
-      // 1. PA zerado
-      if (paZerado) prioridade += 10000;
-
-      // 2. PA abaixo do mínimo
-      if (abaixoMinimoPa) prioridade += 5000;
-
-      // 3. maior venda diária
-      prioridade += vendaDia * 100;
-
-      // 4. maior tempo de ciclo
-      prioridade += tempoTotal * 20;
-
-      // dominante ganha um empurrão forte
-      if (dominante) prioridade += 15000;
-
-      // se não tem nenhuma necessidade real, ignora
-      if (faltaPa <= 0 && faltaProd <= 0 && vendaDia <= 0) return;
-
-      // sugestão para pesponto
-      const necessidadePesponto = Math.max(faltaPa, faltaProd);
-
-      if (necessidadePesponto > 0) {
-        pesponto.push({
-          ref: row.ref,
-          cor: row.cor,
-          size,
-          pa,
-          est,
-          m,
-          p,
-          minimoPa: Number(minimo.pa) || 0,
-          minimoProd: Number(minimo.prod) || 0,
-          vendaMes,
-          vendaDia,
-          faltaPa,
-          faltaProd,
-          necessidade: necessidadePesponto,
-          prioridade,
-          dominante,
-          tempoCiclo: tempoTotal,
-        });
+      if (!itemRelevante) {
+        montSizes[size] = 0;
+        pespSizes[size] = 0;
+        return;
       }
 
-      // sugestão para montagem:
-      // só faz sentido se já houver algo em costura pronta
-      const necessidadeMontagem = Math.max(faltaPa, 0);
+      const consumoDuranteMontagem = Math.ceil(vendaDia * diasMontagem);
+      const consumoDuranteCicloTotal = Math.ceil(vendaDia * diasTotal);
 
-      if (necessidadeMontagem > 0 && est > 0) {
-        montagem.push({
-          ref: row.ref,
-          cor: row.cor,
-          size,
-          pa,
-          est,
-          m,
-          p,
-          minimoPa: Number(minimo.pa) || 0,
-          minimoProd: Number(minimo.prod) || 0,
-          vendaMes,
-          vendaDia,
-          faltaPa,
-          faltaProd,
-          necessidade: Math.min(necessidadeMontagem, est),
-          prioridade,
-          dominante,
-          tempoCiclo: tempoTotal,
-        });
+      const needPA = Math.max(
+  0,
+  (minPA + consumoDuranteMontagem) - pa
+);
+
+const needProd = Math.max(
+  0,
+  (minProd + consumoDuranteCicloTotal) - prodAtual
+);
+
+const mont = Math.min(roundUp12(needPA), LIMITE_POR_NUMERO);
+const pesp = Math.min(roundUp12(needProd), LIMITE_POR_NUMERO);
+
+montSizes[size] = mont;
+pespSizes[size] = pesp;
+
+montTotal += mont;
+pespTotal += pesp;
+
+      const coberturaPA = getCoberturaDias(pa, vendaDia);
+      const coberturaFutura = getCoberturaDias(pa + prodAtual, vendaDia);
+
+      const paZero = pa === 0;
+      const paAbaixoMinimo = pa < minPA;
+      const prodAbaixoMinimo = prodAtual < minProd;
+      const semReposicao = prodAtual <= 0;
+
+      const coberturaCriticaPA =
+        vendaDia > 0 && coberturaPA <= Math.max(2, diasMontagem || 1);
+
+      const coberturaRuimPA =
+        vendaDia > 0 && coberturaPA <= Math.max(5, (diasMontagem || 1) + 2);
+
+      const coberturaFuturaCritica =
+        vendaDia > 0 && coberturaFutura <= Math.max(4, diasTotal || 2);
+
+      const coberturaFuturaRuim =
+        vendaDia > 0 && coberturaFutura <= Math.max(8, (diasTotal || 2) + 3);
+
+      const produtoTopPorTamanho = vendaMes >= 40;
+
+      const urgenteMontagem =
+        (paZero && itemRelevante) ||
+        coberturaCriticaPA ||
+        (paAbaixoMinimo && vendaDia > 0 && semReposicao);
+
+      const urgentePesponto =
+        (paZero && itemRelevante) ||
+        coberturaCriticaPA ||
+        (coberturaFuturaCritica && vendaDia > 0);
+
+      const recuperacaoMontagem =
+        !urgenteMontagem &&
+        vendaDia > 0 &&
+        (
+          (paAbaixoMinimo && est > 0) ||
+          (coberturaRuimPA && est > 0) ||
+          (produtoTopPorTamanho && coberturaRuimPA)
+        );
+
+      const recuperacaoPesponto =
+        !urgentePesponto &&
+        vendaDia > 0 &&
+        (
+          (prodAbaixoMinimo && prodAtual > 0) ||
+          (coberturaFuturaRuim && prodAtual > 0) ||
+          (produtoTopPorTamanho && coberturaFuturaRuim)
+        );
+
+      if (urgenteMontagem) itemUrgenteMontagem = true;
+      if (urgentePesponto) itemUrgentePesponto = true;
+
+      if (recuperacaoMontagem) itemRecuperacaoMontagem = true;
+      if (recuperacaoPesponto) itemRecuperacaoPesponto = true;
+
+      // recuperação por grade
+      const tamanhoCriticoMontagem =
+        itemRelevante &&
+        (
+          paZero ||
+          paAbaixoMinimo ||
+          coberturaCriticaPA ||
+          coberturaRuimPA
+        );
+
+      const tamanhoPendenteMontagem =
+        tamanhoCriticoMontagem &&
+        (
+          mont <= 0 ||
+          (pa + est) < minPA
+        );
+
+      const tamanhoCriticoPesponto =
+        itemRelevante &&
+        (
+          paZero ||
+          prodAbaixoMinimo ||
+          coberturaFuturaCritica ||
+          coberturaFuturaRuim
+        );
+
+      const tamanhoPendentePesponto =
+        tamanhoCriticoPesponto &&
+        (
+          pesp <= 0 ||
+          (pa + prodAtual) < minPA
+        );
+
+      if (tamanhoCriticoMontagem) tamanhosCriticosMontagem += 1;
+      if (tamanhoPendenteMontagem) tamanhosPendentesMontagem += 1;
+
+      if (tamanhoCriticoPesponto) tamanhosCriticosPesponto += 1;
+      if (tamanhoPendentePesponto) tamanhosPendentesPesponto += 1;
+
+      let scoreMontagem = 0;
+      let scorePesponto = 0;
+
+      // 1. Estado crítico
+      if (paZero) {
+        scoreMontagem += 100000;
+        scorePesponto += 100000;
       }
+
+      if (coberturaCriticaPA) {
+        scoreMontagem += 45000;
+        scorePesponto += 38000;
+      }
+
+      if (paAbaixoMinimo) {
+        scoreMontagem += 18000 + Math.max(0, minPA - pa) * 350;
+      }
+
+      if (coberturaFuturaCritica) {
+        scorePesponto += 22000;
+      }
+
+      // 2. Estado de recuperação
+      if (recuperacaoMontagem) {
+        scoreMontagem += 35000;
+      }
+
+      if (recuperacaoPesponto) {
+        scorePesponto += 32000;
+      }
+
+      // 3. Peso de vendas
+      scoreMontagem += vendaMes * 45;
+      scorePesponto += vendaMes * 45;
+
+      // 4. Necessidade calculada
+      scoreMontagem += needPA * 180;
+      scorePesponto += needProd * 180;
+
+      // 5. Mínimos como ajuste fino
+      scoreMontagem += Math.max(0, minPA - pa) * 100;
+      scorePesponto += Math.max(0, minProd - prodAtual) * 100;
+
+      // 6. Reposição em andamento: reduz, mas pouco
+      scoreMontagem -= est * 12;
+      scorePesponto -= prodAtual * 10;
+
+      if (semReposicao) {
+        scoreMontagem += 7000;
+        scorePesponto += 7000;
+      }
+
+      prioridadeMontagem += scoreMontagem;
+      prioridadePesponto += scorePesponto;
     });
+
+    const produtoTopRefCor = vendaTotalRefCor >= 120;
+
+    const gradeRecuperacaoMontagem =
+      produtoTopRefCor &&
+      tamanhosCriticosMontagem >= 2 &&
+      tamanhosPendentesMontagem >= 1;
+
+    const gradeRecuperacaoPesponto =
+      produtoTopRefCor &&
+      tamanhosCriticosPesponto >= 2 &&
+      tamanhosPendentesPesponto >= 1;
+
+    if (gradeRecuperacaoMontagem) {
+      prioridadeMontagem += 90000;
+      itemRecuperacaoMontagem = true;
+    }
+
+    if (gradeRecuperacaoPesponto) {
+      prioridadePesponto += 85000;
+      itemRecuperacaoPesponto = true;
+    }
+
+    if (montTotal > 0) {
+      montagem.push({
+        tipo: "Montagem",
+        ref: row.ref,
+        cor: row.cor,
+        sizes: montSizes,
+        total: montTotal,
+        prioridade: prioridadeMontagem,
+        urgente: itemUrgenteMontagem,
+        recuperacao: itemRecuperacaoMontagem,
+        gradeRecuperacao: gradeRecuperacaoMontagem,
+        tamanhosCriticos: tamanhosCriticosMontagem,
+        tamanhosPendentes: tamanhosPendentesMontagem,
+        vendaTotal: vendaTotalRefCor,
+      });
+    }
+
+    if (pespTotal > 0) {
+      pesponto.push({
+        tipo: "Pesponto",
+        ref: row.ref,
+        cor: row.cor,
+        sizes: pespSizes,
+        total: pespTotal,
+        prioridade: prioridadePesponto,
+        urgente: itemUrgentePesponto,
+        recuperacao: itemRecuperacaoPesponto,
+        gradeRecuperacao: gradeRecuperacaoPesponto,
+        tamanhosCriticos: tamanhosCriticosPesponto,
+        tamanhosPendentes: tamanhosPendentesPesponto,
+        vendaTotal: vendaTotalRefCor,
+      });
+    }
   });
 
-  const ordenar = (a, b) => {
-    // dominante sempre vem primeiro
-    if (a.dominante !== b.dominante) return a.dominante ? -1 : 1;
-
-    // maior prioridade primeiro
+  montagem.sort((a, b) => {
+    if (Number(b.urgente) !== Number(a.urgente)) return Number(b.urgente) - Number(a.urgente);
+    if (Number(b.gradeRecuperacao) !== Number(a.gradeRecuperacao)) return Number(b.gradeRecuperacao) - Number(a.gradeRecuperacao);
+    if (Number(b.recuperacao) !== Number(a.recuperacao)) return Number(b.recuperacao) - Number(a.recuperacao);
     if (b.prioridade !== a.prioridade) return b.prioridade - a.prioridade;
+    return b.total - a.total;
+  });
 
-    // maior necessidade primeiro
-    if (b.necessidade !== a.necessidade) return b.necessidade - a.necessidade;
+  pesponto.sort((a, b) => {
+    if (Number(b.urgente) !== Number(a.urgente)) return Number(b.urgente) - Number(a.urgente);
+    if (Number(b.gradeRecuperacao) !== Number(a.gradeRecuperacao)) return Number(b.gradeRecuperacao) - Number(a.gradeRecuperacao);
+    if (Number(b.recuperacao) !== Number(a.recuperacao)) return Number(b.recuperacao) - Number(a.recuperacao);
+    if (b.prioridade !== a.prioridade) return b.prioridade - a.prioridade;
+    return b.total - a.total;
+  });
 
-    // maior venda diária primeiro
-    if (b.vendaDia !== a.vendaDia) return b.vendaDia - a.vendaDia;
-
-    // maior tempo de ciclo primeiro
-    if (b.tempoCiclo !== a.tempoCiclo) return b.tempoCiclo - a.tempoCiclo;
-
-    return 0;
-  };
-
-  pesponto.sort(ordenar);
-  montagem.sort(ordenar);
-
-  return { pesponto, montagem };
+  return { montagem, pesponto };
 }
 
-function splitIntoFichas(list, vendas) {
+function splitIntoFichas(sizesObj, maxPorFicha = 396) {
   const fichas = [];
-  const MAX_TOTAL_FICHA = 396;
-  const MAX_POR_NUMERO_FICHA = 84;
-  const LOTE = 12;
-  const GRADE_BAIXA = [34, 35, 36, 37, 38, 39];
-  const GRADE_ALTA = [40, 41, 42, 43, 44];
 
-  const distribuirGrupo = (entry, grupoSizes, sufixo = "") => {
-    const totalGrupo = grupoSizes.reduce((acc, size) => acc + (entry.sizes[size] || 0), 0);
-    if (!totalGrupo) return [];
-
-    const minFichasPorTotal = Math.ceil(totalGrupo / MAX_TOTAL_FICHA);
-    const minFichasPorNumero = Math.max(
-      1,
-      ...grupoSizes.map((size) => Math.ceil((entry.sizes[size] || 0) / MAX_POR_NUMERO_FICHA))
-    );
-    const numFichas = Math.max(1, minFichasPorTotal, minFichasPorNumero);
-
-    const fichasTemp = Array.from({ length: numFichas }, () => ({
-      sizes: makeEmptyGrid(),
-      total: 0,
+  const tamanhos = Object.entries(sizesObj)
+    .filter(([_, qtd]) => qtd > 0)
+    .map(([size, qtd]) => ({
+      size: Number(size),
+      qtd: Number(qtd),
     }));
 
-    const vendasRef = vendas?.[entry.ref]?.[entry.cor] || makeEmptyGrid();
-    const itens = grupoSizes
-      .map((size) => ({
-        size,
-        qtd: entry.sizes[size] || 0,
-        venda: Number(vendasRef[size]) || 0,
-        lotesRestantes: Math.floor((entry.sizes[size] || 0) / LOTE),
-        current: 0,
-      }))
-      .filter((item) => item.lotesRestantes > 0);
+  if (!tamanhos.length) return fichas;
 
-    if (!itens.length) return [];
+  let restante = tamanhos.map(t => ({ ...t }));
 
-    const totalPeso = itens.reduce((acc, item) => acc + (item.venda > 0 ? item.venda : Math.max(1, item.lotesRestantes)), 0) || 1;
+  let contador = 1;
 
-    // Entrada mínima: se precisa de um número, tenta colocar 12 em alguma ficha.
-    // A prioridade aqui já respeita vendas maiores primeiro.
-    [...itens]
-      .sort((a, b) => {
-        if (b.venda !== a.venda) return b.venda - a.venda;
-        if (b.qtd !== a.qtd) return b.qtd - a.qtd;
-        return a.size - b.size;
-      })
-      .forEach((item) => {
-        if (item.lotesRestantes <= 0) return;
+  while (restante.some(t => t.qtd > 0)) {
+    let ficha = {};
+    let total = 0;
 
-        const candidatos = fichasTemp
-          .map((ficha, fichaIdx) => ({
-            ficha,
-            fichaIdx,
-            total: ficha.total,
-            noNumero: ficha.sizes[item.size] || 0,
-          }))
-          .filter((slot) => slot.total + LOTE <= MAX_TOTAL_FICHA && slot.noNumero + LOTE <= MAX_POR_NUMERO_FICHA)
-          .sort((a, b) => {
-            if (a.total !== b.total) return a.total - b.total;
-            if (a.noNumero !== b.noNumero) return a.noNumero - b.noNumero;
-            return a.fichaIdx - b.fichaIdx;
-          });
+    for (let i = 0; i < restante.length; i++) {
+      const item = restante[i];
+      if (item.qtd <= 0) continue;
 
-        if (!candidatos.length) return;
+      const podeAdicionar = Math.min(item.qtd, maxPorFicha - total);
 
-        candidatos[0].ficha.sizes[item.size] += LOTE;
-        candidatos[0].ficha.total += LOTE;
-        item.lotesRestantes -= 1;
-      });
+      if (podeAdicionar <= 0) break;
 
-    // Distribuição principal: ponderada por vendas, balanceando ficha leve primeiro.
-    let lotesPendentes = itens.reduce((acc, item) => acc + item.lotesRestantes, 0);
+      ficha[item.size] = podeAdicionar;
+      item.qtd -= podeAdicionar;
+      total += podeAdicionar;
 
-    while (lotesPendentes > 0) {
-      const ativos = itens.filter((item) => item.lotesRestantes > 0);
-      if (!ativos.length) break;
-
-      ativos.forEach((item) => {
-        const peso = item.venda > 0 ? item.venda : Math.max(1, item.lotesRestantes);
-        item.current += peso;
-      });
-
-      ativos.sort((a, b) => {
-        if (b.current !== a.current) return b.current - a.current;
-        if (b.venda !== a.venda) return b.venda - a.venda;
-        if (b.qtd !== a.qtd) return b.qtd - a.qtd;
-        return a.size - b.size;
-      });
-
-      const escolhido = ativos[0];
-      escolhido.current -= totalPeso;
-
-      const candidatos = fichasTemp
-        .map((ficha, fichaIdx) => ({
-          ficha,
-          fichaIdx,
-          total: ficha.total,
-          noNumero: ficha.sizes[escolhido.size] || 0,
-        }))
-        .filter((slot) => slot.total + LOTE <= MAX_TOTAL_FICHA && slot.noNumero + LOTE <= MAX_POR_NUMERO_FICHA)
-        .sort((a, b) => {
-          if (a.total !== b.total) return a.total - b.total;
-          if (a.noNumero !== b.noNumero) return a.noNumero - b.noNumero;
-          return a.fichaIdx - b.fichaIdx;
-        });
-
-      if (!candidatos.length) {
-        escolhido.lotesRestantes = 0;
-        continue;
-      }
-
-      candidatos[0].ficha.sizes[escolhido.size] += LOTE;
-      candidatos[0].ficha.total += LOTE;
-      escolhido.lotesRestantes -= 1;
-      lotesPendentes -= 1;
+      if (total >= maxPorFicha) break;
     }
 
-    return fichasTemp
-      .map((ficha, idx) => ({ ficha, idx }))
-      .filter(({ ficha }) => ficha.total > 0)
-      .map(({ ficha, idx }) => ({
-        nome: `${entry.tipo} ${entry.cor}${sufixo ? ` • ${sufixo}` : ""} • Ficha ${String(idx + 1).padStart(2, "0")}`,
-        ref: entry.ref,
-        cor: entry.cor,
-        sizes: ficha.sizes,
-        total: ficha.total,
-      }));
-  };
-
-  list.forEach((entry) => {
-    const total = sizes.reduce((acc, size) => acc + (entry.sizes[size] || 0), 0);
-    if (!total) return;
-
-    // Se couber em uma ficha, pode misturar grade baixa e alta.
-    if (total <= MAX_TOTAL_FICHA) {
-      fichas.push(...distribuirGrupo(entry, sizes));
-      return;
+    if (total > 0) {
+      fichas.push({
+        nome: `Ficha ${contador}`,
+        sizes: ficha,
+        total,
+      });
+      contador++;
+    } else {
+      break;
     }
-
-    // Quando o volume é alto, separa grade baixa e grade alta para balancear melhor.
-    fichas.push(...distribuirGrupo(entry, GRADE_BAIXA, "Grade Baixa"));
-    fichas.push(...distribuirGrupo(entry, GRADE_ALTA, "Grade Alta"));
-  });
+  }
 
   return fichas;
 }
 
 function buildProgramacaoPeriodo(fichasBase, suggestionsBase, capacidadeDia = 396, dias = 1, tipo = "") {
   const prioridadeMap = new Map();
+  const urgenciaMap = new Map();
+  const recuperacaoMap = new Map();
+  const gradeRecuperacaoMap = new Map();
 
   (suggestionsBase || []).forEach((item) => {
-    prioridadeMap.set(`${item.ref}__${item.cor}`, {
-      prioridade: item.prioridade || 0,
-      dominante: !!item.dominante,
-    });
+    const key = `${item.ref}__${item.cor}`;
+    prioridadeMap.set(key, item.prioridade || 0);
+    urgenciaMap.set(key, !!item.urgente);
+    recuperacaoMap.set(key, !!item.recuperacao);
+    gradeRecuperacaoMap.set(key, !!item.gradeRecuperacao);
   });
 
   const grupos = {};
   (fichasBase || []).forEach((ficha) => {
     const key = `${ficha.ref}__${ficha.cor}`;
-    const infoPrioridade = prioridadeMap.get(key) || { prioridade: 0, dominante: false };
 
     if (!grupos[key]) {
+      const prioridade = prioridadeMap.get(key) || 0;
+      const urgente = urgenciaMap.get(key) || false;
+      const recuperacao = recuperacaoMap.get(key) || false;
+      const gradeRecuperacao = gradeRecuperacaoMap.get(key) || false;
+
       grupos[key] = {
         key,
         tipo,
         ref: ficha.ref,
         cor: ficha.cor,
-        prioridade: infoPrioridade.prioridade || 0,
-        dominante: !!infoPrioridade.dominante,
-        peso: Math.max(1, infoPrioridade.prioridade || 0),
+        prioridade,
+        urgente,
+        recuperacao,
+        gradeRecuperacao,
+        peso: Math.max(1, prioridade),
         current: 0,
         fichas: [],
       };
@@ -561,43 +628,14 @@ function buildProgramacaoPeriodo(fichasBase, suggestionsBase, capacidadeDia = 39
 
   const ativos = Object.values(grupos).filter((grupo) => grupo.fichas.length > 0);
   const totalPeso = ativos.reduce((acc, grupo) => acc + grupo.peso, 0) || 1;
+
   const diasProgramados = [];
-  let ultimoGrupoGlobal = "";
+  let gruposDiaAnterior = new Set();
 
-  // 60% da capacidade do dia, arredondado para baixo em múltiplos de 12
-  
-const gruposComFicha = Object.values(grupos).filter((grupo) => grupo.fichas.length > 0);
-
-const temDominante = gruposComFicha.some((grupo) => grupo.dominante);
-const temOutrosRelevantes = gruposComFicha.some(
-  (grupo) => !grupo.dominante && (grupo.prioridade || 0) > 0
-);
-
-const limiteDominanteDia =
-  temDominante && temOutrosRelevantes
-    ? Math.floor((capacidadeDia * 0.6) / 12) * 12
-    : capacidadeDia;
-
-const modoDominante = temDominante
-  ? temOutrosRelevantes
-    ? "limitado_60"
-    : "livre_100"
-  : "sem_dominante";
-
-  const escolherGrupo = (gruposDisponiveis, restante, ultimoGrupoDia, usadoDominanteNoDia) => {
-    const candidatos = gruposDisponiveis.filter((grupo) => {
-      if (!grupo.fichas.length) return false;
-
-      return grupo.fichas.some((ficha) => {
-        if (ficha.total > restante) return false;
-
-        if (grupo.dominante && usadoDominanteNoDia + ficha.total > limiteDominanteDia) {
-          return false;
-        }
-
-        return true;
-      });
-    });
+  const escolherGrupo = (gruposDisponiveis, restante, ultimoGrupoDia, gruposBloqueadosDiaAnterior) => {
+    const candidatos = gruposDisponiveis.filter(
+      (grupo) => grupo.fichas.length > 0 && grupo.fichas.some((ficha) => ficha.total <= restante)
+    );
 
     if (!candidatos.length) return null;
 
@@ -606,10 +644,26 @@ const modoDominante = temDominante
     });
 
     const ordenados = [...candidatos].sort((a, b) => {
-      const penalA = (a.key === ultimoGrupoDia ? 1 : 0) + (a.key === ultimoGrupoGlobal ? 1 : 0);
-      const penalB = (b.key === ultimoGrupoDia ? 1 : 0) + (b.key === ultimoGrupoGlobal ? 1 : 0);
+      const aFoiOntem = gruposBloqueadosDiaAnterior.has(a.key);
+      const bFoiOntem = gruposBloqueadosDiaAnterior.has(b.key);
 
-      if (a.dominante !== b.dominante) return a.dominante ? -1 : 1;
+      const penalRepeticaoA =
+        a.urgente ? 0 : a.gradeRecuperacao ? 0 : a.recuperacao ? 1 : 3;
+
+      const penalRepeticaoB =
+        b.urgente ? 0 : b.gradeRecuperacao ? 0 : b.recuperacao ? 1 : 3;
+
+      const penalA =
+        (a.key === ultimoGrupoDia ? 1 : 0) +
+        (aFoiOntem ? penalRepeticaoA : 0);
+
+      const penalB =
+        (b.key === ultimoGrupoDia ? 1 : 0) +
+        (bFoiOntem ? penalRepeticaoB : 0);
+
+      if (Number(b.urgente) !== Number(a.urgente)) return Number(b.urgente) - Number(a.urgente);
+      if (Number(b.gradeRecuperacao) !== Number(a.gradeRecuperacao)) return Number(b.gradeRecuperacao) - Number(a.gradeRecuperacao);
+      if (Number(b.recuperacao) !== Number(a.recuperacao)) return Number(b.recuperacao) - Number(a.recuperacao);
       if (penalA !== penalB) return penalA - penalB;
       if (b.current !== a.current) return b.current - a.current;
       if (b.prioridade !== a.prioridade) return b.prioridade - a.prioridade;
@@ -626,26 +680,21 @@ const modoDominante = temDominante
   for (let dia = 1; dia <= dias; dia += 1) {
     let restante = capacidadeDia;
     let ultimoGrupoDia = "";
-    let usadoDominanteNoDia = 0;
     const selecionadas = [];
+    const gruposSelecionadosNoDia = new Set();
 
     while (restante >= 12) {
-      const grupoEscolhido = escolherGrupo(ativos, restante, ultimoGrupoDia, usadoDominanteNoDia);
+      const grupoEscolhido = escolherGrupo(
+        ativos,
+        restante,
+        ultimoGrupoDia,
+        gruposDiaAnterior
+      );
+
       if (!grupoEscolhido) break;
 
       const fichaEscolhida = [...grupoEscolhido.fichas]
-        .filter((ficha) => {
-          if (ficha.total > restante) return false;
-
-          if (
-            grupoEscolhido.dominante &&
-            usadoDominanteNoDia + ficha.total > limiteDominanteDia
-          ) {
-            return false;
-          }
-
-          return true;
-        })
+        .filter((ficha) => ficha.total <= restante)
         .sort((a, b) => b.total - a.total || a.nome.localeCompare(b.nome, "pt-BR"))[0];
 
       if (!fichaEscolhida) {
@@ -658,17 +707,15 @@ const modoDominante = temDominante
       selecionadas.push({
         ...fichaEscolhida,
         prioridade: grupoEscolhido.prioridade,
+        urgente: grupoEscolhido.urgente,
+        recuperacao: grupoEscolhido.recuperacao,
+        gradeRecuperacao: grupoEscolhido.gradeRecuperacao,
         grupoKey: grupoEscolhido.key,
-        dominante: grupoEscolhido.dominante,
       });
 
-      if (grupoEscolhido.dominante) {
-        usadoDominanteNoDia += fichaEscolhida.total;
-      }
-
+      gruposSelecionadosNoDia.add(grupoEscolhido.key);
       restante -= fichaEscolhida.total;
       ultimoGrupoDia = grupoEscolhido.key;
-      ultimoGrupoGlobal = grupoEscolhido.key;
     }
 
     diasProgramados.push({
@@ -676,25 +723,23 @@ const modoDominante = temDominante
       capacidadeDia,
       totalProgramado: capacidadeDia - restante,
       restante,
-      usadoDominanteNoDia,
-      limiteDominanteDia,
       fichas: selecionadas,
     });
+
+    gruposDiaAnterior = new Set(gruposSelecionadosNoDia);
   }
 
   const todasFichas = diasProgramados.flatMap((item) => item.fichas);
 
   return {
-  tipo,
-  dias,
-  capacidadeDia,
-  limiteDominanteDia,
-  modoDominante,
-  totalProgramado: todasFichas.reduce((acc, item) => acc + item.total, 0),
-  totalRestante: diasProgramados.reduce((acc, item) => acc + item.restante, 0),
-  diasProgramados,
-  totalFichas: todasFichas.length,
-};
+    tipo,
+    dias,
+    capacidadeDia,
+    totalProgramado: todasFichas.reduce((acc, item) => acc + item.total, 0),
+    totalRestante: diasProgramados.reduce((acc, item) => acc + item.restante, 0),
+    diasProgramados,
+    totalFichas: todasFichas.length,
+  };
 }
 
 function SummaryCard({ title, value, subtitle }) {
@@ -803,9 +848,9 @@ const previewBySelection = (form) => {
   const row = rows.find((item) => item.ref === form.ref && item.cor === form.cor);
   if (!row) return null;
 
-  const totalPesponto = sizes.reduce((acc, size) => acc + (row.data?.[size]?.p || 0), 0);
-const totalMontagem = sizes.reduce((acc, size) => acc + (row.data?.[size]?.m || 0), 0);
-const totalEst = sizes.reduce((acc, size) => acc + (row.data?.[size]?.est || 0), 0);
+  const totalPesponto = sizes.reduce((acc, size) => acc + (row.data[size]?.p || 0), 0);
+  const totalMontagem = sizes.reduce((acc, size) => acc + (row.data[size]?.m || 0), 0);
+  const totalEst = sizes.reduce((acc, size) => acc + (row.data[size]?.est || 0), 0);
 
   return {
     row,
@@ -849,44 +894,69 @@ const totalEst = sizes.reduce((acc, size) => acc + (row.data?.[size]?.est || 0),
   }, [rows]);
 
   const metrics = useMemo(() => {
-  let criticos = 0;
-  let atencaoPA = 0;
-  let atencaoProd = 0;
-  let ok = 0;
-  let costura = 0;
-
-  rows.forEach((row) => {
-    sizes.forEach((size) => {
-      const item = row.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 };
-      costura += item.est || 0;
-
-      const minimo = minimos?.[row.ref]?.[row.cor]?.[size] || { pa: 0, prod: 0 };
-      const st = statusFor(item, minimo);
-
-      if (st === "CRÍTICO") criticos += 1;
-      else if (st === "ATENÇÃO PA") atencaoPA += 1;
-      else if (st === "ATENÇÃO PROD") atencaoProd += 1;
-      else ok += 1;
+    let criticos = 0;
+    let atencaoPA = 0;
+    let atencaoProd = 0;
+    let ok = 0;
+    let costura = 0;
+    rows.forEach((row) => {
+      sizes.forEach((size) => {
+        const item = row.data[size];
+        costura += item.est;
+        const minimo = minimos?.[row.ref]?.[row.cor]?.[size] || { pa: 0, prod: 0 };
+        const st = statusFor(item, minimo);
+        if (st === "CRÍTICO") criticos += 1;
+        else if (st === "ATENÇÃO PA") atencaoPA += 1;
+        else if (st === "ATENÇÃO PROD") atencaoProd += 1;
+        else ok += 1;
+      });
     });
-  });
+    return { criticos, atencaoPA, atencaoProd, ok, costura };
+  }, [rows, minimos]);
 
-  return { criticos, atencaoPA, atencaoProd, ok, costura };
-}, [rows, minimos]);
-
-  const suggestions = useMemo(() => buildSuggestions(rows, minimos, vendas, tempoProducao), [rows, minimos, vendas, tempoProducao]);
-  const fichasMontagem = useMemo(() => splitIntoFichas(suggestions.montagem, vendas), [suggestions, vendas]);
-  const fichasPesponto = useMemo(() => splitIntoFichas(suggestions.pesponto, vendas), [suggestions, vendas]);
-  const programacaoMontagem = useMemo(
-  () =>
-    buildProgramacaoPeriodo(
-      fichasMontagem,
-      suggestions.montagem,
-      Number(capacidadeMontagemDia) || 396,
-      programacaoDias,
-      "Montagem"
-    ),
-  [fichasMontagem, suggestions, programacaoDias, capacidadeMontagemDia]
+  const suggestions = useMemo(
+  () => buildSuggestions(rows, minimos, vendas, tempoProducao),
+  [rows, minimos, vendas, tempoProducao]
 );
+
+const fichasMontagem = useMemo(
+  () =>
+    (suggestions.montagem || []).flatMap((item) =>
+      splitIntoFichas(item.sizes).map((ficha, index) => ({
+        ...ficha,
+        nome: `${item.ref} - ${item.cor} - Ficha ${index + 1}`,
+        ref: item.ref,
+        cor: item.cor,
+        tipo: item.tipo,
+        prioridade: item.prioridade,
+        urgente: item.urgente,
+        recuperacao: item.recuperacao,
+      }))
+    ),
+  [suggestions]
+);
+
+const fichasPesponto = useMemo(
+  () =>
+    (suggestions.pesponto || []).flatMap((item) =>
+      splitIntoFichas(item.sizes).map((ficha, index) => ({
+        ...ficha,
+        nome: `${item.ref} - ${item.cor} - Ficha ${index + 1}`,
+        ref: item.ref,
+        cor: item.cor,
+        tipo: item.tipo,
+        prioridade: item.prioridade,
+        urgente: item.urgente,
+        recuperacao: item.recuperacao,
+      }))
+    ),
+  [suggestions]
+);
+
+console.log("SUGESTOES MONTAGEM", suggestions.montagem);
+console.log("SUGESTOES PESPONTO", suggestions.pesponto);
+console.log("FICHAS MONTAGEM", fichasMontagem);
+console.log("FICHAS PESPONTO", fichasPesponto);
 
 const programacaoPesponto = useMemo(
   () =>
@@ -898,6 +968,18 @@ const programacaoPesponto = useMemo(
       "Pesponto"
     ),
   [fichasPesponto, suggestions, programacaoDias, capacidadePespontoDia]
+);
+
+const programacaoMontagem = useMemo(
+  () =>
+    buildProgramacaoPeriodo(
+      fichasMontagem,
+      suggestions.montagem,
+      Number(capacidadeMontagemDia) || 396,
+      programacaoDias,
+      "Montagem"
+    ),
+  [fichasMontagem, suggestions, programacaoDias, capacidadeMontagemDia]
 );
 
   useEffect(() => {
@@ -1799,7 +1881,7 @@ const carregarEstoqueDoBanco = async () => {
       const dataCompleta = {};
 
       sizes.forEach((size) => {
-        dataCompleta[size] = row.data?.[size] || {
+        dataCompleta[size] = row.data[size] || {
           pa: 0,
           est: 0,
           m: 0,
@@ -1948,7 +2030,7 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
             sizes.map((size) => [
               size,
               {
-                ...row.data?.[size],
+                ...row.data[size],
                 pa: 0,
               },
             ])
@@ -2243,10 +2325,10 @@ const salvarVendasManuais = async () => {
   const renderDashboard = () => {
     const tempoTotal = (Number(tempoProducao?.pesponto) || 0) + (Number(tempoProducao?.montagem) || 0);
 
-    const totalPA = rows.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data?.[size]?.pa || 0), 0), 0);
-const totalEst = rows.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data?.[size]?.est || 0), 0), 0);
-const totalMontagemAtual = rows.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data?.[size]?.m || 0), 0), 0);
-const totalPespontoAtual = rows.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data?.[size]?.p || 0), 0), 0);
+    const totalPA = rows.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.pa || 0), 0), 0);
+    const totalEst = rows.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.est || 0), 0), 0);
+    const totalMontagemAtual = rows.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.m || 0), 0), 0);
+    const totalPespontoAtual = rows.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.p || 0), 0), 0);
     const vendaMensalTotal = rows.reduce((acc, row) => {
       const vendasRow = vendas?.[row.ref]?.[row.cor] || {};
       return acc + sizes.reduce((sum, size) => sum + (Number(vendasRow[size]) || 0), 0);
@@ -2290,8 +2372,8 @@ const totalPespontoAtual = rows.reduce((acc, row) => acc + sizes.reduce((sum, si
     const menorCobertura = rows
       .flatMap((row) => sizes.map((size) => {
         const vendaMes = Number(vendas?.[row.ref]?.[row.cor]?.[size]) || 0;
-        const cobertura = coberturaDias(row.data?.[size]?.pa || 0, vendaMes);
-return { ref: row.ref, cor: row.cor, size, cobertura, pa: row.data?.[size]?.pa || 0, vendaMes };
+        const cobertura = coberturaDias(row.data[size]?.pa || 0, vendaMes);
+        return { ref: row.ref, cor: row.cor, size, cobertura, pa: row.data[size]?.pa || 0, vendaMes };
       }))
       .filter((item) => item.cobertura !== null)
       .sort((a, b) => a.cobertura - b.cobertura)
@@ -2301,7 +2383,7 @@ return { ref: row.ref, cor: row.cor, size, cobertura, pa: row.data?.[size]?.pa |
       .map((row) => {
         const vendasRow = vendas?.[row.ref]?.[row.cor] || {};
         const totalVendido = sizes.reduce((acc, size) => acc + (Number(vendasRow[size]) || 0), 0);
-        const totalPARef = sizes.reduce((acc, size) => acc + (row.data?.[size]?.pa || 0), 0);
+        const totalPARef = sizes.reduce((acc, size) => acc + (row.data[size]?.pa || 0), 0);
         return { ref: row.ref, cor: row.cor, totalVendido, totalPA: totalPARef };
       })
       .sort((a, b) => b.totalVendido - a.totalVendido || a.totalPA - b.totalPA)
@@ -2473,7 +2555,7 @@ return { ref: row.ref, cor: row.cor, size, cobertura, pa: row.data?.[size]?.pa |
     const coberturaCritica = controleRows
       .flatMap((row) => sizes.map((size) => {
         const vendaMes = Number(vendas?.[row.ref]?.[row.cor]?.[size]) || 0;
-        const cobertura = coberturaDias(row.data?.[size]?.pa || 0, vendaMes);
+        const cobertura = coberturaDias(row.data[size]?.pa || 0, vendaMes);
         return { row, size, cobertura, vendaMes };
       }))
       .filter((item) => item.cobertura !== null)
@@ -2536,11 +2618,11 @@ return { ref: row.ref, cor: row.cor, size, cobertura, pa: row.data?.[size]?.pa |
                 {controleRows.map((row) => (
                   <tr key={`${row.ref}-${row.cor}`} className="hover:bg-slate-50/70">
                     <td className="sticky left-0 z-10 bg-white border-b border-r border-slate-200 px-4 py-4 font-semibold">{row.ref}</td>
-                   <td className="sticky left-[120px] z-10 bg-white border-b border-r border-slate-200 px-4 py-4">{row.cor}</td>
-{visibleSizesControle.flatMap((size) => {
-  const item = row.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 };
-  const minimo = minimos?.[row.ref]?.[row.cor]?.[size] || { pa: 0, prod: 0 };
-  const st = statusFor(item, minimo);
+                    <td className="sticky left-[120px] z-10 bg-white border-b border-r border-slate-200 px-4 py-4">{row.cor}</td>
+                    {visibleSizesControle.flatMap((size) => {
+                      const item = row.data[size];
+                      const minimo = minimos?.[row.ref]?.[row.cor]?.[size] || { pa: 0, prod: 0 };
+                      const st = statusFor(item, minimo);
                       return [
                         <td key={`${row.ref}-${size}-pa`} className={`border-b border-r border-slate-200 px-3 py-3 text-center text-sm ${tone(st)}`}>{item.pa}</td>,
                         <td key={`${row.ref}-${size}-est`} className={`border-b border-r border-slate-200 px-3 py-3 text-center text-sm ${tone(st)}`}>{item.est}</td>,
@@ -2560,16 +2642,7 @@ return { ref: row.ref, cor: row.cor, size, cobertura, pa: row.data?.[size]?.pa |
           <h2 className="font-bold text-lg">Prioridades</h2>
           <div className="mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             {controleRows
-              .flatMap((row) =>
-  sizes.map((size) => ({
-    row,
-    size,
-    status: statusFor(
-      row.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 },
-      minimos?.[row.ref]?.[row.cor]?.[size] || { pa: 0, prod: 0 }
-    ),
-  }))
-)
+              .flatMap((row) => sizes.map((size) => ({ row, size, status: statusFor(row.data[size], minimos?.[row.ref]?.[row.cor]?.[size] || { pa: 0, prod: 0 }) })))
               .filter((x) => x.status !== "OK")
               .slice(0, 9)
               .map((item, idx) => {
@@ -2957,7 +3030,7 @@ return { ref: row.ref, cor: row.cor, size, cobertura, pa: row.data?.[size]?.pa |
                     <span className="text-3xl font-bold text-slate-900">{selectionPreview.totalEst}</span>
                   </div>
                   <div className="flex items-center justify-between rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
-                    <div className="mt-1">P: {selectionPreview.row.data?.[size]?.p || 0}</div>
+                    <span>Na Montagem</span>
                     <span className="text-3xl font-bold text-slate-900">{selectionPreview.totalMontagem}</span>
                   </div>
                 </div>
@@ -3060,27 +3133,8 @@ return { ref: row.ref, cor: row.cor, size, cobertura, pa: row.data?.[size]?.pa |
   setAjusteEstForm((curr) => ({ ...curr, qtd: 0, motivo: "" }));
 };
 
-  const renderCosturaPronta = () => {
-
-  const finalizadoMap = calcularFinalizadoPesponto(
-    pespontoLancamentos
-      .filter((item) =>
-        String(item.status || "").trim().toLowerCase() === "finalizado"
-      )
-      .flatMap((item) =>
-        item.items.map((subItem) => ({
-          tipo: "Pesponto",
-          status: item.status,
-          ref: item.ref,
-          cor: item.cor,
-          numero: subItem.size,
-          quantidade: subItem.qtd,
-        }))
-      )
-  );
-
-  return (
-    <PageShell title="Costura Pronta" subtitle="Visualização do total finalizado no Pesponto por referência, cor e numeração.">
+  const renderCosturaPronta = () => (
+    <PageShell title="Costura Pronta" subtitle="Etapa intermediária alimentada pelo Pesponto finalizado.">
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-6 items-start">
         <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm overflow-auto p-6">
           <table className="min-w-[1200px] w-full border-collapse text-sm">
@@ -3089,7 +3143,7 @@ return { ref: row.ref, cor: row.cor, size, cobertura, pa: row.data?.[size]?.pa |
                 <th className="border px-4 py-3 text-left">Ref</th>
                 <th className="border px-4 py-3 text-left">Cor</th>
                 {sizes.map((s) => <th key={s} className="border px-3 py-3 text-center">{s}</th>)}
-                <th className="border px-4 py-3 text-center">Total Finalizado</th>
+                <th className="border px-4 py-3 text-center">Total Est Pto</th>
               </tr>
             </thead>
             <tbody>
@@ -3097,12 +3151,8 @@ return { ref: row.ref, cor: row.cor, size, cobertura, pa: row.data?.[size]?.pa |
                 <tr key={`cp-${row.ref}-${row.cor}`}>
                   <td className="border px-4 py-3 font-semibold">{row.ref}</td>
                   <td className="border px-4 py-3">{row.cor}</td>
-                  {sizes.map((size) => <td key={size} className="border px-3 py-3 text-center">{finalizadoMap[`${row.ref}__${row.cor}`]?.[size] || 0}</td>)}
-                  <td className="border px-4 py-3 text-center font-bold">{sizes.reduce(
-  (acc, size) =>
-    acc + (finalizadoMap[`${row.ref}__${row.cor}`]?.[size] || 0),
-  0
-)}</td>
+                  {sizes.map((size) => <td key={size} className="border px-3 py-3 text-center">{row.data[size].est}</td>)}
+                  <td className="border px-4 py-3 text-center font-bold">{sizes.reduce((acc, size) => acc + row.data[size].est, 0)}</td>
                 </tr>
               ))}
             </tbody>
@@ -3198,8 +3248,8 @@ return { ref: row.ref, cor: row.cor, size, cobertura, pa: row.data?.[size]?.pa |
           <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="font-bold text-lg">Histórico da Costura Pronta</div>
-                <div className="text-sm text-slate-500 mt-1">Registro das entradas vindas do Pesponto e dos ajustes manuais</div>
+                <div className="font-bold text-lg">Histórico de ajustes</div>
+                <div className="text-sm text-slate-500 mt-1">Registro dos últimos movimentos manuais.</div>
               </div>
               <span className="text-sm text-slate-500">{ajustesEst.length} ajuste(s)</span>
             </div>
@@ -3207,7 +3257,7 @@ return { ref: row.ref, cor: row.cor, size, cobertura, pa: row.data?.[size]?.pa |
             <div className="mt-4 space-y-3 max-h-[420px] overflow-auto pr-1">
               {ajustesEst.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500">
-                  Nenhum movimento registrado ainda.
+                  Nenhum ajuste manual registrado ainda.
                 </div>
               ) : (
                 ajustesEst.map((ajuste) => (
@@ -3231,7 +3281,6 @@ return { ref: row.ref, cor: row.cor, size, cobertura, pa: row.data?.[size]?.pa |
       </div>
     </PageShell>
   );
-};
 
   const renderConfig = () => {
   const updateLocal = (ref, cor, size, key, value) => {
@@ -3576,20 +3625,12 @@ return { ref: row.ref, cor: row.cor, size, cobertura, pa: row.data?.[size]?.pa |
     const analise = rows.map((row) => {
       const vendasRow = vendas[row.ref]?.[row.cor] || {};
       const totalVendido = sizes.reduce((acc, size) => acc + (Number(vendasRow[size]) || 0), 0);
-      const totalPA = sizes.reduce((acc, size) => acc + (row.data?.[size]?.pa || 0), 0);
-      const totalProd = sizes.reduce(
-  (acc, size) =>
-    acc +
-    (row.data?.[size]?.est || 0) +
-    (row.data?.[size]?.m || 0) +
-    (row.data?.[size]?.p || 0),
-  0
-);
-
-const ruptura = sizes.some((size) => {
-  const item = row.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 };
-  const minimo = minimos?.[row.ref]?.[row.cor]?.[size] || { pa: 0, prod: 0 };
-  return item.pa < minimo.pa;
+      const totalPA = sizes.reduce((acc, size) => acc + (row.data[size]?.pa || 0), 0);
+      const totalProd = sizes.reduce((acc, size) => acc + (row.data[size]?.est || 0) + (row.data[size]?.m || 0) + (row.data[size]?.p || 0), 0);
+      const ruptura = sizes.some((size) => {
+        const item = row.data[size];
+        const minimo = minimos?.[row.ref]?.[row.cor]?.[size] || { pa: 0, prod: 0 };
+        return item.pa < minimo.pa;
       });
       return {
         ref: row.ref,
@@ -3619,12 +3660,12 @@ const ruptura = sizes.some((size) => {
     const coberturaAnalise = rows
       .flatMap((row) => sizes.map((size) => {
         const vendaMes = Number(vendas?.[row.ref]?.[row.cor]?.[size]) || 0;
-        const cobertura = coberturaDias(row.data?.[size]?.pa || 0, vendaMes);
+        const cobertura = coberturaDias(row.data[size]?.pa || 0, vendaMes);
         return {
           ref: row.ref,
           cor: row.cor,
           size,
-          pa: row.data?.[size]?.pa || 0,
+          pa: row.data[size]?.pa || 0,
           vendaMes,
           cobertura,
         };
@@ -3911,26 +3952,6 @@ const ruptura = sizes.some((size) => {
           <SummaryCard title="Saldo" value={programacao.totalRestante} subtitle="Capacidade ainda livre" />
           <SummaryCard title="Fichas" value={programacao.totalFichas} subtitle="Fichas distribuídas no período" />
         </div>
-<div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-4">
-  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-    <div>
-      <div className="font-bold text-base">Regra do dominante</div>
-      <div className="text-sm text-slate-500 mt-1">
-        {programacao.modoDominante === "limitado_60" &&
-          "Existe mais de um item relevante no dia. O produto dominante pode ocupar até 60% da capacidade diária."}
-        {programacao.modoDominante === "livre_100" &&
-          "Não há outros itens relevantes competindo no dia. O produto dominante pode ocupar até 100% da capacidade diária."}
-        {programacao.modoDominante === "sem_dominante" &&
-          "Nenhum item foi marcado como dominante para este período."}
-      </div>
-    </div>
-
-    <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-right">
-      <div className="text-xs text-slate-500">Limite do dominante</div>
-      <div className="text-xl font-bold text-slate-900">{programacao.limiteDominanteDia}</div>
-    </div>
-  </div>
-</div>
 
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6 items-start">
           <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
