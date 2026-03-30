@@ -294,8 +294,20 @@ const needProd = Math.max(
   (minProd + consumoDuranteCicloTotal) - prodAtual
 );
 
-const mont = Math.min(roundUp12(needPA), LIMITE_POR_NUMERO);
-const pesp = Math.min(roundUp12(needProd), LIMITE_POR_NUMERO);
+// 1) Quanto o sistema gostaria de montar
+const montDesejado = Math.min(roundUp12(needPA), LIMITE_POR_NUMERO);
+
+// 2) Quanto realmente pode montar, limitado pelo estoque de Costura Pronta
+const mont = Math.min(montDesejado, est);
+
+// 3) O que faltou montar vira necessidade extra de Pesponto
+const faltaParaMontagem = Math.max(0, montDesejado - mont);
+
+// 4) Pesponto soma a necessidade normal + o que faltou para abastecer a montagem
+const pesp = Math.min(
+  roundUp12(needProd + faltaParaMontagem),
+  LIMITE_POR_NUMERO
+);
 
 montSizes[size] = mont;
 pespSizes[size] = pesp;
@@ -1385,6 +1397,7 @@ const confirmDeleteLancamento = async ({ tipo, lancamentoId }) => {
 
   const confirmFinalizarProgramacao = async ({ tipo, programacao }) => {
   const lancamentos = tipo === "Pesponto" ? pespontoLancamentos : montagemLancamentos;
+
   const alvo = lancamentos.filter(
     (l) => l.programacao === programacao && l.status !== "Finalizado"
   );
@@ -1401,22 +1414,24 @@ const confirmDeleteLancamento = async ({ tipo, lancamentoId }) => {
     const nextData = { ...row.data };
 
     lancamentosDaLinha.forEach((lancamento) => {
-      lancamento.items.forEach((item) => {
+      const itens = Array.isArray(lancamento.items) ? lancamento.items : [];
+
+      itens.forEach((item) => {
         const atual = nextData[item.size] || { pa: 0, est: 0, m: 0, p: 0 };
 
         if (tipo === "Pesponto") {
-  nextData[item.size] = {
-    ...atual,
-    p: Math.max(0, (atual.p || 0) - item.qtd),
-    est: (atual.est || 0) + item.qtd,
-  };
-} else {
-  nextData[item.size] = {
-    ...atual,
-    m: Math.max(0, (atual.m || 0) - item.qtd),
-    pa: (atual.pa || 0) + item.qtd,
-  };
-}
+          nextData[item.size] = {
+            ...atual,
+            p: Math.max(0, (atual.p || 0) - item.qtd),
+            est: (atual.est || 0) + item.qtd,
+          };
+        } else {
+          nextData[item.size] = {
+            ...atual,
+            m: Math.max(0, (atual.m || 0) - item.qtd),
+            pa: (atual.pa || 0) + item.qtd,
+          };
+        }
       });
     });
 
