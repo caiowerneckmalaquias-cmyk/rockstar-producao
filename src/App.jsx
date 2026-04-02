@@ -16,6 +16,124 @@ import {
 
 const makeEmptyGrid = () => Object.fromEntries(sizes.map((s) => [s, 0]));
 
+/** PDF da programação (várias páginas automáticas). */
+function buildProgramacaoDiaPdfBlob({
+  titulo,
+  setor,
+  modoLabel,
+  diasCount,
+  dataImpressao,
+  observacoes,
+  itens,
+  sizesList,
+}) {
+  const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait", compress: true });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const m = 11;
+  let y = m;
+
+  const newPage = () => {
+    doc.addPage();
+    y = m;
+  };
+
+  const needSpace = (h) => {
+    if (y + h > pageH - m) newPage();
+  };
+
+  doc.setDrawColor(139, 30, 45);
+  doc.setLineWidth(0.9);
+  doc.line(m, y, pageW - m, y);
+  y += 5;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(15);
+  doc.setTextColor(15, 23, 42);
+  doc.text(titulo || "Programação do Dia", m, y);
+  y += 7;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(90);
+  doc.text(`Impresso em: ${dataImpressao}`, pageW - m, y - 1, { align: "right" });
+  doc.setTextColor(30, 41, 59);
+  const meta = `Setor: ${setor}  ·  ${modoLabel}  ·  Período: ${diasCount} dia(s)  ·  ${itens.length} ficha(s)`;
+  const metaLines = doc.splitTextToSize(meta, pageW - 2 * m);
+  doc.text(metaLines, m, y);
+  y += metaLines.length * 3.6 + 3;
+
+  const obs = observacoes?.trim();
+  if (obs) {
+    needSpace(22);
+    doc.setFillColor(254, 252, 232);
+    const obsLines = doc.splitTextToSize(`Observações: ${obs}`, pageW - 2 * m - 4);
+    const boxH = Math.min(obsLines.length * 3.4 + 5, 45);
+    doc.rect(m, y - 2, pageW - 2 * m, boxH, "F");
+    doc.setTextColor(120, 53, 15);
+    doc.text(obsLines, m + 2, y + 2);
+    y += boxH + 4;
+    doc.setTextColor(0);
+  }
+
+  for (let i = 0; i < itens.length; i++) {
+    const { ficha, dia, ordem } = itens[i];
+    const activeSizes = sizesList.filter((s) => Number(ficha.sizes?.[s] || 0) > 0);
+    needSpace(32);
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(139, 30, 45);
+    doc.text(`Dia ${String(dia).padStart(2, "0")} · Ordem ${String(ordem).padStart(2, "0")}`, m, y);
+    y += 4.5;
+    doc.setFontSize(11);
+    doc.setTextColor(15, 23, 42);
+    const corLinha = String(ficha.cor || "—");
+    doc.text(corLinha, m, y);
+    doc.text(`Total: ${ficha.total} pares`, pageW - m, y, { align: "right" });
+    y += 5;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.text(`${ficha.ref} · ${ficha.nome}`, m, y);
+    y += 5.5;
+
+    if (activeSizes.length > 0) {
+      const fs = activeSizes.length > 16 ? 5.5 : activeSizes.length > 12 ? 6.5 : 7.5;
+      autoTable(doc, {
+        startY: y,
+        head: [activeSizes.map((s) => String(s))],
+        body: [activeSizes.map((s) => String(Number(ficha.sizes?.[s] || 0)))],
+        styles: { fontSize: fs, cellPadding: 0.5, halign: "center", valign: "middle" },
+        headStyles: { fillColor: [241, 245, 249], textColor: [30, 41, 59], fontStyle: "bold" },
+        margin: { left: m, right: m },
+        tableLineColor: [200, 200, 205],
+        tableLineWidth: 0.05,
+      });
+      y = doc.lastAutoTable.finalY + 6;
+    } else {
+      doc.setFontSize(7);
+      doc.setTextColor(120);
+      doc.text("Sem grade numérica", m, y);
+      y += 7;
+      doc.setTextColor(0);
+    }
+  }
+
+  needSpace(18);
+  const lineY = Math.min(y + 4, pageH - 16);
+  doc.setDrawColor(160);
+  doc.setLineWidth(0.2);
+  const mid = pageW / 2;
+  doc.line(m, lineY, mid - 2, lineY);
+  doc.line(mid + 2, lineY, pageW - m, lineY);
+  doc.setFontSize(7);
+  doc.setTextColor(70);
+  doc.text("Responsável", (m + mid - 2) / 2, lineY + 4, { align: "center" });
+  doc.text("Conferência", (mid + 2 + pageW - m) / 2, lineY + 4, { align: "center" });
+
+  return doc.output("blob");
+}
+
 /** Garante chaves numéricas por numeração (evita mismatch "34" vs 34 vindo do Supabase/JSON). */
 const normalizeProductData = (rawData) =>
   Object.fromEntries(
@@ -936,6 +1054,7 @@ function ProgramacaoDiaFolhaImpressao({
   observacoes,
   itens,
   sizesList,
+  folhaSubtitle = "Fichas selecionadas — otimizado para A4",
 }) {
   const obs = observacoes?.trim();
   return (
@@ -944,7 +1063,7 @@ function ProgramacaoDiaFolhaImpressao({
         <img src={logoSrc} alt="Logo" className="h-11 w-auto max-w-[min(100%,280px)] object-contain object-left shrink-0" />
         <div className="flex-1 text-center px-2 min-w-[120px]">
           <h1 className="text-[15pt] font-black text-[#0F172A] leading-tight">{titulo || "Programação do Dia"}</h1>
-          <p className="text-[8pt] text-slate-500 mt-1">Fichas selecionadas — otimizado para A4</p>
+          <p className="text-[8pt] text-slate-500 mt-1">{folhaSubtitle}</p>
         </div>
         <div className="text-[8pt] text-slate-600 text-right shrink-0">
           <div className="font-semibold text-slate-800">Impresso em</div>
@@ -1129,6 +1248,7 @@ const [programacaoTituloImpressao, setProgramacaoTituloImpressao] = useState("Pr
 const [programacaoObsImpressao, setProgramacaoObsImpressao] = useState("");
 const [programacaoLogoImpressao, setProgramacaoLogoImpressao] = useState("/logo-rockstar-bandeira.png");
 const [programacaoFichaSelecao, setProgramacaoFichaSelecao] = useState({});
+const [programacaoPdfBusy, setProgramacaoPdfBusy] = useState(false);
 const [movListPage, setMovListPage] = useState({ Pesponto: 1, Montagem: 1 });
 const [feriadosTexto, setFeriadosTexto] = useState("");
 const [dashboardFeriadosAberto, setDashboardFeriadosAberto] = useState(false);
@@ -4888,6 +5008,53 @@ const salvarVendasManuais = async () => {
       window.print();
     };
 
+    const gerarPdfWhatsappProgramacao = async () => {
+      if (itensImpressao.length === 0) {
+        alert("Selecione pelo menos uma ficha para gerar o PDF.");
+        return;
+      }
+      setProgramacaoPdfBusy(true);
+      try {
+        const blob = buildProgramacaoDiaPdfBlob({
+          titulo: programacaoTituloImpressao,
+          setor: programacaoSubAba,
+          modoLabel: programacaoModoVisual === "normal" ? "Visão: por dia" : "Visão: todas as fichas",
+          diasCount: programacaoDias,
+          dataImpressao: new Date().toLocaleString("pt-BR"),
+          observacoes: programacaoObsImpressao,
+          itens: itensImpressao,
+          sizesList: sizes,
+        });
+        const fname = `programacao-${programacaoSubAba}-${new Date().toISOString().slice(0, 10)}.pdf`;
+        const file = new File([blob], fname, { type: "application/pdf" });
+        const titulo = programacaoTituloImpressao?.trim() || "Programação do dia";
+        const texto = `${titulo} · ${programacaoSubAba}`;
+        const payload = { files: [file], title: titulo, text: texto };
+        if (typeof navigator !== "undefined" && navigator.canShare && navigator.canShare(payload)) {
+          await navigator.share(payload);
+        } else {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = fname;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+          alert("PDF descarregado. Abra o WhatsApp e anexe este ficheiro (📎 Documento).");
+        }
+      } catch (e) {
+        if (e && e.name === "AbortError") {
+          /* cancelado */
+        } else {
+          console.error(e);
+          alert("Não foi possível gerar o PDF. Tente novamente ou use Imprimir seleção.");
+        }
+      } finally {
+        setProgramacaoPdfBusy(false);
+      }
+    };
+
     const renderBlocoProgramacao = (programacao, corTag) => (
       <section className="space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -5261,8 +5428,19 @@ const salvarVendasManuais = async () => {
                 >
                   Imprimir seleção
                 </button>
+                <button
+                  type="button"
+                  onClick={gerarPdfWhatsappProgramacao}
+                  disabled={programacaoPdfBusy}
+                  className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-[#128C7E] bg-[#25D366] text-white shadow-sm hover:bg-[#20BD5A] hover:border-[#128C7E] disabled:opacity-60 disabled:pointer-events-none"
+                >
+                  {programacaoPdfBusy ? "A gerar PDF…" : "PDF p/ WhatsApp"}
+                </button>
               </div>
             </div>
+            <p className="mt-2 text-xs text-slate-500 print:hidden max-w-xl">
+              Gera um PDF com várias páginas A4 (mesmo conteúdo que a impressão). Partilhe ou descarregue e anexe no WhatsApp como documento.
+            </p>
 
             <div className="mt-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
