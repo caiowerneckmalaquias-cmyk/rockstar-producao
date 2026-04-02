@@ -1128,6 +1128,7 @@ const [programacaoTituloImpressao, setProgramacaoTituloImpressao] = useState("Pr
 const [programacaoObsImpressao, setProgramacaoObsImpressao] = useState("");
 const [programacaoLogoImpressao, setProgramacaoLogoImpressao] = useState("/logo-rockstar-bandeira.png");
 const [programacaoFichaSelecao, setProgramacaoFichaSelecao] = useState({});
+const [movListPage, setMovListPage] = useState({ Pesponto: 1, Montagem: 1 });
 const [feriadosTexto, setFeriadosTexto] = useState("");
 
 const refs = useMemo(() => rows.map((r) => `${r.ref}__${r.cor}`), [rows]);
@@ -1385,6 +1386,23 @@ useEffect(() => {
   useEffect(() => {
     setProgramacaoFichaSelecao({});
   }, [programacaoSubAba, programacaoModoVisual, programacaoDias]);
+
+  useEffect(() => {
+    setMovListPage((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      const fix = (key, len) => {
+        const tp = Math.max(1, Math.ceil(len / 15));
+        if ((prev[key] || 1) > tp) {
+          next[key] = tp;
+          changed = true;
+        }
+      };
+      fix("Pesponto", pespontoLancamentos.length);
+      fix("Montagem", montagemLancamentos.length);
+      return changed ? next : prev;
+    });
+  }, [pespontoLancamentos.length, montagemLancamentos.length]);
 
   const mapRowsToEstoquePayload = (rowsData) =>
     rowsData
@@ -3299,15 +3317,24 @@ const salvarVendasManuais = async () => {
   );
 
   const renderMovPage = (title, form, setForm, subtitle) => {
+    const MOV_PAGE_SIZE = 15;
     const selectionPreview = previewBySelection(form);
     const liveError = getMovErrorMessage(title, form);
     const lancamentos = title === "Pesponto" ? pespontoLancamentos : montagemLancamentos;
     const totalAtual = sizes.reduce((acc, size) => acc + (Number(form.grid[size]) || 0), 0);
-    const agrupados = lancamentos.reduce((acc, item) => {
+    const totalPages = Math.max(1, Math.ceil(lancamentos.length / MOV_PAGE_SIZE));
+    const currentPage = Math.min(movListPage[title] || 1, totalPages);
+    const startIdx = (currentPage - 1) * MOV_PAGE_SIZE;
+    const lancamentosPagina = lancamentos.slice(startIdx, startIdx + MOV_PAGE_SIZE);
+    const agrupados = lancamentosPagina.reduce((acc, item) => {
       if (!acc[item.programacao]) acc[item.programacao] = [];
       acc[item.programacao].push(item);
       return acc;
     }, {});
+    const setMovPage = (p) => {
+      const next = Math.max(1, Math.min(totalPages, p));
+      setMovListPage((prev) => ({ ...prev, [title]: next }));
+    };
 
     return (
       <PageShell title={title} subtitle={subtitle}>
@@ -3432,12 +3459,19 @@ const salvarVendasManuais = async () => {
             )}
 
             <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between mb-4">
                 <div>
                   <h2 className="font-bold text-lg">Lançamentos enviados</h2>
                   <p className="text-sm text-slate-500 mt-1">Finalize para atualizar o estoque.</p>
                 </div>
-                <span className="text-sm text-slate-500">{lancamentos.length} lançamentos</span>
+                <div className="text-sm text-slate-500 text-left sm:text-right shrink-0">
+                  <div>{lancamentos.length} lançamento(s) no total</div>
+                  {lancamentos.length > 0 && (
+                    <div className="text-xs text-slate-400 mt-0.5">
+                      Mostrando {startIdx + 1}–{Math.min(startIdx + lancamentosPagina.length, lancamentos.length)} · {MOV_PAGE_SIZE} por página
+                    </div>
+                  )}
+                </div>
               </div>
 
               {!Object.keys(agrupados).length ? (
@@ -3516,6 +3550,55 @@ const salvarVendasManuais = async () => {
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {lancamentos.length > MOV_PAGE_SIZE && (
+                <div className="mt-6 flex flex-col items-stretch gap-4 sm:flex-row sm:items-center sm:justify-between pt-4 border-t border-slate-200">
+                  <div className="text-sm text-slate-600 text-center sm:text-left">
+                    Página <span className="font-semibold text-slate-900">{currentPage}</span> de{" "}
+                    <span className="font-semibold text-slate-900">{totalPages}</span>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setMovPage(currentPage - 1)}
+                      disabled={currentPage <= 1}
+                      className="px-3 py-2 rounded-xl text-sm font-semibold border border-slate-200 bg-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50"
+                    >
+                      Anterior
+                    </button>
+                    <div className="flex flex-wrap items-center justify-center gap-1 max-w-full">
+                      {totalPages <= 12
+                        ? Array.from({ length: totalPages }, (_, i) => i + 1).map((num) => (
+                            <button
+                              key={num}
+                              type="button"
+                              onClick={() => setMovPage(num)}
+                              className={`min-w-[2.25rem] px-2 py-2 rounded-xl text-sm font-semibold border ${
+                                num === currentPage
+                                  ? "bg-[#0F172A] text-white border-[#0F172A]"
+                                  : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+                              }`}
+                            >
+                              {num}
+                            </button>
+                          ))
+                        : (
+                            <span className="text-sm text-slate-500 px-2">
+                              Use Anterior / Próxima ({totalPages} páginas)
+                            </span>
+                          )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setMovPage(currentPage + 1)}
+                      disabled={currentPage >= totalPages}
+                      className="px-3 py-2 rounded-xl text-sm font-semibold border border-slate-200 bg-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50"
+                    >
+                      Próxima
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -5267,7 +5350,7 @@ const salvarVendasManuais = async () => {
   };
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#FDF2F4_0%,_#FFFFFF_30%,_#F8FAFC_100%)] text-slate-900">
+    <div className="min-h-screen min-h-[100dvh] bg-[radial-gradient(circle_at_top,_#FDF2F4_0%,_#FFFFFF_30%,_#F8FAFC_100%)] text-slate-900">
       <style>{`
         @page {
           size: A4;
@@ -5305,8 +5388,8 @@ const salvarVendasManuais = async () => {
           }
         }
       `}</style>
-      <div className="flex min-h-screen">
-        <aside className="hidden xl:flex xl:w-[310px] xl:flex-col xl:justify-between xl:border-r xl:border-white/50 xl:bg-[#0F172A] xl/p-6 xl:text-white xl:shadow-[20px_0_60px_rgba(15,23,42,0.18)]">
+      <div className="flex min-h-[100dvh] min-h-screen">
+        <aside className="hidden lg:flex lg:w-[280px] lg:shrink-0 lg:flex-col lg:justify-between lg:border-r lg:border-white/50 lg:bg-[#0F172A] lg:p-5 lg:text-white lg:shadow-[20px_0_60px_rgba(15,23,42,0.18)] xl:w-[310px] xl:p-6">
           <div>
             <div className="rounded-[30px] border border-white/10 bg-white/5 p-5 shadow-inner shadow-white/5">
               <img src="/logo-rockstar.png" alt="Rock Star" className="h-10 object-contain" />
@@ -5348,17 +5431,17 @@ const salvarVendasManuais = async () => {
           </div>
         </aside>
 
-        <main className="flex-1 p-4 lg:p-6 xl:p-8">
-          <div className="mx-auto max-w-[1720px] space-y-4">
-            <div className="xl:hidden rounded-[26px] border border-slate-200 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] backdrop-blur">
-              <img src="/logo-rockstar.png" alt="Rock Star" className="h-8 object-contain" />
-              <div className="mt-2 text-2xl font-black tracking-tight text-slate-950">Módulo Produção</div>
-              <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+        <main className="app-main-shell flex-1 min-w-0 p-3 sm:p-4 lg:p-6 xl:p-8 max-[1023px]:landscape:py-2 max-[1023px]:landscape:px-3">
+          <div className="mx-auto max-w-[1720px] space-y-3 sm:space-y-4 max-[1023px]:landscape:space-y-2">
+            <div className="app-mobile-nav-card lg:hidden rounded-[22px] sm:rounded-[26px] border border-slate-200 bg-white p-3 sm:p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] backdrop-blur max-[1023px]:landscape:p-3 max-[1023px]:landscape:rounded-2xl">
+              <img src="/logo-rockstar.png" alt="Rock Star" className="h-7 sm:h-8 object-contain max-[1023px]:landscape:h-6" />
+              <div className="mt-1.5 sm:mt-2 text-xl sm:text-2xl font-black tracking-tight text-slate-950 max-[1023px]:landscape:text-lg max-[1023px]:landscape:mt-1">Módulo Produção</div>
+              <div className="mt-3 sm:mt-4 flex gap-2 overflow-x-auto overflow-y-hidden pb-1 scroll-smooth touch-pan-x [-webkit-overflow-scrolling:touch] snap-x snap-mandatory">
                 {navItems.map((item) => (
                   <button
                     key={item}
                     onClick={() => setActive(item)}
-                    className={`whitespace-nowrap rounded-2xl border px-4 py-2.5 text-sm font-semibold transition ${
+                    className={`snap-start shrink-0 whitespace-nowrap rounded-2xl border px-3 py-2 sm:px-4 sm:py-2.5 text-xs sm:text-sm font-semibold transition max-[1023px]:landscape:px-3 max-[1023px]:landscape:py-2 max-[1023px]:landscape:text-[13px] ${
                       active === item
                         ? "border-[#0F172A] bg-[#0F172A] text-white"
                         : "border-[#E5E7EB] bg-[#FFF7F8] text-[#0F172A]"
@@ -5376,8 +5459,8 @@ const salvarVendasManuais = async () => {
       </div>
 
       {previewFicha && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 overflow-auto">
-          <div className="w-full max-w-3xl rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 overflow-auto max-[1023px]:landscape:items-start max-[1023px]:landscape:py-4">
+          <div className="w-full max-w-3xl rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6 max-h-[min(92dvh,900px)] overflow-y-auto">
             <div className="flex items-center justify-between gap-4">
               <div>
                 <div className="text-lg font-bold">Pré-visualização da ficha</div>
@@ -5412,8 +5495,8 @@ const salvarVendasManuais = async () => {
       )}
 
       {confirmImport && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
-          <div className="w-full max-w-md rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 max-[1023px]:landscape:items-start max-[1023px]:landscape:py-4">
+          <div className="w-full max-w-md max-h-[min(88dvh,800px)] overflow-y-auto rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6">
             <div className="text-lg font-bold">Confirmar importação do GCM</div>
             <p className="text-sm text-slate-600 mt-3 leading-relaxed">Essa ação vai atualizar o Produto Acabado (PA) com base no arquivo carregado.</p>
             <div className="mt-6 flex gap-3 justify-end">
@@ -5441,8 +5524,8 @@ const salvarVendasManuais = async () => {
         }
 
         return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
-            <div className="w-full max-w-lg rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 max-[1023px]:landscape:items-start max-[1023px]:landscape:py-4">
+            <div className="w-full max-w-lg max-h-[min(88dvh,800px)] overflow-y-auto rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6">
               <div className="text-lg font-bold">Lançamento fora da regra</div>
               <p className="text-sm text-slate-600 mt-3 leading-relaxed">
                 {mensagens.join(" ")}
@@ -5458,8 +5541,8 @@ const salvarVendasManuais = async () => {
       })()}
 
       {confirmAction && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
-          <div className="w-full max-w-lg rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 max-[1023px]:landscape:items-start max-[1023px]:landscape:py-4">
+          <div className="w-full max-w-lg max-h-[min(88dvh,800px)] overflow-y-auto rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6">
             <div className="text-lg font-bold">{confirmAction.titulo}</div>
             <p className="text-sm text-slate-600 mt-3 leading-relaxed">{confirmAction.mensagem}</p>
             <div className="mt-6 flex gap-3 justify-end">
@@ -5482,8 +5565,8 @@ const salvarVendasManuais = async () => {
       )}
 
       {relatorioPrintModalOpen && relatorioPrintDraft && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/60 p-4 overflow-y-auto">
-          <div className="w-full max-w-4xl rounded-[28px] bg-white shadow-2xl border border-slate-200 my-8 flex flex-col max-h-[90vh]">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/60 p-4 overflow-y-auto max-[1023px]:landscape:items-start max-[1023px]:landscape:py-3">
+          <div className="w-full max-w-4xl rounded-[28px] bg-white shadow-2xl border border-slate-200 my-4 sm:my-8 flex flex-col max-h-[min(92dvh,90vh)]">
             <div className="px-6 py-5 border-b border-slate-200 shrink-0">
               <div className="text-lg font-bold text-slate-900">Prévia do relatório</div>
               <p className="text-sm text-slate-500 mt-1">Ajuste o título e as observações; a prévia atualiza em tempo real.</p>
