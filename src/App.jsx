@@ -15,6 +15,24 @@ import {
 } from "./constants/production";
 
 const makeEmptyGrid = () => Object.fromEntries(sizes.map((s) => [s, 0]));
+
+/** Garante chaves numéricas por numeração (evita mismatch "34" vs 34 vindo do Supabase/JSON). */
+const normalizeProductData = (rawData) =>
+  Object.fromEntries(
+    sizes.map((s) => {
+      const cell = rawData?.[s] ?? rawData?.[String(s)];
+      return [
+        s,
+        {
+          pa: Number(cell?.pa) || 0,
+          est: Number(cell?.est) || 0,
+          m: Number(cell?.m) || 0,
+          p: Number(cell?.p) || 0,
+        },
+      ];
+    })
+  );
+
 const calcTotal = (item) => item.pa + item.est + item.m + item.p;
 const round12 = (n) => (n <= 0 ? 0 : Math.ceil(n / 12) * 12);
 const normalizeKey = (value) =>
@@ -765,6 +783,256 @@ function SummaryCard({ title, value, subtitle }) {
   );
 }
 
+function RelatorioProducaoPrintDocument({ data }) {
+  const titulo = data.titulo || "RELATÓRIO DE PRODUÇÃO";
+  const obs = data.observacoes?.trim();
+
+  return (
+    <div className="relatorio-print-doc text-slate-900 [print-color-adjust:exact]">
+      <div className="flex flex-col sm:flex-row sm:items-stretch sm:justify-between gap-4 border-b-4 border-[#8B1E2D] pb-4 print-section">
+        <div className="flex flex-col justify-center min-w-[120px]">
+          <div className="text-lg font-black tracking-[0.12em] text-[#8B1E2D]">ROCK STAR</div>
+          <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500 mt-1">Módulo Produção</div>
+        </div>
+        <div className="text-center flex-1 px-2 min-w-0">
+          <div className="text-xl sm:text-2xl font-black text-[#0F172A] leading-tight">{titulo}</div>
+          <div className="text-xs text-slate-500 mt-1">Documento gerado pelo sistema</div>
+        </div>
+        <div className="text-xs text-left sm:text-right text-slate-600 sm:min-w-[170px] sm:self-end">
+          <div className="font-semibold text-slate-800">Gerado em</div>
+          <div className="mt-1">{data.dataGeracao}</div>
+        </div>
+      </div>
+
+      {obs ? (
+        <div className="mt-4 rounded-xl border border-amber-300/80 bg-amber-50 p-3 text-sm print-section">
+          <div className="text-[11px] font-bold uppercase tracking-wide text-amber-900">Observações</div>
+          <div className="mt-2 whitespace-pre-wrap text-amber-950 leading-relaxed">{obs}</div>
+        </div>
+      ) : null}
+
+      <div className="mt-4 rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-3 text-xs print-section">
+        <div className="font-bold text-slate-800">Filtros aplicados</div>
+        <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-slate-600">
+          <div>
+            <span className="text-slate-400">Período:</span> {data.filtros.periodo}
+          </div>
+          <div>
+            <span className="text-slate-400">REF:</span> {data.filtros.ref}
+          </div>
+          <div>
+            <span className="text-slate-400">Cor:</span> {data.filtros.cor}
+          </div>
+          <div>
+            <span className="text-slate-400">Setor:</span> {data.filtros.setor}
+          </div>
+          <div className="sm:col-span-2">
+            <span className="text-slate-400">Status:</span> {data.filtros.status}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3 print-section">
+        <div className="rounded-xl border border-slate-200 border-l-4 border-l-[#8B1E2D] bg-white p-3 text-center shadow-sm">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Programações</div>
+          <div className="text-2xl font-black text-[#0F172A] mt-1">{data.resumo.programacoes}</div>
+        </div>
+        <div className="rounded-xl border border-slate-200 border-l-4 border-l-[#0F172A] bg-white p-3 text-center shadow-sm">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Total pares</div>
+          <div className="text-2xl font-black text-[#0F172A] mt-1">{data.resumo.totalPares}</div>
+        </div>
+        <div className="rounded-xl border border-slate-200 border-l-4 border-l-amber-500 bg-white p-3 text-center shadow-sm">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Em aberto</div>
+          <div className="text-2xl font-black text-amber-800 mt-1">{data.resumo.emAberto}</div>
+        </div>
+        <div className="rounded-xl border border-slate-200 border-l-4 border-l-emerald-600 bg-white p-3 text-center shadow-sm">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Finalizados</div>
+          <div className="text-2xl font-black text-emerald-800 mt-1">{data.resumo.finalizados}</div>
+        </div>
+      </div>
+
+      {data.gruposPorSetor.map((grupo) => (
+        <div key={`doc-${grupo.setor}`} className="mt-6 print-section">
+          <div
+            className={`text-sm font-black uppercase tracking-[0.15em] pb-2 border-b-2 ${
+              grupo.setor === "Pesponto" ? "text-amber-800 border-amber-300" : "text-sky-900 border-sky-300"
+            }`}
+          >
+            {grupo.setor}
+          </div>
+          {grupo.linhas.length === 0 ? (
+            <div className="mt-3 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500 text-center">
+              Sem registros neste setor.
+            </div>
+          ) : (
+            <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200">
+              <table className="w-full border-collapse text-[11px] min-w-[640px]">
+                <thead>
+                  <tr className="bg-[#0F172A] text-white">
+                    <th className="px-2 py-2.5 text-left font-semibold border border-[#1e293b]">Data</th>
+                    <th className="px-2 py-2.5 text-left font-semibold border border-[#1e293b]">Programação</th>
+                    <th className="px-2 py-2.5 text-left font-semibold border border-[#1e293b]">REF</th>
+                    <th className="px-2 py-2.5 text-left font-semibold border border-[#1e293b]">Cor</th>
+                    <th className="px-2 py-2.5 text-center font-semibold border border-[#1e293b]">Pares</th>
+                    <th className="px-2 py-2.5 text-center font-semibold border border-[#1e293b]">Status</th>
+                    <th className="px-2 py-2.5 text-left font-semibold border border-[#1e293b]">Detalhe</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {grupo.linhas.map((item, idx) => {
+                    const dataRef = item.status === "Finalizado" && item.dataFinalizacao ? item.dataFinalizacao : item.dataLancamento;
+                    const finalizado = item.status === "Finalizado";
+                    return (
+                      <tr key={`doc-${grupo.setor}-${item.id}`} className={idx % 2 === 0 ? "bg-white" : "bg-slate-50/90"}>
+                        <td className="border border-slate-200 px-2 py-2 align-top text-slate-800">{dataRef || "—"}</td>
+                        <td className="border border-slate-200 px-2 py-2 align-top font-medium text-slate-900">{item.programacao || "—"}</td>
+                        <td className="border border-slate-200 px-2 py-2 align-top">{item.ref || "—"}</td>
+                        <td className="border border-slate-200 px-2 py-2 align-top">{item.cor || "—"}</td>
+                        <td className="border border-slate-200 px-2 py-2 text-center font-bold text-slate-900">{item.total ?? 0}</td>
+                        <td className="border border-slate-200 px-2 py-2 text-center">
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                              finalizado ? "bg-emerald-100 text-emerald-800 border border-emerald-200" : "bg-amber-100 text-amber-900 border border-amber-200"
+                            }`}
+                          >
+                            {item.status || "—"}
+                          </span>
+                        </td>
+                        <td className="border border-slate-200 px-2 py-2 text-slate-700">
+                          {(item.items || []).map((entry) => `${entry.size}: ${entry.qtd}`).join(" · ") || "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ))}
+
+      <div className="mt-10 grid grid-cols-2 gap-8 print-section">
+        <div className="text-center pt-6 border-t-2 border-slate-300">
+          <div className="h-8" />
+          <div className="text-xs font-semibold text-slate-600">Responsável Produção</div>
+        </div>
+        <div className="text-center pt-6 border-t-2 border-slate-300">
+          <div className="h-8" />
+          <div className="text-xs font-semibold text-slate-600">Conferência</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProgramacaoDiaFolhaImpressao({
+  titulo,
+  logoSrc = "/logo-rockstar-bandeira.png",
+  setor,
+  modoLabel,
+  diasCount,
+  dataImpressao,
+  observacoes,
+  itens,
+  sizesList,
+}) {
+  const obs = observacoes?.trim();
+  return (
+    <div className="programacao-print-doc text-slate-900">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b-[3px] border-[#8B1E2D] pb-3 mb-3">
+        <img src={logoSrc} alt="Logo" className="h-11 w-auto max-w-[min(100%,280px)] object-contain object-left shrink-0" />
+        <div className="flex-1 text-center px-2 min-w-[120px]">
+          <h1 className="text-[15pt] font-black text-[#0F172A] leading-tight">{titulo || "Programação do Dia"}</h1>
+          <p className="text-[8pt] text-slate-500 mt-1">Fichas selecionadas — otimizado para A4</p>
+        </div>
+        <div className="text-[8pt] text-slate-600 text-right shrink-0">
+          <div className="font-semibold text-slate-800">Impresso em</div>
+          <div>{dataImpressao}</div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-1.5 mb-3 text-[8pt]">
+        <span className="px-2 py-0.5 rounded-md border border-slate-300 bg-slate-100 font-bold text-[#0F172A]">Setor: {setor}</span>
+        <span className="px-2 py-0.5 rounded-md border border-slate-200 bg-white">{modoLabel}</span>
+        <span className="px-2 py-0.5 rounded-md border border-slate-200 bg-white">Período: {diasCount} dia(s)</span>
+        <span className="px-2 py-0.5 rounded-md border border-slate-200 bg-white">{itens.length} ficha(s)</span>
+      </div>
+
+      {obs ? (
+        <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 p-2 text-[8pt] print-section">
+          <span className="font-bold text-amber-900">Observações: </span>
+          <span className="whitespace-pre-wrap text-amber-950">{obs}</span>
+        </div>
+      ) : null}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 print:grid-cols-2 print:gap-2">
+        {itens.map((row, i) => {
+          const { ficha, dia, ordem } = row;
+          const activeSizes = sizesList.filter((s) => Number(ficha.sizes?.[s] || 0) > 0);
+          return (
+            <div
+              key={`pf-${ficha.nome}-${dia}-${i}`}
+              className="programacao-print-ficha rounded-lg border border-slate-400 bg-white p-2 break-inside-avoid page-break-inside-avoid shadow-sm"
+            >
+              <div className="flex items-start justify-between gap-2 border-b border-slate-200 pb-1 mb-1.5">
+                <div className="min-w-0">
+                  <div className="text-[7pt] font-bold uppercase tracking-wide text-[#8B1E2D]">
+                    Dia {String(dia).padStart(2, "0")} · Ordem {String(ordem).padStart(2, "0")}
+                  </div>
+                  <div className="text-[9pt] font-black text-slate-900 truncate">{ficha.cor}</div>
+                  <div className="text-[7pt] text-slate-600 truncate">
+                    {ficha.ref} · {ficha.nome}
+                  </div>
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className="text-[7pt] text-slate-500">Total</div>
+                  <div className="text-[12pt] font-black tabular-nums text-[#0F172A]">{ficha.total}</div>
+                  <div className="text-[6pt] text-slate-400">pares</div>
+                </div>
+              </div>
+              {activeSizes.length > 0 ? (
+                <table className="w-full border-collapse text-[7pt]">
+                  <thead>
+                    <tr className="bg-slate-100">
+                      {activeSizes.map((s) => (
+                        <th key={s} className="border border-slate-300 px-0.5 py-0.5 text-center font-bold text-slate-700">
+                          {s}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      {activeSizes.map((s) => (
+                        <td key={s} className="border border-slate-300 px-0.5 py-0.5 text-center font-semibold tabular-nums">
+                          {Number(ficha.sizes?.[s] || 0)}
+                        </td>
+                      ))}
+                    </tr>
+                  </tbody>
+                </table>
+              ) : (
+                <div className="text-[7pt] text-slate-400 italic">Sem grade numérica</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mt-6 grid grid-cols-2 gap-6 border-t border-slate-300 pt-4 text-[8pt] print-section">
+        <div className="text-center">
+          <div className="h-10 border-b border-slate-400" />
+          <div className="mt-1 font-semibold text-slate-700">Responsável</div>
+        </div>
+        <div className="text-center">
+          <div className="h-10 border-b border-slate-400" />
+          <div className="mt-1 font-semibold text-slate-700">Conferência</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PageShell({ children, title, subtitle, action }) {
   return (
     <div className="space-y-6">
@@ -850,14 +1118,29 @@ const [relatorioStatus, setRelatorioStatus] = useState("TODOS");
 const [relatorioRef, setRelatorioRef] = useState("TODAS");
 const [relatorioCor, setRelatorioCor] = useState("TODAS");
 const [printRelatorioData, setPrintRelatorioData] = useState(null);
+const [relatorioPrintModalOpen, setRelatorioPrintModalOpen] = useState(false);
+const [relatorioPrintDraft, setRelatorioPrintDraft] = useState(null);
+const [relatorioPrintTitulo, setRelatorioPrintTitulo] = useState("RELATÓRIO DE PRODUÇÃO");
+const [relatorioPrintObs, setRelatorioPrintObs] = useState("");
 const [programacaoSubAba, setProgramacaoSubAba] = useState("Pesponto");
 const [programacaoModoVisual, setProgramacaoModoVisual] = useState("normal");
+const [programacaoTituloImpressao, setProgramacaoTituloImpressao] = useState("Programação do Dia");
+const [programacaoObsImpressao, setProgramacaoObsImpressao] = useState("");
+const [programacaoLogoImpressao, setProgramacaoLogoImpressao] = useState("/logo-rockstar-bandeira.png");
+const [programacaoFichaSelecao, setProgramacaoFichaSelecao] = useState({});
 const [feriadosTexto, setFeriadosTexto] = useState("");
 
 const refs = useMemo(() => rows.map((r) => `${r.ref}__${r.cor}`), [rows]);
+const firstRef = refs[0] ? refs[0].split("__")[0] : "";
+const firstCor = refs[0] ? refs[0].split("__")[1] : "";
+
+  const rowsNormalized = useMemo(
+    () => rows.map((row) => ({ ...row, data: normalizeProductData(row.data) })),
+    [rows]
+  );
 
 const previewBySelection = (form) => {
-  const row = rows.find((item) => item.ref === form.ref && item.cor === form.cor);
+  const row = rowsNormalized.find((item) => item.ref === form.ref && item.cor === form.cor);
   if (!row) return null;
 
   const totalPesponto = sizes.reduce((acc, size) => acc + (row.data[size]?.p || 0), 0);
@@ -885,12 +1168,12 @@ const previewBySelection = (form) => {
   }, [rows, controleFiltroRef]);
 
   const controleRows = useMemo(() => {
-    return rows.filter((row) => {
+    return rowsNormalized.filter((row) => {
       if (controleFiltroRef !== "TODAS" && row.ref !== controleFiltroRef) return false;
       if (controleFiltroCor !== "TODAS" && row.cor !== controleFiltroCor) return false;
       return true;
     });
-  }, [rows, controleFiltroRef, controleFiltroCor]);
+  }, [rowsNormalized, controleFiltroRef, controleFiltroCor]);
 
   const visibleSizesControle = useMemo(() => {
     if (controleFiltroNumero === "TODAS") return sizes;
@@ -898,12 +1181,26 @@ const previewBySelection = (form) => {
   }, [controleFiltroNumero]);
 
   const sortedRowsByRefCor = useMemo(() => {
-    return [...rows].sort((a, b) => {
+    return [...rowsNormalized].sort((a, b) => {
       const refCompare = String(a.ref).localeCompare(String(b.ref), "pt-BR", { numeric: true, sensitivity: "base" });
       if (refCompare !== 0) return refCompare;
       return String(a.cor).localeCompare(String(b.cor), "pt-BR", { sensitivity: "base" });
     });
-  }, [rows]);
+  }, [rowsNormalized]);
+
+  const pespontoFinalizadosHistorico = useMemo(() => {
+    const ts = (lanc) => {
+      const s = lanc?.dataFinalizacao || lanc?.dataLancamento || "";
+      const p = String(s).split("/");
+      if (p.length !== 3) return 0;
+      const [dd, mm, yyyy] = p;
+      const t = new Date(`${yyyy}-${mm}-${dd}T12:00:00`).getTime();
+      return Number.isNaN(t) ? 0 : t;
+    };
+    return [...pespontoLancamentos]
+      .filter((l) => String(l.status || "").trim() === "Finalizado")
+      .sort((a, b) => ts(b) - ts(a));
+  }, [pespontoLancamentos]);
 
   const metrics = useMemo(() => {
     let criticos = 0;
@@ -911,9 +1208,9 @@ const previewBySelection = (form) => {
     let atencaoProd = 0;
     let ok = 0;
     let costura = 0;
-    rows.forEach((row) => {
+    rowsNormalized.forEach((row) => {
       sizes.forEach((size) => {
-        const item = row.data[size];
+        const item = row.data[size] || { pa: 0, est: 0, m: 0, p: 0 };
         costura += item.est;
         const minimo = minimos?.[row.ref]?.[row.cor]?.[size] || { pa: 0, prod: 0 };
         const st = statusFor(item, minimo);
@@ -924,11 +1221,11 @@ const previewBySelection = (form) => {
       });
     });
     return { criticos, atencaoPA, atencaoProd, ok, costura };
-  }, [rows, minimos]);
+  }, [rowsNormalized, minimos]);
 
   const suggestions = useMemo(
-  () => buildSuggestions(rows, minimos, vendas, tempoProducao),
-  [rows, minimos, vendas, tempoProducao]
+  () => buildSuggestions(rowsNormalized, minimos, vendas, tempoProducao),
+  [rowsNormalized, minimos, vendas, tempoProducao]
 );
 
 const fichasMontagem = useMemo(
@@ -1049,6 +1346,22 @@ useEffect(() => {
   carregarDadosIniciais();
 }, []);
 
+useEffect(() => {
+  if (!refs.length) return;
+
+  setPespontoForm((current) => {
+    const isValid = refs.includes(`${current.ref}__${current.cor}`);
+    if (isValid) return current;
+    return { ...current, ref: firstRef, cor: firstCor };
+  });
+
+  setMontagemForm((current) => {
+    const isValid = refs.includes(`${current.ref}__${current.cor}`);
+    if (isValid) return current;
+    return { ...current, ref: firstRef, cor: firstCor };
+  });
+}, [refs, firstRef, firstCor]);
+
   useEffect(() => {
     if (!printRelatorioData) return undefined;
 
@@ -1069,25 +1382,136 @@ useEffect(() => {
     };
   }, [printRelatorioData]);
 
-  const applyGridDelta = (ref, cor, updates) => {
-    setRows((current) =>
-      current.map((row) => {
-        if (row.ref !== ref || row.cor !== cor) return row;
+  useEffect(() => {
+    setProgramacaoFichaSelecao({});
+  }, [programacaoSubAba, programacaoModoVisual, programacaoDias]);
 
-        const nextData = { ...row.data };
-        updates.forEach(({ size, field, delta }) => {
-          nextData[size] = {
-            ...nextData[size],
-            [field]: Math.max(0, (nextData[size]?.[field] || 0) + delta),
-          };
-        });
+  const mapRowsToEstoquePayload = (rowsData) =>
+    rowsData
+      .map((row) =>
+        Object.entries(row.data).map(([numero, valores]) => ({
+          ref: row.ref,
+          cor: row.cor,
+          numero: Number(numero),
+          pa: valores.pa || 0,
+          est: valores.est || 0,
+          m: valores.m || 0,
+          p: valores.p || 0,
+        }))
+      )
+      .flat();
 
-        return {
-          ...row,
-          data: nextData,
-        };
-      })
+  const persistRowsToSupabase = async (rowsData) => {
+    const { error } = await salvarEstoqueNoBanco(mapRowsToEstoquePayload(rowsData));
+    if (error) {
+      console.error("persistRowsToSupabase:", error);
+      return { ok: false, error };
+    }
+    return { ok: true, error: null };
+  };
+
+  const normalizeLancamentoItems = (lancamento) => {
+    const raw = Array.isArray(lancamento?.items) ? lancamento.items : [];
+    return raw.filter((item) => Number(item?.size) > 0 && Number(item?.qtd) > 0);
+  };
+
+  const cloneRowDataDeep = (row) =>
+    Object.fromEntries(
+      sizes.map((s) => [
+        s,
+        {
+          pa: Number(row.data[s]?.pa) || 0,
+          est: Number(row.data[s]?.est) || 0,
+          m: Number(row.data[s]?.m) || 0,
+          p: Number(row.data[s]?.p) || 0,
+        },
+      ])
     );
+
+  /** Aplica finalização com validação de saldo (p ou m) e retorna erro se inválido. */
+  const computeFinalizacaoNextRows = (rowsData, tipo, lancamentosAbertos) => {
+    const alvo = lancamentosAbertos
+      .map((l) => ({ ...l, items: normalizeLancamentoItems(l) }))
+      .filter((l) => l.items.length > 0);
+
+    if (!alvo.length) {
+      return {
+        error:
+          "Não há itens válidos nesta programação (grade vazia ou numerações inválidas). Lance novamente ou verifique o Supabase.",
+      };
+    }
+
+    const nextRows = rowsData.map((row) => ({
+      ...row,
+      data: cloneRowDataDeep(row),
+    }));
+
+    const getMutableRow = (ref, cor) => nextRows.find((r) => r.ref === ref && r.cor === cor);
+
+    for (const lancamento of alvo) {
+      const row = getMutableRow(lancamento.ref, lancamento.cor);
+      if (!row) {
+        return {
+          error: `Produto não encontrado no estoque: ${lancamento.ref} • ${lancamento.cor}.`,
+        };
+      }
+
+      for (const item of lancamento.items) {
+        const atual = row.data[item.size] || { pa: 0, est: 0, m: 0, p: 0 };
+
+        if (tipo === "Pesponto") {
+          const disponivel = atual.p || 0;
+          if (disponivel < item.qtd) {
+            return {
+              error: `Não dá para finalizar: no pesponto faltam pares em ${lancamento.ref} • ${lancamento.cor}, num. ${item.size} (em aberto: ${disponivel}, necessário: ${item.qtd}).`,
+            };
+          }
+          row.data[item.size] = {
+            ...atual,
+            p: disponivel - item.qtd,
+            est: (atual.est || 0) + item.qtd,
+          };
+        } else {
+          const disponivel = atual.m || 0;
+          if (disponivel < item.qtd) {
+            return {
+              error: `Não dá para finalizar: na montagem faltam pares em ${lancamento.ref} • ${lancamento.cor}, num. ${item.size} (em aberto: ${disponivel}, necessário: ${item.qtd}).`,
+            };
+          }
+          row.data[item.size] = {
+            ...atual,
+            m: disponivel - item.qtd,
+            pa: (atual.pa || 0) + item.qtd,
+          };
+        }
+      }
+    }
+
+    return { nextRows };
+  };
+
+  const applyLancamentoDeltaToRows = (rowsData, tipo, lancamento, direction = "revert") => {
+    const multiplier = direction === "revert" ? -1 : 1;
+    return rowsData.map((row) => {
+      if (row.ref !== lancamento.ref || row.cor !== lancamento.cor) return row;
+      const nextData = { ...row.data };
+      lancamento.items.forEach((item) => {
+        const atual = nextData[item.size] || { pa: 0, est: 0, m: 0, p: 0 };
+        if (tipo === "Pesponto") {
+          nextData[item.size] = {
+            ...atual,
+            p: Math.max(0, (atual.p || 0) - item.qtd * multiplier),
+          };
+        } else {
+          nextData[item.size] = {
+            ...atual,
+            est: Math.max(0, (atual.est || 0) + item.qtd * multiplier),
+            m: Math.max(0, (atual.m || 0) - item.qtd * multiplier),
+          };
+        }
+      });
+      return { ...row, data: nextData };
+    });
   };
 
   const executeMov = async (tipo, form, force = false) => {
@@ -1113,6 +1537,25 @@ useEffect(() => {
     if (!programacaoNome) {
       setMovError((curr) => ({ ...curr, [tipo]: "Informe o nome da programação antes de lançar." }));
       return;
+    }
+
+    if (tipo === "Pesponto" || tipo === "Montagem") {
+      const refNorm = String(form.ref || "").trim();
+      const corNorm = String(form.cor || "").trim();
+      const temAbertoMesmoProduto = source.some(
+        (item) =>
+          item.status !== "Finalizado" &&
+          String(item.ref || "").trim() === refNorm &&
+          String(item.cor || "").trim() === corNorm
+      );
+      if (temAbertoMesmoProduto) {
+        setMovError((curr) => ({
+          ...curr,
+          [tipo]:
+            "Já existe um lançamento em aberto para esta ref e cor neste setor. Use Alterar no lançamento existente, finalize a programação ou exclua antes de lançar de novo.",
+        }));
+        return;
+      }
     }
 
     if (programacaoDuplicada) {
@@ -1166,23 +1609,16 @@ useEffect(() => {
   };
 });
 
-setRows(nextRows);
+const persistLaunch = await persistRowsToSupabase(nextRows);
+    if (!persistLaunch.ok) {
+      setMovError((curr) => ({
+        ...curr,
+        [tipo]: `Erro ao salvar estoque no Supabase: ${persistLaunch.error?.message || "tente novamente"}.`,
+      }));
+      return;
+    }
 
-await salvarEstoqueNoBanco(
-  nextRows
-    .map((row) =>
-      Object.entries(row.data).map(([numero, valores]) => ({
-        ref: row.ref,
-        cor: row.cor,
-        numero: Number(numero),
-        pa: valores.pa || 0,
-        est: valores.est || 0,
-        m: valores.m || 0,
-        p: valores.p || 0,
-      }))
-    )
-    .flat()
-);
+    setRows(nextRows);
 
     const payload = {
       id: `${tipo}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -1248,6 +1684,22 @@ await salvarEstoqueNoBanco(
       mensagens.push(`já existe uma programação com esse nome em ${tipo}`);
     }
 
+    if (programacaoNome && (tipo === "Pesponto" || tipo === "Montagem")) {
+      const refNorm = String(form.ref || "").trim();
+      const corNorm = String(form.cor || "").trim();
+      const temAbertoMesmoProduto = source.some(
+        (item) =>
+          item.status !== "Finalizado" &&
+          String(item.ref || "").trim() === refNorm &&
+          String(item.cor || "").trim() === corNorm
+      );
+      if (temAbertoMesmoProduto) {
+        mensagens.push(
+          "já existe lançamento em aberto para esta ref e cor neste setor — use Alterar, finalize a programação ou exclua antes de lançar de novo"
+        );
+      }
+    }
+
     if (invalidos.length) {
       const lista = invalidos.map((item) => `${item.size} (${item.qtd})`).join(", ");
       mensagens.push(`no ${tipo}, o padrão é lançar múltiplos de 12. Fora da regra: ${lista}`);
@@ -1262,18 +1714,34 @@ await salvarEstoqueNoBanco(
     return `Atenção: ${mensagens.join(". ")}.`;
   };
 
-  const revertLancamentoImpacto = (tipo, lancamento) => {
-    const updates = lancamento.items.flatMap((item) =>
-  tipo === "Pesponto"
-    ? [
-        { size: item.size, field: "p", delta: -item.qtd },
-      ]
-    : [
-        { size: item.size, field: "est", delta: item.qtd },
-        { size: item.size, field: "m", delta: -item.qtd },
-      ]
-);
-    applyGridDelta(lancamento.ref, lancamento.cor, updates);
+  const excluirMovimentacoesNoBanco = async (tipo, alvo, { suppressAlert = false } = {}) => {
+    try {
+      for (const item of alvo.items) {
+        const { error } = await supabase
+          .from("movimentacoes")
+          .delete()
+          .eq("tipo", tipo)
+          .eq("programacao", alvo.programacao)
+          .eq("ref", alvo.ref)
+          .eq("cor", alvo.cor)
+          .eq("numero", item.size)
+          .eq("quantidade", item.qtd)
+          .eq("status", "Em aberto");
+
+        if (error) {
+          console.log("ERRO AO EXCLUIR MOVIMENTACAO:", error);
+          if (!suppressAlert) alert("Erro ao excluir movimentação no banco.");
+          return false;
+        }
+      }
+
+      console.log("MOVIMENTACOES EXCLUIDAS DO BANCO");
+      return true;
+    } catch (err) {
+      console.log("ERRO GERAL AO EXCLUIR MOVIMENTACAO:", err);
+      if (!suppressAlert) alert("Erro geral ao excluir movimentação.");
+      return false;
+    }
   };
 
   const deleteLancamento = (tipo, lancamentoId) => {
@@ -1290,9 +1758,27 @@ await salvarEstoqueNoBanco(
     });
   };
 
-  const startEditLancamento = (tipo, lancamento) => {
+  const startEditLancamento = async (tipo, lancamento) => {
     if (lancamento.status === "Finalizado") return;
-    revertLancamentoImpacto(tipo, lancamento);
+    const nextRows = applyLancamentoDeltaToRows(rows, tipo, lancamento, "revert");
+    const persist = await persistRowsToSupabase(nextRows);
+    if (!persist.ok) {
+      alert(
+        `Não foi possível salvar o estoque ao preparar a edição. Tente novamente.\n\n${persist.error?.message || persist.error || ""}`
+      );
+      return;
+    }
+
+    const okDb = await excluirMovimentacoesNoBanco(tipo, lancamento, { suppressAlert: true });
+    if (!okDb) {
+      await persistRowsToSupabase(rows);
+      alert(
+        "Não foi possível remover o lançamento antigo no Supabase. O estoque foi mantido como antes. Tente novamente."
+      );
+      return;
+    }
+
+    setRows(nextRows);
     setEditingMov({
       ...lancamento,
       tipo,
@@ -1342,145 +1828,105 @@ await salvarEstoqueNoBanco(
     });
   };
 
-  const excluirMovimentacoesNoBanco = async (tipo, alvo) => {
-  try {
-    for (const item of alvo.items) {
-      const { error } = await supabase
-        .from("movimentacoes")
-        .delete()
-        .eq("tipo", tipo)
-        .eq("programacao", alvo.programacao)
-        .eq("ref", alvo.ref)
-        .eq("cor", alvo.cor)
-        .eq("numero", item.size)
-        .eq("quantidade", item.qtd)
-        .eq("status", "Em aberto");
+  const confirmDeleteLancamento = async ({ tipo, lancamentoId }) => {
+    const source = tipo === "Pesponto" ? pespontoLancamentos : montagemLancamentos;
+    const alvo = source.find((item) => item.id === lancamentoId);
 
-      if (error) {
-        console.log("ERRO AO EXCLUIR MOVIMENTACAO:", error);
-        alert("Erro ao excluir movimentação no banco.");
-        return false;
-      }
+    if (!alvo || alvo.status === "Finalizado") {
+      setConfirmAction(null);
+      return;
     }
 
-    console.log("MOVIMENTACOES EXCLUIDAS DO BANCO");
-    return true;
-  } catch (err) {
-    console.log("ERRO GERAL AO EXCLUIR MOVIMENTACAO:", err);
-    alert("Erro geral ao excluir movimentação.");
-    return false;
-  }
-};
+    const nextRows = applyLancamentoDeltaToRows(rows, tipo, alvo, "revert");
+    const persist = await persistRowsToSupabase(nextRows);
+    if (!persist.ok) {
+      alert(
+        `Não foi possível atualizar o estoque ao excluir. Nada foi removido.\n\n${persist.error?.message || persist.error || ""}`
+      );
+      return;
+    }
 
-const confirmDeleteLancamento = async ({ tipo, lancamentoId }) => {
-  const source = tipo === "Pesponto" ? pespontoLancamentos : montagemLancamentos;
-  const alvo = source.find((item) => item.id === lancamentoId);
+    const ok = await excluirMovimentacoesNoBanco(tipo, alvo);
+    if (!ok) {
+      await persistRowsToSupabase(rows);
+      return;
+    }
 
-  if (!alvo || alvo.status === "Finalizado") {
+    setRows(nextRows);
+
+    if (tipo === "Pesponto") {
+      setPespontoLancamentos((curr) => curr.filter((item) => item.id !== lancamentoId));
+    } else {
+      setMontagemLancamentos((curr) => curr.filter((item) => item.id !== lancamentoId));
+    }
+
     setConfirmAction(null);
-    return;
-  }
-
-  const ok = await excluirMovimentacoesNoBanco(tipo, alvo);
-  if (!ok) return;
-
-  revertLancamentoImpacto(tipo, alvo);
-
-  if (tipo === "Pesponto") {
-    setPespontoLancamentos((curr) => curr.filter((item) => item.id !== lancamentoId));
-  } else {
-    setMontagemLancamentos((curr) => curr.filter((item) => item.id !== lancamentoId));
-  }
-
-  setConfirmAction(null);
-};
+  };
 
   const confirmFinalizarProgramacao = async ({ tipo, programacao }) => {
-  const lancamentos = tipo === "Pesponto" ? pespontoLancamentos : montagemLancamentos;
+    const lancamentos = tipo === "Pesponto" ? pespontoLancamentos : montagemLancamentos;
 
-  const alvo = lancamentos.filter(
-    (l) => l.programacao === programacao && l.status !== "Finalizado"
-  );
-
-  const dataFinalizacao = new Date().toLocaleDateString("pt-BR");
-
-  const nextRows = rows.map((row) => {
-    const lancamentosDaLinha = alvo.filter(
-      (lancamento) => lancamento.ref === row.ref && lancamento.cor === row.cor
+    const alvo = lancamentos.filter(
+      (l) => l.programacao === programacao && l.status !== "Finalizado"
     );
 
-    if (!lancamentosDaLinha.length) return row;
+    if (!alvo.length) {
+      alert("Não há lançamentos em aberto para essa programação.");
+      setConfirmAction(null);
+      return;
+    }
 
-    const nextData = { ...row.data };
+    const computed = computeFinalizacaoNextRows(rows, tipo, alvo);
+    if (computed.error) {
+      alert(computed.error);
+      return;
+    }
 
-    lancamentosDaLinha.forEach((lancamento) => {
-      const itens = Array.isArray(lancamento.items) ? lancamento.items : [];
+    const { nextRows } = computed;
 
-      itens.forEach((item) => {
-        const atual = nextData[item.size] || { pa: 0, est: 0, m: 0, p: 0 };
+    const persist = await persistRowsToSupabase(nextRows);
+    if (!persist.ok) {
+      alert(
+        `Não foi possível salvar o estoque no Supabase. A Costura Pronta / PA não será atualizada até o salvamento funcionar.\n\n${persist.error?.message || persist.error || "Erro desconhecido"}`
+      );
+      return;
+    }
 
-        if (tipo === "Pesponto") {
-          nextData[item.size] = {
-            ...atual,
-            p: Math.max(0, (atual.p || 0) - item.qtd),
-            est: (atual.est || 0) + item.qtd,
-          };
-        } else {
-          nextData[item.size] = {
-            ...atual,
-            m: Math.max(0, (atual.m || 0) - item.qtd),
-            pa: (atual.pa || 0) + item.qtd,
-          };
-        }
-      });
-    });
+    const { error: statusError } = await atualizarStatusMovimentacoesNoBanco(tipo, programacao);
+    if (statusError) {
+      const rollback = await persistRowsToSupabase(rows);
+      if (!rollback.ok) {
+        alert(
+          `Estoque pode estar inconsistente: o status não foi atualizado e a reversão falhou. Verifique o Supabase.\n\n${rollback.error?.message || rollback.error}`
+        );
+      } else {
+        alert(
+          `Não foi possível marcar a programação como finalizada no banco. O estoque foi mantido como antes.\n\n${statusError.message || statusError}`
+        );
+      }
+      return;
+    }
 
-    return {
-      ...row,
-      data: nextData,
-    };
-  });
+    const dataFinalizacao = new Date().toLocaleDateString("pt-BR");
 
-  setRows(nextRows);
+    setRows(nextRows);
 
-  await salvarEstoqueNoBanco(
-    nextRows
-      .map((row) =>
-        Object.entries(row.data).map(([numero, valores]) => ({
-          ref: row.ref,
-          cor: row.cor,
-          numero: Number(numero),
-          pa: valores.pa || 0,
-          est: valores.est || 0,
-          m: valores.m || 0,
-          p: valores.p || 0,
-        }))
-      )
-      .flat()
-  );
+    if (tipo === "Pesponto") {
+      setPespontoLancamentos((curr) =>
+        curr.map((l) =>
+          l.programacao === programacao ? { ...l, status: "Finalizado", dataFinalizacao } : l
+        )
+      );
+    } else {
+      setMontagemLancamentos((curr) =>
+        curr.map((l) =>
+          l.programacao === programacao ? { ...l, status: "Finalizado", dataFinalizacao } : l
+        )
+      );
+    }
 
-  await atualizarStatusMovimentacoesNoBanco(tipo, programacao);
-
-  if (tipo === "Pesponto") {
-    setPespontoLancamentos((curr) =>
-      curr.map((l) =>
-        l.programacao === programacao
-          ? { ...l, status: "Finalizado", dataFinalizacao }
-          : l
-      )
-    );
-  } else {
-    setMontagemLancamentos((curr) =>
-      curr.map((l) =>
-        l.programacao === programacao
-          ? { ...l, status: "Finalizado", dataFinalizacao }
-          : l
-      )
-    );
-  }
-
-  setConfirmAction(null);
-};
+    setConfirmAction(null);
+  };
 
 function parseGcmSheet(sheet) {
   const rowsSheet = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
@@ -1892,24 +2338,11 @@ const carregarEstoqueDoBanco = async () => {
       };
     });
 
-    const rowsEstruturadas = Object.values(agrupado).map((row) => {
-      const dataCompleta = {};
-
-      sizes.forEach((size) => {
-        dataCompleta[size] = row.data[size] || {
-          pa: 0,
-          est: 0,
-          m: 0,
-          p: 0,
-        };
-      });
-
-      return {
-        ref: row.ref,
-        cor: row.cor,
-        data: dataCompleta,
-      };
-    });
+    const rowsEstruturadas = Object.values(agrupado).map((row) => ({
+      ref: row.ref,
+      cor: row.cor,
+      data: normalizeProductData(row.data),
+    }));
 
     console.log("ESTOQUE CARREGADO:", rowsEstruturadas);
     return rowsEstruturadas;
@@ -1936,21 +2369,21 @@ const carregarMovimentacoesDoBanco = async () => {
     }
 
     const agrupar = (lista, tipo) => {
-      const mapa = new Map();
+      const agrupado = {};
 
       lista
-        .filter((item) => String(item.tipo || "") === tipo)
-        .forEach((item) => {
-          const programacao = String(item.programacao || "Sem programação");
-          const ref = String(item.ref || "");
-          const cor = String(item.cor || "");
-          const status = String(item.status || "Em aberto");
+        .filter((item) => String(item.tipo || "").trim() === tipo)
+        .forEach((item, index) => {
+          const programacao = String(item.programacao || "Sem programação").trim();
+          const ref = String(item.ref || "").trim();
+          const cor = String(item.cor || "").trim();
+          const status = String(item.status || "Em aberto").trim();
+          const dataLancamentoIso = item.data_lancamento ? String(item.data_lancamento) : "";
+          const key = `${tipo}__${programacao}__${ref}__${cor}__${status}__${dataLancamentoIso}`;
 
-          const chave = `${tipo}__${programacao}__${ref}__${cor}`;
-
-          if (!mapa.has(chave)) {
-            mapa.set(chave, {
-              id: chave,
+          if (!agrupado[key]) {
+            agrupado[key] = {
+              id: String(item.id || `${key}__${index}`),
               programacao,
               ref,
               cor,
@@ -1963,57 +2396,64 @@ const carregarMovimentacoesDoBanco = async () => {
               dataFinalizacao: item.data_finalizacao
                 ? new Date(item.data_finalizacao).toLocaleDateString("pt-BR")
                 : "",
-            });
+            };
           }
 
-          const grupo = mapa.get(chave);
-
-          if (!grupo.dataFinalizacao && item.data_finalizacao) {
-            grupo.dataFinalizacao = new Date(item.data_finalizacao).toLocaleDateString("pt-BR");
-          }
-
+          const size = Number(item.numero) || 0;
           const qtd = Number(item.quantidade) || 0;
-          const numero = Number(item.numero) || 0;
-
-          grupo.items.push({
-            size: numero,
-            qtd,
-          });
-
-          grupo.total += qtd;
+          if (size > 0 && qtd > 0) {
+            agrupado[key].items.push({ size, qtd });
+            agrupado[key].total += qtd;
+          }
         });
 
-      return Array.from(mapa.values());
+      return Object.values(agrupado).map((lancamento) => ({
+        ...lancamento,
+        items: lancamento.items.sort((a, b) => a.size - b.size),
+      }));
     };
+
+    console.log("TOTAL BRUTO MOVIMENTACOES", data.length);
+    console.log(
+      "PESPONTO BRUTO",
+      data.filter((item) => String(item.tipo || "").trim() === "Pesponto")
+    );
+    console.log(
+      "MONTAGEM BRUTO",
+      data.filter((item) => String(item.tipo || "").trim() === "Montagem")
+    );
 
     const pesponto = agrupar(data, "Pesponto");
     const montagem = agrupar(data, "Montagem");
 
-const ajustesEst = data
-  .filter(
-    (item) =>
-      String(item.tipo || "") === "Pesponto" &&
-      String(item.status || "").trim().toLowerCase() === "finalizado"
-  )
-  .map((item, index) => ({
-    id: item.id || `ajuste-${index}`,
-    ref: String(item.ref || ""),
-    cor: String(item.cor || ""),
-    size: Number(item.numero) || 0,
-    qtd: Number(item.quantidade) || 0,
-    motivo: String(item.programacao || ""),
-    dataLancamento: item.data_lancamento
-      ? new Date(item.data_lancamento).toLocaleDateString("pt-BR")
-      : "",
-    tipo: "entrada",
-  }));
+    const ajustesEst = data
+      .filter((item) => String(item.tipo || "").trim() === "Costura Pronta")
+      .filter((item) => String(item.status || "").trim() === "Lançado")
+      .map((item, index) => {
+        const prog = String(item.programacao || "").trim();
+        const isEntrada = prog.toLowerCase().includes("entrada");
+        return {
+          id: item.id || `ajuste-cp-${index}`,
+          ref: String(item.ref || "").trim(),
+          cor: String(item.cor || "").trim(),
+          size: Number(item.numero) || 0,
+          qtd: Number(item.quantidade) || 0,
+          motivo: prog || "Ajuste manual na costura pronta",
+          dataLancamento: item.data_lancamento
+            ? new Date(item.data_lancamento).toLocaleDateString("pt-BR")
+            : "",
+          tipo: isEntrada ? "entrada" : "saida",
+        };
+      });
 
-return { pesponto, montagem, ajustesEst };
-} catch (err) {
-  console.log("ERRO GERAL AO CARREGAR MOVIMENTACOES:", err);
-  return { pesponto: [], montagem: [], ajustesEst: [] };
-}
+    return { pesponto, montagem, ajustesEst };
+  } catch (error) {
+    console.log("ERRO GERAL AO CARREGAR MOVIMENTACOES:", error);
+    return { pesponto: [], montagem: [], ajustesEst: [] };
+  }
 };
+
+
 
 const carregarConfiguracoesProducaoDoBanco = async () => {
   try {
@@ -2340,11 +2780,11 @@ const salvarVendasManuais = async () => {
   const renderDashboard = () => {
     const tempoTotal = (Number(tempoProducao?.pesponto) || 0) + (Number(tempoProducao?.montagem) || 0);
 
-    const totalPA = rows.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.pa || 0), 0), 0);
-    const totalEst = rows.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.est || 0), 0), 0);
-    const totalMontagemAtual = rows.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.m || 0), 0), 0);
-    const totalPespontoAtual = rows.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.p || 0), 0), 0);
-    const vendaMensalTotal = rows.reduce((acc, row) => {
+    const totalPA = rowsNormalized.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.pa || 0), 0), 0);
+    const totalEst = rowsNormalized.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.est || 0), 0), 0);
+    const totalMontagemAtual = rowsNormalized.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.m || 0), 0), 0);
+    const totalPespontoAtual = rowsNormalized.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.p || 0), 0), 0);
+    const vendaMensalTotal = rowsNormalized.reduce((acc, row) => {
       const vendasRow = vendas?.[row.ref]?.[row.cor] || {};
       return acc + sizes.reduce((sum, size) => sum + (Number(vendasRow[size]) || 0), 0);
     }, 0);
@@ -2384,7 +2824,7 @@ const salvarVendasManuais = async () => {
       .filter((item) => item.dataFinalizacao === hojeTexto)
       .reduce((acc, item) => acc + (item.total || 0), 0);
 
-    const menorCobertura = rows
+    const menorCobertura = rowsNormalized
       .flatMap((row) => sizes.map((size) => {
         const vendaMes = Number(vendas?.[row.ref]?.[row.cor]?.[size]) || 0;
         const cobertura = coberturaDias(row.data[size]?.pa || 0, vendaMes);
@@ -2394,7 +2834,7 @@ const salvarVendasManuais = async () => {
       .sort((a, b) => a.cobertura - b.cobertura)
       .slice(0, 5);
 
-    const topModelos = rows
+    const topModelos = rowsNormalized
       .map((row) => {
         const vendasRow = vendas?.[row.ref]?.[row.cor] || {};
         const totalVendido = sizes.reduce((acc, size) => acc + (Number(vendasRow[size]) || 0), 0);
@@ -2635,7 +3075,7 @@ const salvarVendasManuais = async () => {
                     <td className="sticky left-0 z-10 bg-white border-b border-r border-slate-200 px-4 py-4 font-semibold">{row.ref}</td>
                     <td className="sticky left-[120px] z-10 bg-white border-b border-r border-slate-200 px-4 py-4">{row.cor}</td>
                     {visibleSizesControle.flatMap((size) => {
-                      const item = row.data[size];
+                      const item = row.data[size] || { pa: 0, est: 0, m: 0, p: 0 };
                       const minimo = minimos?.[row.ref]?.[row.cor]?.[size] || { pa: 0, prod: 0 };
                       const st = statusFor(item, minimo);
                       return [
@@ -2939,6 +3379,58 @@ const salvarVendasManuais = async () => {
           </div>
 
           <div className="space-y-6">
+            {selectionPreview && (
+              <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
+                <div className="text-sm font-bold uppercase tracking-wide text-[#8B1E2D]">Prévia da cor</div>
+                <div className="mt-3 text-2xl font-semibold text-slate-900">
+                  {selectionPreview.row.ref} • {selectionPreview.row.cor}
+                </div>
+
+                <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm text-slate-700">
+                  <div className="flex items-center justify-between rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
+                    <div>
+                      <div className="text-2xl font-black text-[#8B1E2D] tracking-tight">P</div>
+                      <div className="text-xs text-slate-500 mt-0.5">Pesponto</div>
+                    </div>
+                    <span className="text-3xl font-bold text-slate-900">{selectionPreview.totalPesponto}</span>
+                  </div>
+                  <div className="flex items-center justify-between rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
+                    <div>
+                      <div className="text-2xl font-black text-[#8B1E2D] tracking-tight">EST</div>
+                      <div className="text-xs text-slate-500 mt-0.5">Costura pronta</div>
+                    </div>
+                    <span className="text-3xl font-bold text-slate-900">{selectionPreview.totalEst}</span>
+                  </div>
+                  <div className="flex items-center justify-between rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
+                    <div>
+                      <div className="text-2xl font-black text-[#8B1E2D] tracking-tight">M</div>
+                      <div className="text-xs text-slate-500 mt-0.5">Montagem</div>
+                    </div>
+                    <span className="text-3xl font-bold text-slate-900">{selectionPreview.totalMontagem}</span>
+                  </div>
+                </div>
+
+                <div className="mt-6 grid grid-cols-4 md:grid-cols-6 xl:grid-cols-8 gap-3 text-center text-sm text-slate-600">
+                  {sizes.map((size) => (
+                    <div key={size} className="rounded-2xl border border-sky-100 bg-slate-50 px-3 py-3">
+                      <div className="font-semibold text-slate-900">{size}</div>
+                      <div className="mt-2 space-y-0.5 text-xs text-slate-700">
+                        <div>
+                          <span className="font-bold text-[#8B1E2D]">P</span> {selectionPreview.row.data[size]?.p || 0}
+                        </div>
+                        <div>
+                          <span className="font-bold text-[#8B1E2D]">EST</span> {selectionPreview.row.data[size]?.est || 0}
+                        </div>
+                        <div>
+                          <span className="font-bold text-[#8B1E2D]">M</span> {selectionPreview.row.data[size]?.m || 0}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
               <div className="flex items-center justify-between mb-4">
                 <div>
@@ -3027,39 +3519,6 @@ const salvarVendasManuais = async () => {
                 </div>
               )}
             </div>
-
-            {selectionPreview && (
-              <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
-                <div className="text-sm font-bold uppercase tracking-wide text-[#8B1E2D]">Prévia da cor</div>
-                <div className="mt-3 text-2xl font-semibold text-slate-900">
-                  {selectionPreview.row.ref} • {selectionPreview.row.cor}
-                </div>
-
-                <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm text-slate-700">
-                  <div className="flex items-center justify-between rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
-                    <span>No Pesponto</span>
-                    <span className="text-3xl font-bold text-slate-900">{selectionPreview.totalPesponto}</span>
-                  </div>
-                  <div className="flex items-center justify-between rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
-                    <span>Costura pronta</span>
-                    <span className="text-3xl font-bold text-slate-900">{selectionPreview.totalEst}</span>
-                  </div>
-                  <div className="flex items-center justify-between rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
-                    <span>Na Montagem</span>
-                    <span className="text-3xl font-bold text-slate-900">{selectionPreview.totalMontagem}</span>
-                  </div>
-                </div>
-
-                <div className="mt-6 grid grid-cols-4 md:grid-cols-6 xl:grid-cols-8 gap-3 text-center text-sm text-slate-600">
-                  {sizes.map((size) => (
-                    <div key={size} className="rounded-2xl border border-sky-100 bg-slate-50 px-3 py-3">
-                      <div className="font-semibold text-slate-900">{size}</div>
-                      <div className="mt-1">P: {selectionPreview.row.data[size]?.p || 0}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         </div>
       </PageShell>
@@ -3102,27 +3561,20 @@ const salvarVendasManuais = async () => {
     };
   });
 
-  setRows(nextRows);
+  const persistAjuste = await persistRowsToSupabase(nextRows);
+  if (!persistAjuste.ok) {
+    setAjusteEstErro(
+      `Erro ao salvar o ajuste no Supabase: ${persistAjuste.error?.message || persistAjuste.error || "tente novamente"}.`
+    );
+    return;
+  }
 
-  await salvarEstoqueNoBanco(
-    nextRows
-      .map((row) =>
-        Object.entries(row.data).map(([numero, valores]) => ({
-          ref: row.ref,
-          cor: row.cor,
-          numero: Number(numero),
-          pa: valores.pa || 0,
-          est: valores.est || 0,
-          m: valores.m || 0,
-          p: valores.p || 0,
-        }))
-      )
-      .flat()
-  );
+  setRows(nextRows);
 
   const ajuste = {
     id: `ajuste-est-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     data: new Date().toLocaleDateString("pt-BR"),
+    dataLancamento: new Date().toLocaleDateString("pt-BR"),
     ref: ajusteEstForm.ref,
     cor: ajusteEstForm.cor,
     tipo: ajusteEstForm.tipo,
@@ -3166,8 +3618,12 @@ const salvarVendasManuais = async () => {
                 <tr key={`cp-${row.ref}-${row.cor}`}>
                   <td className="border px-4 py-3 font-semibold">{row.ref}</td>
                   <td className="border px-4 py-3">{row.cor}</td>
-                  {sizes.map((size) => <td key={size} className="border px-3 py-3 text-center">{row.data[size].est}</td>)}
-                  <td className="border px-4 py-3 text-center font-bold">{sizes.reduce((acc, size) => acc + row.data[size].est, 0)}</td>
+                  {sizes.map((size) => (
+                    <td key={size} className="border px-3 py-3 text-center">{row.data[size]?.est ?? 0}</td>
+                  ))}
+                  <td className="border px-4 py-3 text-center font-bold">
+                    {sizes.reduce((acc, size) => acc + (row.data[size]?.est ?? 0), 0)}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -3263,8 +3719,8 @@ const salvarVendasManuais = async () => {
           <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="font-bold text-lg">Histórico de ajustes</div>
-                <div className="text-sm text-slate-500 mt-1">Registro dos últimos movimentos manuais.</div>
+                <div className="font-bold text-lg">Histórico de ajustes manuais</div>
+                <div className="text-sm text-slate-500 mt-1">Entradas e saídas registradas como movimentações Costura Pronta no banco.</div>
               </div>
               <span className="text-sm text-slate-500">{ajustesEst.length} ajuste(s)</span>
             </div>
@@ -3280,7 +3736,7 @@ const salvarVendasManuais = async () => {
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <div className="font-semibold">{ajuste.ref} • {ajuste.cor}</div>
-                        <div className="text-xs text-slate-500 mt-1">{ajuste.dataLancamento} • Numeração {ajuste.size}</div>
+                        <div className="text-xs text-slate-500 mt-1">{ajuste.dataLancamento || ajuste.data} • Numeração {ajuste.size}</div>
                       </div>
                       <span className={`px-3 py-1 rounded-full border text-xs font-semibold ${ajuste.tipo === "entrada" ? "bg-emerald-100 text-emerald-700 border-emerald-200" : "bg-red-100 text-red-700 border-red-200"}`}>
                         {ajuste.tipo === "entrada" ? `+${ajuste.qtd}` : `-${ajuste.qtd}`}
@@ -3294,6 +3750,52 @@ const salvarVendasManuais = async () => {
           </div>
         </div>
       </div>
+
+      <section className="mt-8 bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="font-bold text-lg">Pesponto finalizado → costura pronta</h2>
+            <p className="text-sm text-slate-500 mt-1">
+              Histórico das programações de pesponto já finalizadas (transferência para a coluna EST na grade acima).
+            </p>
+          </div>
+          <span className="text-sm font-medium text-slate-500 shrink-0">
+            {pespontoFinalizadosHistorico.length} finalização(ões)
+          </span>
+        </div>
+        <div className="mt-4 space-y-3 max-h-[400px] overflow-auto pr-1">
+          {pespontoFinalizadosHistorico.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500">
+              Nenhuma programação de pesponto finalizada encontrada. Finalize uma programação na aba Pesponto para ver o registro aqui.
+            </div>
+          ) : (
+            pespontoFinalizadosHistorico.map((item) => (
+              <div key={item.id} className="rounded-2xl border border-slate-200 px-4 py-3 bg-slate-50/80">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <div className="font-semibold text-slate-900">
+                      {item.ref} • {item.cor}
+                    </div>
+                    <div className="text-sm text-slate-600 mt-0.5">{item.programacao}</div>
+                  </div>
+                  <span className="px-3 py-1 rounded-full border text-xs font-semibold bg-emerald-100 text-emerald-800 border-emerald-200">
+                    Finalizado {item.dataFinalizacao || "—"}
+                  </span>
+                </div>
+                <div className="mt-2 text-xs text-slate-500">
+                  Lançado em {item.dataLancamento || "—"} • Total {item.total ?? "—"} pares
+                </div>
+                <div className="mt-2 text-xs text-slate-600 leading-relaxed">
+                  Grade:{" "}
+                  {(item.items || []).length
+                    ? item.items.map((it) => `${it.size}: ${it.qtd}`).join(" · ")
+                    : "—"}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
     </PageShell>
   );
 
@@ -3637,7 +4139,7 @@ const salvarVendasManuais = async () => {
 
   const renderSugestoes = () => {
     const tempoTotal = (Number(tempoProducao?.pesponto) || 0) + (Number(tempoProducao?.montagem) || 0);
-    const analise = rows.map((row) => {
+    const analise = rowsNormalized.map((row) => {
       const vendasRow = vendas[row.ref]?.[row.cor] || {};
       const totalVendido = sizes.reduce((acc, size) => acc + (Number(vendasRow[size]) || 0), 0);
       const totalPA = sizes.reduce((acc, size) => acc + (row.data[size]?.pa || 0), 0);
@@ -3672,7 +4174,7 @@ const salvarVendasManuais = async () => {
       .sort((a, b) => b.totalPA + b.totalProd - (a.totalPA + a.totalProd))
       .slice(0, 5);
 
-    const coberturaAnalise = rows
+    const coberturaAnalise = rowsNormalized
       .flatMap((row) => sizes.map((size) => {
         const vendaMes = Number(vendas?.[row.ref]?.[row.cor]?.[size]) || 0;
         const cobertura = coberturaDias(row.data[size]?.pa || 0, vendaMes);
@@ -3959,6 +4461,80 @@ const salvarVendasManuais = async () => {
   const renderProgramacaoDia = () => {
     const quickDays = [1, 3, 7, 15];
 
+    const subAbas = [
+      {
+        key: "Pesponto",
+        titulo: "Programação de Pesponto",
+        descricao: "Veja apenas a programação do pesponto no período selecionado.",
+        programacao: programacaoPesponto,
+        corTag: "bg-amber-100 text-amber-700 border-amber-200",
+      },
+      {
+        key: "Montagem",
+        titulo: "Programação de Montagem",
+        descricao: "Veja apenas a programação da montagem no período selecionado.",
+        programacao: programacaoMontagem,
+        corTag: "bg-sky-100 text-[#8B1E2D] border-sky-200",
+      },
+    ];
+
+    const subAbaAtiva = subAbas.find((item) => item.key === programacaoSubAba) || subAbas[0];
+
+    const todasFichas = subAbaAtiva.programacao.diasProgramados.flatMap((dia) =>
+      dia.fichas.map((ficha) => ({
+        ...ficha,
+        dia: dia.dia,
+      }))
+    );
+
+    const isFichaSel = (key) => programacaoFichaSelecao[key] !== false;
+    const toggleFichaSel = (key) =>
+      setProgramacaoFichaSelecao((p) => ({ ...p, [key]: !isFichaSel(key) }));
+
+    const allKeysProg = [];
+    if (programacaoModoVisual === "normal") {
+      subAbaAtiva.programacao.diasProgramados.forEach((dia) => {
+        dia.fichas.forEach((ficha, idx) => {
+          allKeysProg.push(`n-${programacaoSubAba}-${dia.dia}-${idx}-${ficha.nome}`);
+        });
+      });
+    } else {
+      todasFichas.forEach((ficha, idx) => {
+        allKeysProg.push(`c-${programacaoSubAba}-${ficha.dia}-${idx}-${ficha.nome}`);
+      });
+    }
+
+    const marcarTodasProg = () => {
+      setProgramacaoFichaSelecao(Object.fromEntries(allKeysProg.map((k) => [k, true])));
+    };
+    const desmarcarTodasProg = () => {
+      setProgramacaoFichaSelecao(Object.fromEntries(allKeysProg.map((k) => [k, false])));
+    };
+
+    const itensImpressao = [];
+    if (programacaoModoVisual === "normal") {
+      subAbaAtiva.programacao.diasProgramados.forEach((dia) => {
+        dia.fichas.forEach((ficha, idx) => {
+          const key = `n-${programacaoSubAba}-${dia.dia}-${idx}-${ficha.nome}`;
+          if (isFichaSel(key)) itensImpressao.push({ ficha, dia: dia.dia, ordem: idx + 1 });
+        });
+      });
+    } else {
+      todasFichas.forEach((ficha, idx) => {
+        const key = `c-${programacaoSubAba}-${ficha.dia}-${idx}-${ficha.nome}`;
+        if (isFichaSel(key)) itensImpressao.push({ ficha, dia: ficha.dia, ordem: idx + 1 });
+      });
+    }
+    itensImpressao.sort((a, b) => a.dia - b.dia || a.ordem - b.ordem);
+
+    const imprimirProgramacaoDia = () => {
+      if (itensImpressao.length === 0) {
+        alert("Selecione pelo menos uma ficha para imprimir.");
+        return;
+      }
+      window.print();
+    };
+
     const renderBlocoProgramacao = (programacao, corTag) => (
       <section className="space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -4000,23 +4576,39 @@ const salvarVendasManuais = async () => {
                           Sem fichas para este dia.
                         </div>
                       ) : (
-                        dia.fichas.map((ficha, idx) => (
-                          <div key={`${programacao.tipo}-${dia.dia}-${ficha.nome}-${idx}`} className="rounded-2xl border border-slate-200 p-4 flex items-center justify-between gap-4">
-                            <div>
-                              <div className="text-xs uppercase tracking-wide text-slate-500">Ordem {String(idx + 1).padStart(2, "0")}</div>
-                              <div className="font-semibold text-slate-900 mt-1">{ficha.cor}</div>
-                              <div className="text-sm text-slate-500 mt-1">{ficha.ref} • {ficha.nome}</div>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              <div className="text-right">
-                                <div className="text-xs text-slate-500">Prioridade</div>
-                                <div className="font-semibold text-slate-900">{Math.round(ficha.prioridade || 0)}</div>
+                        dia.fichas.map((ficha, idx) => {
+                          const fKey = `n-${programacaoSubAba}-${dia.dia}-${idx}-${ficha.nome}`;
+                          return (
+                            <div
+                              key={`${programacao.tipo}-${dia.dia}-${ficha.nome}-${idx}`}
+                              className="rounded-2xl border border-slate-200 p-4 flex items-stretch justify-between gap-3"
+                            >
+                              <label className="print:hidden flex items-start pt-1 shrink-0 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  className="mt-1 h-4 w-4 rounded border-slate-300 text-[#8B1E2D] focus:ring-[#8B1E2D]"
+                                  checked={isFichaSel(fKey)}
+                                  onChange={() => toggleFichaSel(fKey)}
+                                />
+                              </label>
+                              <div className="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                                <div>
+                                  <div className="text-xs uppercase tracking-wide text-slate-500">Ordem {String(idx + 1).padStart(2, "0")}</div>
+                                  <div className="font-semibold text-slate-900 mt-1">{ficha.cor}</div>
+                                  <div className="text-sm text-slate-500 mt-1">{ficha.ref} • {ficha.nome}</div>
+                                </div>
+                                <div className="flex items-center gap-3 shrink-0">
+                                  <div className="text-right">
+                                    <div className="text-xs text-slate-500">Prioridade</div>
+                                    <div className="font-semibold text-slate-900">{Math.round(ficha.prioridade || 0)}</div>
+                                  </div>
+                                  <div className="px-3 py-1.5 rounded-xl bg-slate-950 text-white text-sm font-semibold">{ficha.total} pares</div>
+                                  <button type="button" onClick={() => setPreviewFicha(ficha)} className="print:hidden px-3 py-1.5 text-xs font-semibold rounded-xl bg-[#FCECEE] text-[#8B1E2D] border border-[#E7C7CC] hover:bg-[#F7DDE1]">Visualizar</button>
+                                </div>
                               </div>
-                              <div className="px-3 py-1.5 rounded-xl bg-slate-950 text-white text-sm font-semibold">{ficha.total} pares</div>
-                              <button onClick={() => setPreviewFicha(ficha)} className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-[#FCECEE] text-[#8B1E2D] border border-[#E7C7CC] hover:bg-[#F7DDE1]">Visualizar</button>
                             </div>
-                          </div>
-                        ))
+                          );
+                        })
                       )}
                     </div>
                   </div>
@@ -4068,33 +4660,7 @@ const salvarVendasManuais = async () => {
       </section>
     );
 
-    const subAbas = [
-      {
-        key: "Pesponto",
-        titulo: "Programação de Pesponto",
-        descricao: "Veja apenas a programação do pesponto no período selecionado.",
-        programacao: programacaoPesponto,
-        corTag: "bg-amber-100 text-amber-700 border-amber-200",
-      },
-      {
-        key: "Montagem",
-        titulo: "Programação de Montagem",
-        descricao: "Veja apenas a programação da montagem no período selecionado.",
-        programacao: programacaoMontagem,
-        corTag: "bg-sky-100 text-[#8B1E2D] border-sky-200",
-      },
-    ];
-
-    const subAbaAtiva = subAbas.find((item) => item.key === programacaoSubAba) || subAbas[0];
-
-const todasFichas = subAbaAtiva.programacao.diasProgramados.flatMap((dia) =>
-  dia.fichas.map((ficha) => ({
-    ...ficha,
-    dia: dia.dia,
-  }))
-);
-
-const renderModoCompleto = () => (
+    const renderModoCompleto = () => (
   <section className="space-y-6">
     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
       <SummaryCard
@@ -4125,13 +4691,22 @@ const renderModoCompleto = () => (
       </div>
     ) : (
       <div className="space-y-5">
-        {todasFichas.map((ficha, idx) => (
+        {todasFichas.map((ficha, idx) => {
+          const fKey = `c-${programacaoSubAba}-${ficha.dia}-${idx}-${ficha.nome}`;
+          return (
           <div
             key={`${ficha.nome}-${idx}`}
             className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6 break-inside-avoid"
           >
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-5">
-              <div>
+              <label className="print:hidden flex items-start gap-3 cursor-pointer md:items-center">
+                <input
+                  type="checkbox"
+                  className="mt-1 md:mt-0 h-4 w-4 rounded border-slate-300 text-[#8B1E2D] focus:ring-[#8B1E2D] shrink-0"
+                  checked={isFichaSel(fKey)}
+                  onChange={() => toggleFichaSel(fKey)}
+                />
+                <div>
                 <div className="text-xs uppercase tracking-[0.18em] text-slate-400 font-semibold">
                   {programacaoSubAba} • Dia {String(ficha.dia).padStart(2, "0")}
                 </div>
@@ -4139,17 +4714,19 @@ const renderModoCompleto = () => (
                 <div className="text-sm text-slate-500 mt-1">
                   <span className="font-semibold text-slate-800">{ficha.ref}</span> • {ficha.cor}
                 </div>
-              </div>
+                </div>
+              </label>
 
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 print:ml-auto">
                 <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-right min-w-[120px]">
                   <div className="text-xs text-slate-500">Total da ficha</div>
                   <div className="text-2xl font-black text-slate-900">{ficha.total}</div>
                 </div>
 
                 <button
+                  type="button"
                   onClick={() => setPreviewFicha(ficha)}
-                  className="px-4 py-2 rounded-2xl text-sm font-semibold border bg-[#FCECEE] text-[#8B1E2D] border-[#E7C7CC] hover:bg-[#F7DDE1]"
+                  className="print:hidden px-4 py-2 rounded-2xl text-sm font-semibold border bg-[#FCECEE] text-[#8B1E2D] border-[#E7C7CC] hover:bg-[#F7DDE1]"
                 >
                   Visualizar
                 </button>
@@ -4198,7 +4775,8 @@ const renderModoCompleto = () => (
                 ))}
             </div>
           </div>
-        ))}
+        );
+        })}
       </div>
     )}
   </section>
@@ -4206,199 +4784,187 @@ const renderModoCompleto = () => (
 
     return (
       <PageShell title="Programação do Dia" subtitle="Defina quantos dias quer programar. O sistema monta períodos separados de Montagem e Pesponto para antecipar matérias-primas e execução.">
-        <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <div className="font-bold text-lg">Período da programação</div>
-              <div className="text-sm text-slate-500 mt-1">Escolha quantos dias quer planejar: 1, 3, 7, 15 ou outro período personalizado.</div>
-            </div>
-            <div className="flex flex-col gap-3 lg:items-end">
-              <div className="flex flex-wrap gap-2">
-                {quickDays.map((day) => (
-                  <button
-                    key={day}
-                    type="button"
-                    onClick={() => setProgramacaoDias(day)}
-                    className={`px-4 py-2 rounded-2xl text-sm font-semibold border ${programacaoDias === day ? "bg-[#0F172A] text-white border-[#0F172A]" : "bg-white text-[#0F172A] border-slate-200"}`}
-                  >
-                    {day} dia{day > 1 ? "s" : ""}
-                  </button>
-                ))}
-              </div>
-              <label className="text-sm font-medium text-slate-700">
-                Quantidade personalizada de dias
+        <div id="print-programacao-root" className="space-y-6">
+          <div className="print:hidden space-y-6">
+          <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
+            <div className="font-bold text-lg text-slate-900">Impressão (A4)</div>
+            <p className="text-sm text-slate-500 mt-1">Defina o título, a logo e as observações; marque as fichas e use Imprimir.</p>
+            <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <label className="text-sm font-medium text-slate-700 block">
+                Título na folha
                 <input
-                  type="number"
-                  min="1"
-                  value={programacaoDias}
-                  onChange={(e) => setProgramacaoDias(Math.max(1, Number(e.target.value) || 1))}
-                  className="mt-2 w-40 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+                  type="text"
+                  value={programacaoTituloImpressao}
+                  onChange={(e) => setProgramacaoTituloImpressao(e.target.value)}
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-semibold"
+                  placeholder="Programação do Dia"
+                />
+              </label>
+              <label className="text-sm font-medium text-slate-700 block">
+                Caminho da logo (ficheiro em <code className="text-xs bg-slate-100 px-1 rounded">public/</code>)
+                <input
+                  type="text"
+                  value={programacaoLogoImpressao}
+                  onChange={(e) => setProgramacaoLogoImpressao(e.target.value)}
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+                  placeholder="/logo-rockstar-bandeira.png"
+                />
+              </label>
+              <label className="text-sm font-medium text-slate-700 block lg:col-span-2">
+                Observações na folha
+                <textarea
+                  value={programacaoObsImpressao}
+                  onChange={(e) => setProgramacaoObsImpressao(e.target.value)}
+                  rows={2}
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm resize-y"
+                  placeholder="Notas para a equipe (aparecem na impressão)..."
                 />
               </label>
             </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button type="button" onClick={marcarTodasProg} className="px-4 py-2 rounded-2xl text-sm font-semibold border border-slate-200 bg-white hover:bg-slate-50">
+                Marcar todas as fichas
+              </button>
+              <button type="button" onClick={desmarcarTodasProg} className="px-4 py-2 rounded-2xl text-sm font-semibold border border-slate-200 bg-white hover:bg-slate-50">
+                Desmarcar todas
+              </button>
+              <span className="text-sm text-slate-500 self-center ml-auto">{itensImpressao.length} selecionada(s)</span>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <div className="font-bold text-lg">Período da programação</div>
+                <div className="text-sm text-slate-500 mt-1">Escolha quantos dias quer planejar: 1, 3, 7, 15 ou outro período personalizado.</div>
+              </div>
+              <div className="flex flex-col gap-3 lg:items-end print:hidden">
+                <div className="flex flex-wrap gap-2">
+                  {quickDays.map((day) => (
+                    <button
+                      key={day}
+                      type="button"
+                      onClick={() => setProgramacaoDias(day)}
+                      className={`px-4 py-2 rounded-2xl text-sm font-semibold border ${programacaoDias === day ? "bg-[#0F172A] text-white border-[#0F172A]" : "bg-white text-[#0F172A] border-slate-200"}`}
+                    >
+                      {day} dia{day > 1 ? "s" : ""}
+                    </button>
+                  ))}
+                </div>
+                <label className="text-sm font-medium text-slate-700">
+                  Quantidade personalizada de dias
+                  <input
+                    type="number"
+                    min="1"
+                    value={programacaoDias}
+                    onChange={(e) => setProgramacaoDias(Math.max(1, Number(e.target.value) || 1))}
+                    className="mt-2 w-40 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-4 md:p-5">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <div className="font-bold text-lg">Visualização da programação</div>
+                <div className="text-sm text-slate-500 mt-1">
+                  Alterne entre a visão por dia e a visão com todas as fichas abertas.
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2 print:hidden">
+                <button
+                  type="button"
+                  onClick={() => setProgramacaoModoVisual("normal")}
+                  className={`px-4 py-2.5 rounded-2xl text-sm font-semibold border transition ${
+                    programacaoModoVisual === "normal"
+                      ? "bg-[#0F172A] text-white border-[#0F172A]"
+                      : "bg-white text-[#0F172A] border-slate-200 hover:bg-slate-50"
+                  }`}
+                >
+                  Por dia
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setProgramacaoModoVisual("completo")}
+                  className={`px-4 py-2.5 rounded-2xl text-sm font-semibold border transition ${
+                    programacaoModoVisual === "completo"
+                      ? "bg-[#8B1E2D] text-white border-[#8B1E2D]"
+                      : "bg-white text-[#8B1E2D] border-[#E7C7CC] hover:bg-[#FFF7F8]"
+                  }`}
+                >
+                  Todas as fichas
+                </button>
+
+                <button
+                  type="button"
+                  onClick={imprimirProgramacaoDia}
+                  className="px-4 py-2.5 rounded-2xl text-sm font-semibold border bg-slate-950 text-white border-slate-950"
+                >
+                  Imprimir seleção
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <div className="font-bold text-lg">Setor da programação</div>
+                <div className="text-sm text-slate-500 mt-1">
+                  Use as sub abas para alternar entre Pesponto e Montagem sem poluir a tela.
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2 print:hidden">
+                {subAbas.map((aba) => (
+                  <button
+                    key={aba.key}
+                    type="button"
+                    onClick={() => setProgramacaoSubAba(aba.key)}
+                    className={`px-4 py-2.5 rounded-2xl text-sm font-semibold border transition ${
+                      programacaoSubAba === aba.key
+                        ? "bg-[#8B1E2D] text-white border-[#8B1E2D]"
+                        : "bg-[#FFF7F8] text-[#0F172A] border-slate-200 hover:bg-white"
+                    }`}
+                  >
+                    {aba.key}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              <span className="font-semibold text-slate-900">{subAbaAtiva.titulo}</span>
+              <span className="ml-2">{subAbaAtiva.descricao}</span>
+            </div>
+          </div>
+
+          {programacaoModoVisual === "normal"
+            ? renderBlocoProgramacao(subAbaAtiva.programacao, subAbaAtiva.corTag)
+            : renderModoCompleto()}
+          </div>
+
+          <div className="hidden print:block programacao-print-sheet">
+            <ProgramacaoDiaFolhaImpressao
+              titulo={programacaoTituloImpressao}
+              logoSrc={programacaoLogoImpressao?.trim() || "/logo-rockstar-bandeira.png"}
+              setor={programacaoSubAba}
+              modoLabel={programacaoModoVisual === "normal" ? "Visão: por dia" : "Visão: todas as fichas"}
+              diasCount={programacaoDias}
+              dataImpressao={new Date().toLocaleString("pt-BR")}
+              observacoes={programacaoObsImpressao}
+              itens={itensImpressao}
+              sizesList={sizes}
+            />
           </div>
         </div>
-
-<div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-4 md:p-5">
-  <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-    <div>
-      <div className="font-bold text-lg">Visualização da programação</div>
-      <div className="text-sm text-slate-500 mt-1">
-        Alterne entre a visão por dia e a visão com todas as fichas abertas.
-      </div>
-    </div>
-
-    <div className="flex flex-wrap gap-2">
-      <button
-        type="button"
-        onClick={() => setProgramacaoModoVisual("normal")}
-        className={`px-4 py-2.5 rounded-2xl text-sm font-semibold border transition ${
-          programacaoModoVisual === "normal"
-            ? "bg-[#0F172A] text-white border-[#0F172A]"
-            : "bg-white text-[#0F172A] border-slate-200 hover:bg-slate-50"
-        }`}
-      >
-        Por dia
-      </button>
-
-      <button
-        type="button"
-        onClick={() => setProgramacaoModoVisual("completo")}
-        className={`px-4 py-2.5 rounded-2xl text-sm font-semibold border transition ${
-          programacaoModoVisual === "completo"
-            ? "bg-[#8B1E2D] text-white border-[#8B1E2D]"
-            : "bg-white text-[#8B1E2D] border-[#E7C7CC] hover:bg-[#FFF7F8]"
-        }`}
-      >
-        Todas as fichas
-      </button>
-
-      <button
-        type="button"
-        onClick={() => window.print()}
-        className="px-4 py-2.5 rounded-2xl text-sm font-semibold border bg-slate-950 text-white border-slate-950"
-      >
-        Imprimir tudo
-      </button>
-    </div>
-  </div>
-
-  <div className="mt-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-    <div>
-      <div className="font-bold text-lg">Setor da programação</div>
-      <div className="text-sm text-slate-500 mt-1">
-        Use as sub abas para alternar entre Pesponto e Montagem sem poluir a tela.
-      </div>
-    </div>
-
-    <div className="flex flex-wrap gap-2">
-      {subAbas.map((aba) => (
-        <button
-          key={aba.key}
-          type="button"
-          onClick={() => setProgramacaoSubAba(aba.key)}
-          className={`px-4 py-2.5 rounded-2xl text-sm font-semibold border transition ${
-            programacaoSubAba === aba.key
-              ? "bg-[#8B1E2D] text-white border-[#8B1E2D]"
-              : "bg-[#FFF7F8] text-[#0F172A] border-slate-200 hover:bg-white"
-          }`}
-        >
-          {aba.key}
-        </button>
-      ))}
-    </div>
-  </div>
-
-  <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-    <span className="font-semibold text-slate-900">{subAbaAtiva.titulo}</span>
-    <span className="ml-2">{subAbaAtiva.descricao}</span>
-  </div>
-</div>
-
-        {programacaoModoVisual === "normal"
-  ? renderBlocoProgramacao(subAbaAtiva.programacao, subAbaAtiva.corTag)
-  : renderModoCompleto()}
       </PageShell>
     );
   };
 
   const renderRelatorioProducao = () => {
-    const handlePrintRelatorio = (linhasRelatorio) => {
-      const conteudo = document.createElement("div");
-
-      const totalPares = linhasRelatorio.reduce((acc, item) => acc + (item.total || 0), 0);
-      const emAberto = linhasRelatorio.filter((item) => item.status === "Em aberto").length;
-      const finalizados = linhasRelatorio.filter((item) => item.status === "Finalizado").length;
-
-      const dataGeracao = new Date().toLocaleString("pt-BR");
-
-      conteudo.innerHTML = `
-        <div style="font-family: Arial; padding:20px;">
-          <h1 style="margin:0;">ROCK STAR</h1>
-          <h2 style="margin:0;">RELATÓRIO DE PRODUÇÃO</h2>
-          <p>Gerado em: ${dataGeracao}</p>
-
-          <hr/>
-
-          <h3>Resumo</h3>
-          <p><b>Programações:</b> ${linhasRelatorio.length}</p>
-          <p><b>Total de pares:</b> ${totalPares}</p>
-          <p><b>Em aberto:</b> ${emAberto}</p>
-          <p><b>Finalizados:</b> ${finalizados}</p>
-
-          <hr/>
-
-          ${["Pesponto", "Montagem"].map(setor => {
-            const linhas = linhasRelatorio.filter(item => item.setor === setor);
-
-            return `
-              <h3>${setor}</h3>
-              <table border="1" cellspacing="0" cellpadding="5" width="100%">
-                <thead>
-                  <tr>
-                    <th>Data</th>
-                    <th>Programação</th>
-                    <th>REF</th>
-                    <th>Cor</th>
-                    <th>Pares</th>
-                    <th>Status</th>
-                    <th>Detalhe</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${linhas.map(item => {
-                    const detalhe = (item.items || []).map(e => `${e.size}: ${e.qtd}`).join(" | ");
-                    return `
-                      <tr>
-                        <td>${item.dataLancamento || "-"}</td>
-                        <td>${item.programacao || "-"}</td>
-                        <td>${item.ref || "-"}</td>
-                        <td>${item.cor || "-"}</td>
-                        <td>${item.total || 0}</td>
-                        <td>${item.status || "-"}</td>
-                        <td>${detalhe || "-"}</td>
-                      </tr>
-                    `;
-                  }).join("")}
-                </tbody>
-              </table>
-            `;
-          }).join("")}
-
-          <br/><br/>
-          <div style="display:flex; justify-content:space-between;">
-            <div>_________________________<br/>Responsável Produção</div>
-            <div>_________________________<br/>Conferência</div>
-          </div>
-        </div>
-      `;
-
-      const janela = window.open("", "_blank");
-      janela.document.write(conteudo.innerHTML);
-      janela.document.close();
-      janela.print();
-    };
-
     const relatorioRefs = ["TODAS", ...Array.from(new Set(rows.map((row) => row.ref)))];
     const relatorioCores = ["TODAS", ...Array.from(new Set(rows.map((row) => row.cor))).sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" }))];
     const parseDateBr = (value) => {
@@ -4441,6 +5007,48 @@ const renderModoCompleto = () => (
     const totalPares = linhas.reduce((acc, item) => acc + (item.total || 0), 0);
     const emAberto = linhas.filter((item) => item.status === "Em aberto");
     const finalizados = linhas.filter((item) => item.status === "Finalizado");
+
+    const abrirPreviaImpressaoRelatorio = () => {
+      if (linhas.length === 0) {
+        alert("Nenhum registro para imprimir. Ajuste os filtros.");
+        return;
+      }
+      const periodo =
+        relatorioDataInicial || relatorioDataFinal
+          ? [relatorioDataInicial, relatorioDataFinal].filter(Boolean).join(" → ")
+          : "—";
+      const filtros = {
+        periodo,
+        ref: relatorioRef,
+        cor: relatorioCor,
+        setor: relatorioSetor === "TODOS" ? "Todos" : relatorioSetor,
+        status:
+          relatorioStatus === "TODOS"
+            ? "Todos"
+            : relatorioStatus === "EM_ABERTO"
+              ? "Em aberto"
+              : "Finalizado",
+      };
+      const resumo = {
+        programacoes: linhas.length,
+        totalPares: linhas.reduce((acc, item) => acc + (item.total || 0), 0),
+        emAberto: linhas.filter((item) => item.status === "Em aberto").length,
+        finalizados: linhas.filter((item) => item.status === "Finalizado").length,
+      };
+      const gruposPorSetor = ["Pesponto", "Montagem"].map((setor) => ({
+        setor,
+        linhas: linhas.filter((item) => item.setor === setor),
+      }));
+      setRelatorioPrintDraft({
+        dataGeracao: new Date().toLocaleString("pt-BR"),
+        filtros,
+        resumo,
+        gruposPorSetor,
+      });
+      setRelatorioPrintTitulo("RELATÓRIO DE PRODUÇÃO");
+      setRelatorioPrintObs("");
+      setRelatorioPrintModalOpen(true);
+    };
 
     return (
       <PageShell title="Relatório de Produção" subtitle="Filtre por período, setor e status para acompanhar tudo que está em aberto ou que foi finalizado.">
@@ -4528,13 +5136,14 @@ const renderModoCompleto = () => (
               <h2 className="font-bold text-lg">Resultado do período</h2>
               <p className="text-sm text-slate-500 mt-1">A data usada no filtro é a de finalização para itens finalizados e a de lançamento para itens em aberto.</p>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-col items-end gap-1">
               <span className="text-sm text-slate-500">{linhas.length} linha(s)</span>
               <button
-                onClick={() => handlePrintRelatorio(linhas)}
-                className="rounded-2xl bg-slate-950 text-white px-4 py-3 text-sm font-semibold shadow-sm"
+                type="button"
+                onClick={abrirPreviaImpressaoRelatorio}
+                className="rounded-2xl bg-slate-950 text-white px-4 py-3 text-sm font-semibold shadow-sm hover:bg-slate-800 transition"
               >
-                Imprimir relatório
+                Prévia e impressão
               </button>
             </div>
           </div>
@@ -4626,6 +5235,22 @@ const renderModoCompleto = () => (
     }
   };
 
+  const fecharPreviaRelatorio = () => {
+    setRelatorioPrintModalOpen(false);
+    setRelatorioPrintDraft(null);
+  };
+
+  const confirmarImpressaoRelatorio = () => {
+    if (!relatorioPrintDraft) return;
+    setPrintRelatorioData({
+      ...relatorioPrintDraft,
+      titulo: relatorioPrintTitulo.trim() || "RELATÓRIO DE PRODUÇÃO",
+      observacoes: relatorioPrintObs.trim(),
+    });
+    setRelatorioPrintModalOpen(false);
+    setRelatorioPrintDraft(null);
+  };
+
   const menuLabels = {
     "Dashboard": "Painel",
     "Controle Geral": "Painel",
@@ -4644,19 +5269,40 @@ const renderModoCompleto = () => (
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#FDF2F4_0%,_#FFFFFF_30%,_#F8FAFC_100%)] text-slate-900">
       <style>{`
+        @page {
+          size: A4;
+          margin: 10mm;
+        }
         @media print {
           body * { visibility: hidden !important; }
-          #print-root, #print-root * { visibility: visible !important; }
-          #print-root {
+          #print-root, #print-root *,
+          #print-programacao-root, #print-programacao-root * { visibility: visible !important; }
+          #print-root, #print-programacao-root {
             position: absolute;
             left: 0;
             top: 0;
             width: 100%;
             background: white;
-            padding: 24px;
+            padding: 0;
             color: #0f172a;
           }
-          #print-root .print-section { page-break-inside: avoid; }
+          #print-root {
+            padding: 24px;
+          }
+          .programacao-print-sheet {
+            padding: 0;
+            max-width: 100%;
+          }
+          #print-root .print-section,
+          #print-programacao-root .print-section { page-break-inside: avoid; }
+          .programacao-print-ficha {
+            break-inside: avoid;
+            page-break-inside: avoid;
+          }
+          .programacao-print-doc {
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
         }
       `}</style>
       <div className="flex min-h-screen">
@@ -4835,88 +5481,71 @@ const renderModoCompleto = () => (
         </div>
       )}
 
+      {relatorioPrintModalOpen && relatorioPrintDraft && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/60 p-4 overflow-y-auto">
+          <div className="w-full max-w-4xl rounded-[28px] bg-white shadow-2xl border border-slate-200 my-8 flex flex-col max-h-[90vh]">
+            <div className="px-6 py-5 border-b border-slate-200 shrink-0">
+              <div className="text-lg font-bold text-slate-900">Prévia do relatório</div>
+              <p className="text-sm text-slate-500 mt-1">Ajuste o título e as observações; a prévia atualiza em tempo real.</p>
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <label className="text-sm font-medium text-slate-700 block">
+                  Título na impressão
+                  <input
+                    type="text"
+                    value={relatorioPrintTitulo}
+                    onChange={(e) => setRelatorioPrintTitulo(e.target.value)}
+                    className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-[#0F172A]"
+                    placeholder="RELATÓRIO DE PRODUÇÃO"
+                  />
+                </label>
+                <div className="md:col-span-2">
+                  <label className="text-sm font-medium text-slate-700 block">
+                    Observações (aparecem no relatório impresso)
+                    <textarea
+                      value={relatorioPrintObs}
+                      onChange={(e) => setRelatorioPrintObs(e.target.value)}
+                      rows={3}
+                      className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm resize-y min-h-[80px]"
+                      placeholder="Ex.: conferir prioridades da semana, observações para o setor..."
+                    />
+                  </label>
+                </div>
+              </div>
+            </div>
+            <div className="px-6 py-4 overflow-y-auto flex-1 min-h-0 border-b border-slate-100 bg-slate-100/80">
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-inner">
+                <RelatorioProducaoPrintDocument
+                  data={{
+                    ...relatorioPrintDraft,
+                    titulo: relatorioPrintTitulo,
+                    observacoes: relatorioPrintObs,
+                  }}
+                />
+              </div>
+            </div>
+            <div className="px-6 py-4 flex flex-wrap justify-end gap-3 shrink-0 bg-white rounded-b-[28px]">
+              <button
+                type="button"
+                onClick={fecharPreviaRelatorio}
+                className="rounded-2xl border border-slate-200 px-5 py-3 text-sm font-semibold bg-white hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmarImpressaoRelatorio}
+                className="rounded-2xl bg-[#8B1E2D] text-white px-5 py-3 text-sm font-semibold hover:bg-[#7a1a28] shadow-sm"
+              >
+                Imprimir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {printRelatorioData && (
         <div id="print-root" className="hidden print:block">
-          <div className="flex items-start justify-between gap-4 border-b-2 border-slate-900 pb-3 print-section">
-            <div className="text-xl font-bold tracking-[0.08em]">ROCK STAR</div>
-            <div className="text-center flex-1">
-              <div className="text-2xl font-bold">RELATÓRIO DE PRODUÇÃO</div>
-              <div className="text-xs text-slate-500 mt-1">Gerado pelo Módulo Produção</div>
-            </div>
-            <div className="text-xs text-right min-w-[180px]">
-              <div><strong>Gerado em:</strong> {printRelatorioData.dataGeracao}</div>
-            </div>
-          </div>
-
-          <div className="mt-4 border border-slate-300 bg-slate-50 p-3 text-xs print-section">
-            <div><strong>Filtros aplicados:</strong></div>
-            <div className="mt-1">
-              Período: {printRelatorioData.filtros.periodo} | REF: {printRelatorioData.filtros.ref} | Cor: {printRelatorioData.filtros.cor} | Setor: {printRelatorioData.filtros.setor} | Status: {printRelatorioData.filtros.status}
-            </div>
-          </div>
-
-          <div className="mt-4 grid grid-cols-4 gap-3 print-section">
-            <div className="border border-slate-300 p-3 text-center">
-              <div className="text-sm">Programações</div>
-              <div className="text-2xl font-bold mt-1">{printRelatorioData.resumo.programacoes}</div>
-            </div>
-            <div className="border border-slate-300 p-3 text-center">
-              <div className="text-sm">Total de pares</div>
-              <div className="text-2xl font-bold mt-1">{printRelatorioData.resumo.totalPares}</div>
-            </div>
-            <div className="border border-slate-300 p-3 text-center">
-              <div className="text-sm">Em aberto</div>
-              <div className="text-2xl font-bold mt-1">{printRelatorioData.resumo.emAberto}</div>
-            </div>
-            <div className="border border-slate-300 p-3 text-center">
-              <div className="text-sm">Finalizados</div>
-              <div className="text-2xl font-bold mt-1">{printRelatorioData.resumo.finalizados}</div>
-            </div>
-          </div>
-
-          {printRelatorioData.gruposPorSetor.map((grupo) => (
-            <div key={`print-${grupo.setor}`} className="mt-6 print-section">
-              <div className="text-base font-bold border-b border-slate-300 pb-2">{grupo.setor.toUpperCase()}</div>
-              {grupo.linhas.length === 0 ? (
-                <div className="mt-3 p-4 border border-dashed border-slate-300 text-sm text-slate-500 text-center">Sem registros para este setor no período selecionado.</div>
-              ) : (
-                <table className="w-full border-collapse mt-3 text-[11px]">
-                  <thead>
-                    <tr className="bg-slate-50">
-                      <th className="border border-slate-300 px-2 py-2 text-left">Data</th>
-                      <th className="border border-slate-300 px-2 py-2 text-left">Programação</th>
-                      <th className="border border-slate-300 px-2 py-2 text-left">REF</th>
-                      <th className="border border-slate-300 px-2 py-2 text-left">Cor</th>
-                      <th className="border border-slate-300 px-2 py-2 text-center">Pares</th>
-                      <th className="border border-slate-300 px-2 py-2 text-center">Status</th>
-                      <th className="border border-slate-300 px-2 py-2 text-left">Detalhe</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {grupo.linhas.map((item) => {
-                      const dataRef = item.status === "Finalizado" && item.dataFinalizacao ? item.dataFinalizacao : item.dataLancamento;
-                      return (
-                        <tr key={`print-${grupo.setor}-${item.id}`}>
-                          <td className="border border-slate-300 px-2 py-2">{dataRef || "-"}</td>
-                          <td className="border border-slate-300 px-2 py-2">{item.programacao || "-"}</td>
-                          <td className="border border-slate-300 px-2 py-2">{item.ref || "-"}</td>
-                          <td className="border border-slate-300 px-2 py-2">{item.cor || "-"}</td>
-                          <td className="border border-slate-300 px-2 py-2 text-center">{item.total || 0}</td>
-                          <td className="border border-slate-300 px-2 py-2 text-center">{item.status || "-"}</td>
-                          <td className="border border-slate-300 px-2 py-2">{(item.items || []).map((entry) => `${entry.size}: ${entry.qtd}`).join(" | ") || "-"}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          ))}
-
-          <div className="mt-10 flex justify-between gap-6 print-section">
-            <div className="flex-1 text-center pt-8 border-t border-slate-900 text-xs">Responsável Produção</div>
-            <div className="flex-1 text-center pt-8 border-t border-slate-900 text-xs">Conferência</div>
-          </div>
+          <RelatorioProducaoPrintDocument data={printRelatorioData} />
         </div>
       )}
     </div>
