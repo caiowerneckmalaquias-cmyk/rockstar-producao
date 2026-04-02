@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -772,13 +772,14 @@ function buildProgramacaoPeriodo(fichasBase, suggestionsBase, capacidadeDia = 39
   };
 }
 
-function SummaryCard({ title, value, subtitle }) {
+function SummaryCard({ title, value, subtitle, action }) {
   return (
     <div className="relative overflow-hidden rounded-[28px] border border-[#E5E7EB] bg-white p-5 shadow-[0_12px_30px_rgba(15,23,42,0.08)] backdrop-blur">
       <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#8B1E2D] via-[#6F1421] to-[#0F172A]" />
       <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">{title}</div>
       <div className="mt-3 text-3xl font-black tracking-tight text-[#0F172A]">{value}</div>
       <div className="mt-2 text-sm text-slate-500">{subtitle}</div>
+      {action ? <div className="mt-3">{action}</div> : null}
     </div>
   );
 }
@@ -1130,6 +1131,9 @@ const [programacaoLogoImpressao, setProgramacaoLogoImpressao] = useState("/logo-
 const [programacaoFichaSelecao, setProgramacaoFichaSelecao] = useState({});
 const [movListPage, setMovListPage] = useState({ Pesponto: 1, Montagem: 1 });
 const [feriadosTexto, setFeriadosTexto] = useState("");
+const [dashboardFeriadosAberto, setDashboardFeriadosAberto] = useState(false);
+const [dashboardMaisKpisAberto, setDashboardMaisKpisAberto] = useState(false);
+const [dashboardMobileTab, setDashboardMobileTab] = useState("visao");
 
 const refs = useMemo(() => rows.map((r) => `${r.ref}__${r.cor}`), [rows]);
 const firstRef = refs[0] ? refs[0].split("__")[0] : "";
@@ -1263,11 +1267,6 @@ const fichasPesponto = useMemo(
   [suggestions]
 );
 
-console.log("SUGESTOES MONTAGEM", suggestions.montagem);
-console.log("SUGESTOES PESPONTO", suggestions.pesponto);
-console.log("FICHAS MONTAGEM", fichasMontagem);
-console.log("FICHAS PESPONTO", fichasPesponto);
-
 const programacaoPesponto = useMemo(
   () =>
     buildProgramacaoPeriodo(
@@ -1291,6 +1290,119 @@ const programacaoMontagem = useMemo(
     ),
   [fichasMontagem, suggestions, programacaoDias, capacidadeMontagemDia]
 );
+
+  const dashboardData = useMemo(() => {
+    const tempoTotal = (Number(tempoProducao?.pesponto) || 0) + (Number(tempoProducao?.montagem) || 0);
+
+    const totalPA = rowsNormalized.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.pa || 0), 0), 0);
+    const totalEst = rowsNormalized.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.est || 0), 0), 0);
+    const totalMontagemAtual = rowsNormalized.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.m || 0), 0), 0);
+    const totalPespontoAtual = rowsNormalized.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.p || 0), 0), 0);
+    const vendaMensalTotal = rowsNormalized.reduce((acc, row) => {
+      const vendasRow = vendas?.[row.ref]?.[row.cor] || {};
+      return acc + sizes.reduce((sum, size) => sum + (Number(vendasRow[size]) || 0), 0);
+    }, 0);
+    const vendaDiariaTotal = vendaMensalTotal / 30;
+
+    const hoje = new Date();
+    const feriadosLista = parseFeriadosText(feriadosTexto).filter((dataBr) => {
+      const parsed = parseDateBrToDate(dataBr);
+      return parsed && parsed.getMonth() === hoje.getMonth() && parsed.getFullYear() === hoje.getFullYear();
+    });
+    const diasUteisNoMes = contarDiasUteisDoMesAteHoje(hoje, feriadosLista);
+    const diasUteisSafe = Math.max(1, diasUteisNoMes);
+    const mesAtual = hoje.getMonth();
+    const anoAtual = hoje.getFullYear();
+    const hojeTexto = hoje.toLocaleDateString("pt-BR");
+
+    const finalizadosMesPesponto = pespontoLancamentos.filter((item) => {
+      if (item.status !== "Finalizado" || !item.dataFinalizacao) return false;
+      const data = parseDateBrToDate(item.dataFinalizacao);
+      return data && data.getMonth() === mesAtual && data.getFullYear() === anoAtual;
+    });
+
+    const finalizadosMesMontagem = montagemLancamentos.filter((item) => {
+      if (item.status !== "Finalizado" || !item.dataFinalizacao) return false;
+      const data = parseDateBrToDate(item.dataFinalizacao);
+      return data && data.getMonth() === mesAtual && data.getFullYear() === anoAtual;
+    });
+
+    const totalFinalizadoMesPesponto = finalizadosMesPesponto.reduce((acc, item) => acc + (item.total || 0), 0);
+    const totalFinalizadoMesMontagem = finalizadosMesMontagem.reduce((acc, item) => acc + (item.total || 0), 0);
+    const mediaFinalizadaPesponto = totalFinalizadoMesPesponto / diasUteisSafe;
+    const mediaFinalizadaMontagem = totalFinalizadoMesMontagem / diasUteisSafe;
+
+    const finalizadoHojePesponto = finalizadosMesPesponto
+      .filter((item) => item.dataFinalizacao === hojeTexto)
+      .reduce((acc, item) => acc + (item.total || 0), 0);
+    const finalizadoHojeMontagem = finalizadosMesMontagem
+      .filter((item) => item.dataFinalizacao === hojeTexto)
+      .reduce((acc, item) => acc + (item.total || 0), 0);
+
+    const menorCobertura = rowsNormalized
+      .flatMap((row) =>
+        sizes.map((size) => {
+          const vendaMes = Number(vendas?.[row.ref]?.[row.cor]?.[size]) || 0;
+          const cobertura = coberturaDias(row.data[size]?.pa || 0, vendaMes);
+          return { ref: row.ref, cor: row.cor, size, cobertura, pa: row.data[size]?.pa || 0, vendaMes };
+        })
+      )
+      .filter((item) => item.cobertura !== null)
+      .sort((a, b) => a.cobertura - b.cobertura)
+      .slice(0, 5);
+
+    const topModelos = rowsNormalized
+      .map((row) => {
+        const vendasRow = vendas?.[row.ref]?.[row.cor] || {};
+        const totalVendido = sizes.reduce((acc, size) => acc + (Number(vendasRow[size]) || 0), 0);
+        const totalPARef = sizes.reduce((acc, size) => acc + (row.data[size]?.pa || 0), 0);
+        return { ref: row.ref, cor: row.cor, totalVendido, totalPA: totalPARef };
+      })
+      .sort((a, b) => b.totalVendido - a.totalVendido || a.totalPA - b.totalPA)
+      .slice(0, 5);
+
+    const programacaoHojePesponto = programacaoPesponto?.diasProgramados?.[0];
+    const programacaoHojeMontagem = programacaoMontagem?.diasProgramados?.[0];
+
+    return {
+      tempoTotal,
+      totalPA,
+      totalEst,
+      totalMontagemAtual,
+      totalPespontoAtual,
+      vendaMensalTotal,
+      vendaDiariaTotal,
+      hoje,
+      hojeTexto,
+      feriadosLista,
+      diasUteisNoMes,
+      diasUteisSafe,
+      mediaFinalizadaPesponto,
+      mediaFinalizadaMontagem,
+      finalizadoHojePesponto,
+      finalizadoHojeMontagem,
+      menorCobertura,
+      topModelos,
+      programacaoHojePesponto,
+      programacaoHojeMontagem,
+    };
+  }, [
+    rowsNormalized,
+    vendas,
+    tempoProducao,
+    feriadosTexto,
+    pespontoLancamentos,
+    montagemLancamentos,
+    programacaoPesponto,
+    programacaoMontagem,
+  ]);
+
+  const irControleGeral = useCallback((ref, cor, numero) => {
+    setControleFiltroRef(ref != null && ref !== "" ? ref : "TODAS");
+    setControleFiltroCor(cor != null && cor !== "" ? cor : "TODAS");
+    setControleFiltroNumero(numero != null && numero !== "" ? String(numero) : "TODAS");
+    setActive("Controle Geral");
+  }, []);
 
   useEffect(() => {
     setDraftMinimos(minimos);
@@ -2796,201 +2908,303 @@ const salvarVendasManuais = async () => {
   };
 
   const renderDashboard = () => {
-    const tempoTotal = (Number(tempoProducao?.pesponto) || 0) + (Number(tempoProducao?.montagem) || 0);
+    const d = dashboardData;
+    const tempoTotal = d.tempoTotal;
+    const capP = Number(capacidadePespontoDia) || 396;
+    const capM = Number(capacidadeMontagemDia) || 396;
+    const progP = Math.min(100, ((d.programacaoHojePesponto?.totalProgramado || 0) / capP) * 100);
+    const progM = Math.min(100, ((d.programacaoHojeMontagem?.totalProgramado || 0) / capM) * 100);
+    const dashTabs = [
+      { id: "visao", label: "Visão" },
+      { id: "calendario", label: "Calendário" },
+      { id: "riscos", label: "Riscos" },
+      { id: "vendas", label: "Vendas" },
+    ];
+    const tabOn = (id) => dashboardMobileTab === id;
+    const showMobile = (id) => `${tabOn(id) ? "" : "hidden"} lg:block`;
 
-    const totalPA = rowsNormalized.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.pa || 0), 0), 0);
-    const totalEst = rowsNormalized.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.est || 0), 0), 0);
-    const totalMontagemAtual = rowsNormalized.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.m || 0), 0), 0);
-    const totalPespontoAtual = rowsNormalized.reduce((acc, row) => acc + sizes.reduce((sum, size) => sum + (row.data[size]?.p || 0), 0), 0);
-    const vendaMensalTotal = rowsNormalized.reduce((acc, row) => {
-      const vendasRow = vendas?.[row.ref]?.[row.cor] || {};
-      return acc + sizes.reduce((sum, size) => sum + (Number(vendasRow[size]) || 0), 0);
-    }, 0);
-    const vendaDiariaTotal = vendaMensalTotal / 30;
-
-    const hoje = new Date();
-    const feriadosLista = parseFeriadosText(feriadosTexto).filter((dataBr) => {
-      const parsed = parseDateBrToDate(dataBr);
-      return parsed && parsed.getMonth() === hoje.getMonth() && parsed.getFullYear() === hoje.getFullYear();
-    });
-    const diasUteisNoMes = contarDiasUteisDoMesAteHoje(hoje, feriadosLista);
-    const mesAtual = hoje.getMonth();
-    const anoAtual = hoje.getFullYear();
-    const hojeTexto = hoje.toLocaleDateString("pt-BR");
-
-    const finalizadosMesPesponto = pespontoLancamentos.filter((item) => {
-      if (item.status !== "Finalizado" || !item.dataFinalizacao) return false;
-      const data = parseDateBrToDate(item.dataFinalizacao)
-      return data && data.getMonth() === mesAtual && data.getFullYear() === anoAtual;
-    });
-
-    const finalizadosMesMontagem = montagemLancamentos.filter((item) => {
-      if (item.status !== "Finalizado" || !item.dataFinalizacao) return false;
-      const data = parseDateBrToDate(item.dataFinalizacao)
-      return data && data.getMonth() === mesAtual && data.getFullYear() === anoAtual;
-    });
-
-    const totalFinalizadoMesPesponto = finalizadosMesPesponto.reduce((acc, item) => acc + (item.total || 0), 0);
-    const totalFinalizadoMesMontagem = finalizadosMesMontagem.reduce((acc, item) => acc + (item.total || 0), 0);
-    const mediaFinalizadaPesponto = totalFinalizadoMesPesponto / diasUteisNoMes;
-    const mediaFinalizadaMontagem = totalFinalizadoMesMontagem / diasUteisNoMes;
-
-    const finalizadoHojePesponto = finalizadosMesPesponto
-      .filter((item) => item.dataFinalizacao === hojeTexto)
-      .reduce((acc, item) => acc + (item.total || 0), 0);
-    const finalizadoHojeMontagem = finalizadosMesMontagem
-      .filter((item) => item.dataFinalizacao === hojeTexto)
-      .reduce((acc, item) => acc + (item.total || 0), 0);
-
-    const menorCobertura = rowsNormalized
-      .flatMap((row) => sizes.map((size) => {
-        const vendaMes = Number(vendas?.[row.ref]?.[row.cor]?.[size]) || 0;
-        const cobertura = coberturaDias(row.data[size]?.pa || 0, vendaMes);
-        return { ref: row.ref, cor: row.cor, size, cobertura, pa: row.data[size]?.pa || 0, vendaMes };
-      }))
-      .filter((item) => item.cobertura !== null)
-      .sort((a, b) => a.cobertura - b.cobertura)
-      .slice(0, 5);
-
-    const topModelos = rowsNormalized
-      .map((row) => {
-        const vendasRow = vendas?.[row.ref]?.[row.cor] || {};
-        const totalVendido = sizes.reduce((acc, size) => acc + (Number(vendasRow[size]) || 0), 0);
-        const totalPARef = sizes.reduce((acc, size) => acc + (row.data[size]?.pa || 0), 0);
-        return { ref: row.ref, cor: row.cor, totalVendido, totalPA: totalPARef };
-      })
-      .sort((a, b) => b.totalVendido - a.totalVendido || a.totalPA - b.totalPA)
-      .slice(0, 5);
-
-    const programacaoHojePesponto = programacaoPesponto?.diasProgramados?.[0];
-    const programacaoHojeMontagem = programacaoMontagem?.diasProgramados?.[0];
+    const calendarioBlock = (
+      <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-5 sm:p-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <h2 className="font-bold text-lg">Calendário útil do mês</h2>
+            <p className="text-sm text-slate-500 mt-1">
+              Os cards de média finalizada usam apenas dias úteis transcorridos, desconsiderando sábados, domingos e os feriados informados abaixo.
+            </p>
+          </div>
+          <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-right shrink-0">
+            <div className="text-xs text-slate-500">Dias úteis considerados</div>
+            <div className="text-2xl font-bold text-slate-900">{d.diasUteisNoMes}</div>
+          </div>
+        </div>
+        <div className="mt-4 grid grid-cols-1 xl:grid-cols-[1fr_280px] gap-4">
+          <label className="text-sm font-medium text-slate-700">
+            Feriados do mês atual
+            <textarea
+              value={feriadosTexto}
+              onChange={(e) => setFeriadosTexto(e.target.value)}
+              placeholder="Ex.: 01/05/2026&#10;11/06/2026"
+              className="mt-2 w-full min-h-[96px] rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+            />
+            <div className="mt-2 text-xs text-slate-500">Digite um feriado por linha. Formato: dd/mm/aaaa</div>
+          </label>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="text-sm font-semibold text-slate-900">Resumo do cálculo</div>
+            <div className="mt-3 space-y-2 text-sm text-slate-600">
+              <div className="flex items-center justify-between">
+                <span>Dias corridos no mês</span>
+                <span className="font-semibold">{d.hoje.getDate()}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Feriados informados</span>
+                <span className="font-semibold">{d.feriadosLista.length}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Dias úteis usados</span>
+                <span className="font-semibold text-[#8B1E2D]">{d.diasUteisNoMes}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
 
     return (
       <PageShell title="Dashboard" subtitle="Visão executiva da operação com foco em giro, risco de ruptura, programação e andamento da produção.">
-        <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-7 gap-4">
-          <SummaryCard title="PA total" value={totalPA} subtitle="Pares em produto acabado" />
-          <SummaryCard title="Costura pronta" value={totalEst} subtitle="Pares prontos para montagem" />
-          <SummaryCard title="Na montagem" value={totalMontagemAtual} subtitle="Fluxo atual de montagem" />
-          <SummaryCard title="No pesponto" value={totalPespontoAtual} subtitle="Fluxo atual de pesponto" />
-          <SummaryCard title="Venda diária" value={vendaDiariaTotal.toFixed(1)} subtitle="Base mensal ÷ 30 dias" />
-          <SummaryCard title="Média finalizada • Pesponto" value={mediaFinalizadaPesponto.toFixed(1)} subtitle={`Finalizados no mês ÷ ${diasUteisNoMes} dias úteis • Hoje ${finalizadoHojePesponto}`} />
-          <SummaryCard title="Média finalizada • Montagem" value={mediaFinalizadaMontagem.toFixed(1)} subtitle={`Finalizados no mês ÷ ${diasUteisNoMes} dias úteis • Hoje ${finalizadoHojeMontagem}`} />
-        </section>
+        <div className="lg:hidden sticky top-1 z-10 mb-3 flex gap-1 overflow-x-auto rounded-2xl border border-slate-200 bg-white/95 p-1 shadow-sm backdrop-blur [-webkit-overflow-scrolling:touch]">
+          {dashTabs.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setDashboardMobileTab(t.id)}
+              className={`shrink-0 rounded-xl px-3 py-2 text-xs font-semibold transition sm:text-sm ${
+                dashboardMobileTab === t.id ? "bg-[#0F172A] text-white shadow-sm" : "bg-slate-50 text-slate-700 hover:bg-slate-100"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
 
-        <section className="grid grid-cols-1 xl:grid-cols-[1.2fr_0.8fr] gap-6">
-          <div className="xl:col-span-2 bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        {/* KPIs principais + opcionais */}
+        <div className={`space-y-3 ${showMobile("visao")}`}>
+          <section className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+            <SummaryCard title="PA total" value={d.totalPA} subtitle="Pares em produto acabado" />
+            <SummaryCard title="Na montagem" value={d.totalMontagemAtual} subtitle="Fluxo atual de montagem" />
+            <SummaryCard title="No pesponto" value={d.totalPespontoAtual} subtitle="Fluxo atual de pesponto" />
+            <SummaryCard
+              title="Venda diária (aprox.)"
+              value={d.vendaDiariaTotal.toFixed(1)}
+              subtitle={`Soma das vendas do mês (${d.vendaMensalTotal.toFixed(0)}) ÷ 30 dias corridos — referência rápida, não é previsão.`}
+            />
+          </section>
+          <button
+            type="button"
+            onClick={() => setDashboardMaisKpisAberto((v) => !v)}
+            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-[#0F172A] shadow-sm hover:bg-slate-50 lg:max-w-md"
+          >
+            {dashboardMaisKpisAberto ? "Ocultar mais indicadores" : "Mostrar mais indicadores (costura e médias do mês)"}
+          </button>
+          {dashboardMaisKpisAberto ? (
+            <section className="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-4">
+              <SummaryCard title="Costura pronta" value={d.totalEst} subtitle="Pares prontos para montagem" />
+              <SummaryCard
+                title="Média finalizada • Pesponto"
+                value={d.mediaFinalizadaPesponto.toFixed(1)}
+                subtitle={`Finalizados no mês ÷ ${d.diasUteisNoMes} dias úteis • Hoje ${d.finalizadoHojePesponto}`}
+              />
+              <SummaryCard
+                title="Média finalizada • Montagem"
+                value={d.mediaFinalizadaMontagem.toFixed(1)}
+                subtitle={`Finalizados no mês ÷ ${d.diasUteisNoMes} dias úteis • Hoje ${d.finalizadoHojeMontagem}`}
+              />
+            </section>
+          ) : null}
+        </div>
+
+        {/* Calendário: colapsável no desktop; aba no mobile */}
+        <div className={`mt-6 ${showMobile("calendario")}`}>
+          <div className="hidden lg:block">
+            {!dashboardFeriadosAberto ? (
+              <div className="flex flex-col gap-3 rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h2 className="font-bold text-lg">Calendário útil e feriados</h2>
+                  <p className="text-sm text-slate-500 mt-1">
+                    Ajuste feriados para o cálculo das médias. Dias úteis no mês: <strong className="text-[#8B1E2D]">{d.diasUteisNoMes}</strong>
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDashboardFeriadosAberto(true)}
+                  className="shrink-0 rounded-2xl bg-[#0F172A] px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
+                >
+                  Mostrar calendário e feriados
+                </button>
+              </div>
+            ) : (
               <div>
-                <h2 className="font-bold text-lg">Calendário útil do mês</h2>
-                <p className="text-sm text-slate-500 mt-1">Os cards de média finalizada usam apenas dias úteis transcorridos, desconsiderando sábados, domingos e os feriados informados abaixo.</p>
-              </div>
-              <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-right">
-                <div className="text-xs text-slate-500">Dias úteis considerados</div>
-                <div className="text-2xl font-bold text-slate-900">{diasUteisNoMes}</div>
-              </div>
-            </div>
-            <div className="mt-4 grid grid-cols-1 xl:grid-cols-[1fr_280px] gap-4">
-              <label className="text-sm font-medium text-slate-700">
-                Feriados do mês atual
-                <textarea
-                  value={feriadosTexto}
-                  onChange={(e) => setFeriadosTexto(e.target.value)}
-                  placeholder="Ex.: 01/05/2026&#10;11/06/2026"
-                  className="mt-2 w-full min-h-[96px] rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
-                />
-                <div className="mt-2 text-xs text-slate-500">Digite um feriado por linha. Formato: dd/mm/aaaa</div>
-              </label>
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm font-semibold text-slate-900">Resumo do cálculo</div>
-                <div className="mt-3 space-y-2 text-sm text-slate-600">
-                  <div className="flex items-center justify-between"><span>Dias corridos no mês</span><span className="font-semibold">{hoje.getDate()}</span></div>
-                  <div className="flex items-center justify-between"><span>Feriados informados</span><span className="font-semibold">{feriadosLista.length}</span></div>
-                  <div className="flex items-center justify-between"><span>Dias úteis usados</span><span className="font-semibold text-[#8B1E2D]">{diasUteisNoMes}</span></div>
+                <div className="mb-3 flex justify-end lg:justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setDashboardFeriadosAberto(false)}
+                    className="text-sm font-semibold text-slate-600 hover:text-[#8B1E2D]"
+                  >
+                    Recolher painel
+                  </button>
                 </div>
+                {calendarioBlock}
               </div>
-            </div>
+            )}
           </div>
-          <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="font-bold text-lg">Radar da operação</h2>
-                <p className="text-sm text-slate-500 mt-1">Indicadores principais para decidir a prioridade do dia.</p>
-              </div>
-              <span className="px-3 py-1 rounded-full border text-xs font-semibold bg-[#FFF7F8] text-[#8B1E2D] border-[#E7C7CC]">Lead time {tempoTotal} dias</span>
-            </div>
+          <div className="lg:hidden">{calendarioBlock}</div>
+        </div>
 
-            <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-5">
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Situação do estoque</div>
-                <div className="mt-4 space-y-3">
-                  <div className="flex items-center justify-between text-sm"><span className="text-slate-500">Itens críticos</span><span className="text-2xl font-black text-red-600">{metrics.criticos}</span></div>
-                  <div className="flex items-center justify-between text-sm"><span className="text-slate-500">Atenção PA</span><span className="text-xl font-bold text-amber-600">{metrics.atencaoPA}</span></div>
-                  <div className="flex items-center justify-between text-sm"><span className="text-slate-500">Atenção produção</span><span className="text-xl font-bold text-sky-700">{metrics.atencaoProd}</span></div>
-                  <div className="flex items-center justify-between text-sm"><span className="text-slate-500">Itens OK</span><span className="text-xl font-bold text-emerald-600">{metrics.ok}</span></div>
+        {/* Radar + programação */}
+        <div className={`mt-6 ${showMobile("visao")}`}>
+          <section className="grid grid-cols-1 xl:grid-cols-[1.2fr_0.8fr] gap-6">
+            <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-5 sm:p-6 xl:col-span-2">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 className="font-bold text-lg">Radar da operação</h2>
+                  <p className="text-sm text-slate-500 mt-1">Indicadores principais para decidir a prioridade do dia.</p>
+                  <p className="mt-2 text-xs text-slate-500 leading-relaxed max-w-xl">
+                    <strong>Cobertura</strong> (em “Próximas ações”) estima quantos dias o PA dura face à venda. Valores abaixo do <strong>lead time</strong> de {tempoTotal} dia(s) indicam maior urgência de reabastecer o fluxo.
+                  </p>
+                </div>
+                <span className="shrink-0 px-3 py-1 rounded-full border text-xs font-semibold bg-[#FFF7F8] text-[#8B1E2D] border-[#E7C7CC]">
+                  Lead time {tempoTotal} dia(s)
+                </span>
+              </div>
+
+              <div className="mt-5 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActive("Programação do Dia")}
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-[#0F172A] hover:bg-slate-100"
+                >
+                  Programação do dia
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActive("Pesponto")}
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-[#0F172A] hover:bg-slate-100"
+                >
+                  Pesponto
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActive("Montagem")}
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-[#0F172A] hover:bg-slate-100"
+                >
+                  Montagem
+                </button>
+              </div>
+
+              <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-5">
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Situação do estoque</div>
+                  <div className="mt-4 space-y-3">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-500">Itens críticos</span>
+                      <span className="text-2xl font-black text-red-600">{metrics.criticos}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-500">Atenção PA</span>
+                      <span className="text-xl font-bold text-amber-600">{metrics.atencaoPA}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-500">Atenção produção</span>
+                      <span className="text-xl font-bold text-sky-700">{metrics.atencaoProd}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-500">Itens OK</span>
+                      <span className="text-xl font-bold text-emerald-600">{metrics.ok}</span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActive("Controle Geral")}
+                    className="mt-4 w-full rounded-xl border border-[#8B1E2D]/30 bg-white py-2 text-xs font-semibold text-[#8B1E2D] hover:bg-[#FFF7F8]"
+                  >
+                    Abrir Controle geral
+                  </button>
+                </div>
+
+                <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-5">
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Programação do dia</div>
+                  <div className="mt-4 space-y-4">
+                    <div>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-slate-500">Pesponto hoje</span>
+                        <span className="text-2xl font-black text-[#0F172A]">{d.programacaoHojePesponto?.totalProgramado || 0}</span>
+                      </div>
+                      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+                        <div className="h-full rounded-full bg-[#8B1E2D] transition-all" style={{ width: `${progP}%` }} />
+                      </div>
+                      <div className="mt-1 text-[11px] text-slate-500">Capacidade diária: {capP} pares</div>
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-slate-500">Montagem hoje</span>
+                        <span className="text-2xl font-black text-[#0F172A]">{d.programacaoHojeMontagem?.totalProgramado || 0}</span>
+                      </div>
+                      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+                        <div className="h-full rounded-full bg-[#0F172A] transition-all" style={{ width: `${progM}%` }} />
+                      </div>
+                      <div className="mt-1 text-[11px] text-slate-500">Capacidade diária: {capM} pares</div>
+                    </div>
+                    <div className="flex items-center justify-between text-sm pt-1 border-t border-slate-200">
+                      <span className="text-slate-500">Fichas pesponto</span>
+                      <span className="text-xl font-bold text-[#8B1E2D]">{d.programacaoHojePesponto?.fichas?.length || 0}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-500">Fichas montagem</span>
+                      <span className="text-xl font-bold text-[#8B1E2D]">{d.programacaoHojeMontagem?.fichas?.length || 0}</span>
+                    </div>
+                  </div>
                 </div>
               </div>
-
-              <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-5">
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Programação do dia</div>
-                <div className="mt-4 space-y-3">
-                  <div className="flex items-center justify-between text-sm"><span className="text-slate-500">Pesponto hoje</span><span className="text-2xl font-black text-[#0F172A]">{programacaoHojePesponto?.totalProgramado || 0}</span></div>
-                  <div className="flex items-center justify-between text-sm"><span className="text-slate-500">Montagem hoje</span><span className="text-2xl font-black text-[#0F172A]">{programacaoHojeMontagem?.totalProgramado || 0}</span></div>
-                  <div className="flex items-center justify-between text-sm"><span className="text-slate-500">Fichas pesponto</span><span className="text-xl font-bold text-[#8B1E2D]">{programacaoHojePesponto?.fichas?.length || 0}</span></div>
-                  <div className="flex items-center justify-between text-sm"><span className="text-slate-500">Fichas montagem</span><span className="text-xl font-bold text-[#8B1E2D]">{programacaoHojeMontagem?.fichas?.length || 0}</span></div>
-                </div>
-              </div>
             </div>
-          </div>
+          </section>
+        </div>
 
-          <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
+        {/* Próximas ações */}
+        <div className={`mt-6 ${showMobile("riscos")}`}>
+          <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-5 sm:p-6">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <h2 className="font-bold text-lg">Próximas ações</h2>
-                <p className="text-sm text-slate-500 mt-1">Os pontos que merecem atenção imediata.</p>
+                <p className="text-sm text-slate-500 mt-1">Menor cobertura em dias — priorize reabastecimento.</p>
               </div>
             </div>
             <div className="mt-4 space-y-3">
-              {menorCobertura.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500">Sem vendas suficientes para montar alertas.</div>
+              {d.menorCobertura.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500">
+                  Sem vendas suficientes para montar alertas.
+                </div>
               ) : (
-                menorCobertura.map((item, idx) => (
+                d.menorCobertura.map((item, idx) => (
                   <div key={`${item.ref}-${item.cor}-${item.size}-dash-${idx}`} className="rounded-2xl border border-slate-200 px-4 py-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="font-semibold text-slate-900">{item.ref} • {item.cor}</div>
-                        <div className="text-xs text-slate-500 mt-1">Numeração {item.size} • PA {item.pa}</div>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="font-semibold text-slate-900">
+                          {item.ref} • {item.cor}
+                        </div>
+                        <div className="text-xs text-slate-500 mt-1">
+                          Numeração {item.size} • PA {item.pa}
+                        </div>
                       </div>
-                      <span className={`px-3 py-1 rounded-full border text-xs font-semibold ${coberturaBadgeClass(item.cobertura, tempoTotal)}`}>
-                        {item.cobertura?.toFixed(1)} dia(s)
-                      </span>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </section>
-
-        <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="font-bold text-lg">Top modelos por venda</h2>
-              <span className="px-3 py-1 rounded-full border text-xs font-semibold bg-emerald-100 text-emerald-700 border-emerald-200">Mensal</span>
-            </div>
-            <div className="mt-4 space-y-3">
-              {topModelos.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500">Sem vendas lançadas ainda.</div>
-              ) : (
-                topModelos.map((item, idx) => (
-                  <div key={`${item.ref}-${item.cor}-dashboard-top`} className="rounded-2xl border border-slate-200 px-4 py-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="font-semibold text-slate-900">#{idx + 1} {item.ref} • {item.cor}</div>
-                        <div className="text-xs text-slate-500 mt-1">PA atual {item.totalPA}</div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-2xl font-black text-[#0F172A]">{item.totalVendido}</div>
-                        <div className="text-xs text-slate-500">vendidos/mês</div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`px-3 py-1 rounded-full border text-xs font-semibold ${coberturaBadgeClass(item.cobertura, tempoTotal)}`}>
+                          {item.cobertura?.toFixed(1)} dia(s)
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => irControleGeral(item.ref, item.cor, item.size)}
+                          className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-800 hover:bg-blue-100"
+                        >
+                          Abrir no Controle
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -2998,26 +3212,82 @@ const salvarVendasManuais = async () => {
               )}
             </div>
           </div>
+        </div>
 
-          <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="font-bold text-lg">Resumo das sugestões</h2>
-              <span className="px-3 py-1 rounded-full border text-xs font-semibold bg-[#FFF7F8] text-[#8B1E2D] border-[#E7C7CC]">Planejamento</span>
-            </div>
-            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm text-slate-500">Sugestões de pesponto</div>
-                <div className="mt-2 text-3xl font-black text-[#0F172A]">{suggestions.pesponto.length}</div>
-                <div className="mt-2 text-xs text-slate-500">Total sugerido: {suggestions.pesponto.reduce((acc, item) => acc + item.total, 0)} pares</div>
+        {/* Top vendas + sugestões */}
+        <div className={`mt-6 ${showMobile("vendas")}`}>
+          <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-5 sm:p-6">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h2 className="font-bold text-lg">Top modelos por venda</h2>
+                <span className="px-3 py-1 rounded-full border text-xs font-semibold bg-emerald-100 text-emerald-700 border-emerald-200">Mensal</span>
               </div>
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm text-slate-500">Sugestões de montagem</div>
-                <div className="mt-2 text-3xl font-black text-[#0F172A]">{suggestions.montagem.length}</div>
-                <div className="mt-2 text-xs text-slate-500">Total sugerido: {suggestions.montagem.reduce((acc, item) => acc + item.total, 0)} pares</div>
+              <div className="mt-4 space-y-3">
+                {d.topModelos.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500">
+                    Sem vendas lançadas ainda.
+                  </div>
+                ) : (
+                  d.topModelos.map((item, idx) => (
+                    <div key={`${item.ref}-${item.cor}-dashboard-top`} className="rounded-2xl border border-slate-200 px-4 py-3">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <div className="font-semibold text-slate-900">
+                            #{idx + 1} {item.ref} • {item.cor}
+                          </div>
+                          <div className="text-xs text-slate-500 mt-1">PA atual {item.totalPA}</div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-3">
+                          <div className="text-right">
+                            <div className="text-2xl font-black text-[#0F172A]">{item.totalVendido}</div>
+                            <div className="text-xs text-slate-500">vendidos/mês</div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => irControleGeral(item.ref, item.cor, null)}
+                            className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-800 hover:bg-blue-100"
+                          >
+                            Controle
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
-          </div>
-        </section>
+
+            <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-5 sm:p-6">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h2 className="font-bold text-lg">Resumo das sugestões</h2>
+                <span className="px-3 py-1 rounded-full border text-xs font-semibold bg-[#FFF7F8] text-[#8B1E2D] border-[#E7C7CC]">Planejamento</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActive("Sugestoes")}
+                className="mt-4 w-full rounded-2xl border border-[#8B1E2D]/30 bg-[#FFF7F8] px-4 py-3 text-sm font-semibold text-[#8B1E2D] hover:bg-[#fce8ec] sm:w-auto"
+              >
+                Abrir tela Sugestões
+              </button>
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="text-sm text-slate-500">Sugestões de pesponto</div>
+                  <div className="mt-2 text-3xl font-black text-[#0F172A]">{suggestions.pesponto.length}</div>
+                  <div className="mt-2 text-xs text-slate-500">
+                    Total sugerido: {suggestions.pesponto.reduce((acc, item) => acc + item.total, 0)} pares
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="text-sm text-slate-500">Sugestões de montagem</div>
+                  <div className="mt-2 text-3xl font-black text-[#0F172A]">{suggestions.montagem.length}</div>
+                  <div className="mt-2 text-xs text-slate-500">
+                    Total sugerido: {suggestions.montagem.reduce((acc, item) => acc + item.total, 0)} pares
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
       </PageShell>
     );
   };
@@ -4666,10 +4936,10 @@ const salvarVendasManuais = async () => {
                               key={`${programacao.tipo}-${dia.dia}-${ficha.nome}-${idx}`}
                               className="rounded-2xl border border-slate-200 p-4 flex items-stretch justify-between gap-3"
                             >
-                              <label className="print:hidden flex items-start pt-1 shrink-0 cursor-pointer">
+                              <label className="print:hidden flex min-h-[44px] min-w-[44px] shrink-0 cursor-pointer items-center justify-center sm:min-h-0 sm:min-w-0 sm:items-start sm:justify-start sm:pt-1">
                                 <input
                                   type="checkbox"
-                                  className="mt-1 h-4 w-4 rounded border-slate-300 text-[#8B1E2D] focus:ring-[#8B1E2D]"
+                                  className="h-6 w-6 rounded border-slate-300 text-[#8B1E2D] focus:ring-2 focus:ring-[#8B1E2D] focus:ring-offset-0 sm:h-5 sm:w-5"
                                   checked={isFichaSel(fKey)}
                                   onChange={() => toggleFichaSel(fKey)}
                                 />
@@ -4782,13 +5052,15 @@ const salvarVendasManuais = async () => {
             className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6 break-inside-avoid"
           >
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-5">
-              <label className="print:hidden flex items-start gap-3 cursor-pointer md:items-center">
-                <input
-                  type="checkbox"
-                  className="mt-1 md:mt-0 h-4 w-4 rounded border-slate-300 text-[#8B1E2D] focus:ring-[#8B1E2D] shrink-0"
-                  checked={isFichaSel(fKey)}
-                  onChange={() => toggleFichaSel(fKey)}
-                />
+              <label className="print:hidden flex cursor-pointer items-start gap-3 md:items-center">
+                <span className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center sm:min-h-0 sm:min-w-0 sm:inline-flex sm:mt-1 md:mt-0">
+                  <input
+                    type="checkbox"
+                    className="h-6 w-6 rounded border-slate-300 text-[#8B1E2D] focus:ring-2 focus:ring-[#8B1E2D] focus:ring-offset-0 sm:h-5 sm:w-5"
+                    checked={isFichaSel(fKey)}
+                    onChange={() => toggleFichaSel(fKey)}
+                  />
+                </span>
                 <div>
                 <div className="text-xs uppercase tracking-[0.18em] text-slate-400 font-semibold">
                   {programacaoSubAba} • Dia {String(ficha.dia).padStart(2, "0")}
