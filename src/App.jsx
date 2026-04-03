@@ -1750,13 +1750,13 @@ useEffect(() => {
         if (tipo === "Pesponto") {
           nextData[item.size] = {
             ...atual,
-            p: Math.max(0, (atual.p || 0) - item.qtd * multiplier),
+            p: Math.max(0, (atual.p || 0) + item.qtd * multiplier),
           };
         } else {
           nextData[item.size] = {
             ...atual,
-            est: Math.max(0, (atual.est || 0) + item.qtd * multiplier),
-            m: Math.max(0, (atual.m || 0) - item.qtd * multiplier),
+            est: Math.max(0, (atual.est || 0) - item.qtd * multiplier),
+            m: Math.max(0, (atual.m || 0) + item.qtd * multiplier),
           };
         }
       });
@@ -1772,10 +1772,14 @@ useEffect(() => {
 
     const programacaoNome = String(form.programacao || "").trim();
     const source = tipo === "Pesponto" ? pespontoLancamentos : montagemLancamentos;
+    const refNorm = String(form.ref || "").trim();
+    const corNorm = String(form.cor || "").trim();
     const programacaoDuplicada = programacaoNome
       ? source.some(
           (item) =>
-            String(item.programacao || "").trim().toUpperCase() === programacaoNome.toUpperCase()
+            String(item.programacao || "").trim().toUpperCase() === programacaoNome.toUpperCase() &&
+            String(item.ref || "").trim() === refNorm &&
+            String(item.cor || "").trim() === corNorm
         )
       : false;
 
@@ -1789,29 +1793,10 @@ useEffect(() => {
       return;
     }
 
-    if (tipo === "Pesponto" || tipo === "Montagem") {
-      const refNorm = String(form.ref || "").trim();
-      const corNorm = String(form.cor || "").trim();
-      const temAbertoMesmoProduto = source.some(
-        (item) =>
-          item.status !== "Finalizado" &&
-          String(item.ref || "").trim() === refNorm &&
-          String(item.cor || "").trim() === corNorm
-      );
-      if (temAbertoMesmoProduto) {
-        setMovError((curr) => ({
-          ...curr,
-          [tipo]:
-            "Já existe um lançamento em aberto para esta ref e cor neste setor. Use Alterar no lançamento existente, finalize a programação ou exclua antes de lançar de novo.",
-        }));
-        return;
-      }
-    }
-
     if (programacaoDuplicada) {
       setMovError((curr) => ({
         ...curr,
-        [tipo]: `Já existe uma programação com o nome "${programacaoNome}" em ${tipo}. Use outro nome.`,
+        [tipo]: `Já existe uma programação com o nome "${programacaoNome}" para esta ref e cor em ${tipo}. Use outro nome.`,
       }));
       return;
     }
@@ -1912,10 +1897,14 @@ const persistLaunch = await persistRowsToSupabase(nextRows);
 
     const programacaoNome = String(form.programacao || "").trim();
     const source = tipo === "Pesponto" ? pespontoLancamentos : montagemLancamentos;
+    const refNorm = String(form.ref || "").trim();
+    const corNorm = String(form.cor || "").trim();
     const programacaoDuplicada = programacaoNome
       ? source.some(
           (item) =>
-            String(item.programacao || "").trim().toUpperCase() === programacaoNome.toUpperCase()
+            String(item.programacao || "").trim().toUpperCase() === programacaoNome.toUpperCase() &&
+            String(item.ref || "").trim() === refNorm &&
+            String(item.cor || "").trim() === corNorm
         )
       : false;
 
@@ -1931,23 +1920,7 @@ const persistLaunch = await persistRowsToSupabase(nextRows);
     }
 
     if (programacaoDuplicada) {
-      mensagens.push(`já existe uma programação com esse nome em ${tipo}`);
-    }
-
-    if (programacaoNome && (tipo === "Pesponto" || tipo === "Montagem")) {
-      const refNorm = String(form.ref || "").trim();
-      const corNorm = String(form.cor || "").trim();
-      const temAbertoMesmoProduto = source.some(
-        (item) =>
-          item.status !== "Finalizado" &&
-          String(item.ref || "").trim() === refNorm &&
-          String(item.cor || "").trim() === corNorm
-      );
-      if (temAbertoMesmoProduto) {
-        mensagens.push(
-          "já existe lançamento em aberto para esta ref e cor neste setor — use Alterar, finalize a programação ou exclua antes de lançar de novo"
-        );
-      }
+      mensagens.push(`já existe uma programação com esse nome para esta ref e cor em ${tipo}`);
     }
 
     if (invalidos.length) {
@@ -1966,23 +1939,19 @@ const persistLaunch = await persistRowsToSupabase(nextRows);
 
   const excluirMovimentacoesNoBanco = async (tipo, alvo, { suppressAlert = false } = {}) => {
     try {
-      for (const item of alvo.items) {
-        const { error } = await supabase
-          .from("movimentacoes")
-          .delete()
-          .eq("tipo", tipo)
-          .eq("programacao", alvo.programacao)
-          .eq("ref", alvo.ref)
-          .eq("cor", alvo.cor)
-          .eq("numero", item.size)
-          .eq("quantidade", item.qtd)
-          .eq("status", "Em aberto");
+      const { error } = await supabase
+        .from("movimentacoes")
+        .delete()
+        .eq("tipo", tipo)
+        .eq("programacao", alvo.programacao)
+        .eq("ref", alvo.ref)
+        .eq("cor", alvo.cor)
+        .eq("status", "Em aberto");
 
-        if (error) {
-          console.log("ERRO AO EXCLUIR MOVIMENTACAO:", error);
-          if (!suppressAlert) alert("Erro ao excluir movimentação no banco.");
-          return false;
-        }
+      if (error) {
+        console.log("ERRO AO EXCLUIR MOVIMENTACAO:", error);
+        if (!suppressAlert) alert("Erro ao excluir movimentação no banco.");
+        return false;
       }
 
       console.log("MOVIMENTACOES EXCLUIDAS DO BANCO");
@@ -2312,11 +2281,16 @@ function parseGcmSheet(sheet) {
 
   const salvarMovimentacao = async (movs) => {
     try {
-      console.log("MOVIMENTACOES ENVIADAS:", movs);
+      const batchTs = new Date().toISOString();
+      const movsComData = (movs || []).map((m) => ({
+        ...m,
+        data_lancamento: m.data_lancamento ?? batchTs,
+      }));
+      console.log("MOVIMENTACOES ENVIADAS:", movsComData);
 
       const { data, error } = await supabase
         .from("movimentacoes")
-        .insert(movs)
+        .insert(movsComData)
         .select();
 
       console.log("RETORNO MOV:", data);
@@ -2628,8 +2602,8 @@ const carregarMovimentacoesDoBanco = async () => {
           const ref = String(item.ref || "").trim();
           const cor = String(item.cor || "").trim();
           const status = String(item.status || "Em aberto").trim();
-          const dataLancamentoIso = item.data_lancamento ? String(item.data_lancamento) : "";
-          const key = `${tipo}__${programacao}__${ref}__${cor}__${status}__${dataLancamentoIso}`;
+          /** Mesma programação/ref/cor/status = um lançamento; não usar data (cada linha do insert pode ter ms diferentes e quebrar o grupo). */
+          const key = `${tipo}__${programacao}__${ref}__${cor}__${status}`;
 
           if (!agrupado[key]) {
             agrupado[key] = {
@@ -3733,6 +3707,13 @@ const salvarVendasManuais = async () => {
     const selectionPreview = previewBySelection(form);
     const liveError = getMovErrorMessage(title, form);
     const lancamentos = title === "Pesponto" ? pespontoLancamentos : montagemLancamentos;
+    const lancamentosAbertosCor = lancamentos.filter((item) => {
+      if (String(item.status || "").trim() === "Finalizado") return false;
+      return (
+        normalizeKey(String(item.ref || "")) === normalizeKey(String(form.ref || "")) &&
+        normalizeKey(String(item.cor || "")) === normalizeKey(String(form.cor || ""))
+      );
+    });
     const totalAtual = sizes.reduce((acc, size) => acc + (Number(form.grid[size]) || 0), 0);
     const totalPages = Math.max(1, Math.ceil(lancamentos.length / MOV_PAGE_SIZE));
     const currentPage = Math.min(movListPage[title] || 1, totalPages);
@@ -3866,6 +3847,47 @@ const salvarVendasManuais = async () => {
                       </div>
                     </div>
                   ))}
+                </div>
+
+                <div className="mt-6 border-t border-slate-200 pt-6">
+                  <div className="text-sm font-bold uppercase tracking-wide text-slate-700">Lançamentos em aberto nesta cor</div>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Mesma referência e cor do formulário · ainda não finalizados no {title}.
+                  </p>
+                  {lancamentosAbertosCor.length === 0 ? (
+                    <div className="mt-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
+                      Nenhum lançamento em aberto para {selectionPreview.row.ref} • {selectionPreview.row.cor}.
+                    </div>
+                  ) : (
+                    <div className="mt-3 space-y-3">
+                      {lancamentosAbertosCor.map((item) => (
+                        <div
+                          key={item.id}
+                          className="rounded-2xl border border-amber-200 bg-amber-50/60 px-4 py-3"
+                        >
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div className="font-semibold text-slate-900">{item.programacao}</div>
+                            <span className="px-2.5 py-0.5 rounded-full border border-amber-300 bg-amber-100 text-xs font-semibold text-amber-900">
+                              Em aberto
+                            </span>
+                          </div>
+                          <div className="text-xs text-slate-600 mt-1">
+                            {item.total ?? 0} pares · Lançado {item.dataLancamento || "—"}
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {(item.items || []).map((entry) => (
+                              <span
+                                key={`${item.id}-${entry.size}`}
+                                className="inline-flex px-2 py-1 rounded-lg bg-white border border-amber-100 text-xs text-slate-800"
+                              >
+                                {entry.size} → {entry.qtd}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
