@@ -2758,24 +2758,6 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
       cor: item.cor,
     }));
 
-    const estoqueParaSalvar = [];
-    parsed.forEach((item) => {
-      sizes.forEach((numero) => {
-        const quantidade = Number(item.data?.[numero] || 0);
-        if (quantidade > 0) {
-          estoqueParaSalvar.push({
-            ref: item.ref,
-            cor: item.cor,
-            numero,
-            pa: quantidade,
-            est: 0,
-            m: 0,
-            p: 0,
-          });
-        }
-      });
-    });
-
     const parsedByKey = new Map(
       parsed.map((item) => [
         `${normalizeKey(item.ref)}__${normalizeKey(item.cor)}`,
@@ -2789,6 +2771,46 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
       acc[key].push(item);
       return acc;
     }, {});
+
+    const encontrarLinhaEstoqueAtual = (item) => {
+      const exata = rows.find(
+        (r) =>
+          normalizeKey(r.ref) === normalizeKey(item.ref) &&
+          normalizeKey(r.cor) === normalizeKey(item.cor)
+      );
+      if (exata) return exata;
+      const candidatos = rows.filter((r) => normalizeKey(r.ref) === normalizeKey(item.ref));
+      if (candidatos.length === 1) return candidatos[0];
+      return candidatos.find(
+        (r) =>
+          normalizeKey(r.cor).includes(normalizeKey(item.cor)) ||
+          normalizeKey(item.cor).includes(normalizeKey(r.cor))
+      );
+    };
+
+    /** GCM só altera PA; costura pronta (est) e fluxo (m, p) mantêm-se do estoque atual. */
+    const estoqueParaSalvar = [];
+    parsed.forEach((item) => {
+      const linhaAtual = encontrarLinhaEstoqueAtual(item);
+      sizes.forEach((numero) => {
+        const quantidade = Number(item.data?.[numero] || 0);
+        if (quantidade <= 0) return;
+        const cell = linhaAtual?.data?.[numero] || { pa: 0, est: 0, m: 0, p: 0 };
+        const novoPa =
+          importMode === "sum"
+            ? (Number(cell.pa) || 0) + quantidade
+            : Number(item.data?.[numero] || 0);
+        estoqueParaSalvar.push({
+          ref: item.ref,
+          cor: item.cor,
+          numero,
+          pa: novoPa,
+          est: Number(cell.est) || 0,
+          m: Number(cell.m) || 0,
+          p: Number(cell.p) || 0,
+        });
+      });
+    });
 
     let atualizados = 0;
     const usados = new Set();
