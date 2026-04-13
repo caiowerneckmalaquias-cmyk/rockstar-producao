@@ -467,7 +467,11 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
             ? Math.floor(Math.min(montDesejado, est) / passoMont) * passoMont
             : Math.min(montDesejado, est);
 
-        const faltaParaMontagem = Math.max(0, montDesejado - mont);
+        const faltaBrutaMontagem = Math.max(0, montDesejado - mont);
+        // Abate falta com pipeline acima do mínimo de prod; sem min prod, considera P (WIP pesponto).
+        const creditoPipeline =
+          minProd > 0 ? Math.max(0, prodAtual - minProd) : p;
+        const faltaParaMontagem = Math.max(0, faltaBrutaMontagem - creditoPipeline);
 
         pesp = Math.min(
           sugerirQtdPorMinimo(needProd + faltaParaMontagem, refPesp),
@@ -1301,12 +1305,14 @@ const previewBySelection = (form) => {
   const row = rowsNormalized.find((item) => item.ref === form.ref && item.cor === form.cor);
   if (!row) return null;
 
+  const totalPA = sizes.reduce((acc, size) => acc + (row.data[size]?.pa || 0), 0);
   const totalPesponto = sizes.reduce((acc, size) => acc + (row.data[size]?.p || 0), 0);
   const totalMontagem = sizes.reduce((acc, size) => acc + (row.data[size]?.m || 0), 0);
   const totalEst = sizes.reduce((acc, size) => acc + (row.data[size]?.est || 0), 0);
 
   return {
     row,
+    totalPA,
     totalPesponto,
     totalMontagem,
     totalEst,
@@ -3839,7 +3845,14 @@ const salvarVendasManuais = async () => {
                   {selectionPreview.row.ref} • {selectionPreview.row.cor}
                 </div>
 
-                <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm text-slate-700">
+                <div className="mt-6 grid grid-cols-2 lg:grid-cols-4 gap-4 text-sm text-slate-700">
+                  <div className="flex items-center justify-between rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
+                    <div>
+                      <div className="text-2xl font-black text-[#8B1E2D] tracking-tight">PA</div>
+                      <div className="text-xs text-slate-500 mt-0.5">Pronto acabado</div>
+                    </div>
+                    <span className="text-3xl font-bold text-slate-900">{selectionPreview.totalPA}</span>
+                  </div>
                   <div className="flex items-center justify-between rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
                     <div>
                       <div className="text-2xl font-black text-[#8B1E2D] tracking-tight">P</div>
@@ -3868,6 +3881,9 @@ const salvarVendasManuais = async () => {
                     <div key={size} className="rounded-2xl border border-sky-100 bg-slate-50 px-3 py-3">
                       <div className="font-semibold text-slate-900">{size}</div>
                       <div className="mt-2 space-y-0.5 text-xs text-slate-700">
+                        <div>
+                          <span className="font-bold text-[#8B1E2D]">PA</span> {selectionPreview.row.data[size]?.pa || 0}
+                        </div>
                         <div>
                           <span className="font-bold text-[#8B1E2D]">P</span> {selectionPreview.row.data[size]?.p || 0}
                         </div>
