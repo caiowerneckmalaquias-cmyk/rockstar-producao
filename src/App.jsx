@@ -16,6 +16,28 @@ import {
 
 const makeEmptyGrid = () => Object.fromEntries(sizes.map((s) => [s, 0]));
 
+function deepClonePlain(obj) {
+  try {
+    if (typeof structuredClone === "function") return structuredClone(obj);
+  } catch (_) {
+    /* ignore */
+  }
+  return JSON.parse(JSON.stringify(obj));
+}
+
+const PROG_FICHAS_LANCADAS_STORAGE_KEY = "rockstar-prog-fichas-lancadas-v1";
+
+function readProgFichasLancadasFromStorage() {
+  try {
+    const raw = localStorage.getItem(PROG_FICHAS_LANCADAS_STORAGE_KEY);
+    if (!raw) return [];
+    const p = JSON.parse(raw);
+    return Array.isArray(p) ? p.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 /** PDF da programação (várias páginas automáticas). */
 function buildProgramacaoDiaPdfBlob({
   titulo,
@@ -1286,11 +1308,39 @@ const [programacaoObsImpressao, setProgramacaoObsImpressao] = useState("");
 const [programacaoLogoImpressao, setProgramacaoLogoImpressao] = useState("/logo-rockstar-bandeira.png");
 const [programacaoFichaSelecao, setProgramacaoFichaSelecao] = useState({});
 const [programacaoPdfBusy, setProgramacaoPdfBusy] = useState(false);
+const [lancarFichaDaProgramacao, setLancarFichaDaProgramacao] = useState(null);
+/** Chaves de fichas já lançadas (persistido em localStorage). */
+const [fichasProgramacaoLancadas, setFichasProgramacaoLancadas] = useState(readProgFichasLancadasFromStorage);
+/** Plano congelado na Programação do Dia (não muda com estoque até Recalcular ou mudança período/capacidade). */
+const [programacaoPlanoCongelado, setProgramacaoPlanoCongelado] = useState(null);
 const [movListPage, setMovListPage] = useState({ Pesponto: 1, Montagem: 1 });
 const [feriadosTexto, setFeriadosTexto] = useState("");
 const [dashboardFeriadosAberto, setDashboardFeriadosAberto] = useState(false);
 const [dashboardMaisKpisAberto, setDashboardMaisKpisAberto] = useState(false);
 const [dashboardMobileTab, setDashboardMobileTab] = useState("visao");
+
+const addLaunchedProgFichaKey = useCallback((key) => {
+  if (!key) return;
+  setFichasProgramacaoLancadas((prev) => {
+    if (prev.includes(key)) return prev;
+    const next = [...prev, key];
+    try {
+      localStorage.setItem(PROG_FICHAS_LANCADAS_STORAGE_KEY, JSON.stringify(next));
+    } catch (_) {
+      /* ignore */
+    }
+    return next;
+  });
+}, []);
+
+const limparMarcasFichasLancadasProgramacao = useCallback(() => {
+  setFichasProgramacaoLancadas([]);
+  try {
+    localStorage.removeItem(PROG_FICHAS_LANCADAS_STORAGE_KEY);
+  } catch (_) {
+    /* ignore */
+  }
+}, []);
 
 const refs = useMemo(() => rows.map((r) => `${r.ref}__${r.cor}`), [rows]);
 const firstRef = refs[0] ? refs[0].split("__")[0] : "";
@@ -1449,6 +1499,45 @@ const programacaoMontagem = useMemo(
     ),
   [fichasMontagem, suggestions, programacaoDias, capacidadeMontagemDia]
 );
+
+  useEffect(() => {
+    if (active !== "Programação do Dia") return;
+    const capP = Number(capacidadePespontoDia) || 396;
+    const capM = Number(capacidadeMontagemDia) || 396;
+    setProgramacaoPlanoCongelado((prev) => {
+      if (prev != null) {
+        const configOk = prev.dias === programacaoDias && prev.capP === capP && prev.capM === capM;
+        if (configOk) return prev;
+      }
+      return {
+        pesponto: deepClonePlain(programacaoPesponto),
+        montagem: deepClonePlain(programacaoMontagem),
+        dias: programacaoDias,
+        capP,
+        capM,
+      };
+    });
+  }, [
+    active,
+    programacaoDias,
+    capacidadePespontoDia,
+    capacidadeMontagemDia,
+    programacaoPesponto,
+    programacaoMontagem,
+  ]);
+
+  const recalcularProgramacaoCongelada = useCallback(() => {
+    const capP = Number(capacidadePespontoDia) || 396;
+    const capM = Number(capacidadeMontagemDia) || 396;
+    setProgramacaoPlanoCongelado({
+      pesponto: deepClonePlain(programacaoPesponto),
+      montagem: deepClonePlain(programacaoMontagem),
+      dias: programacaoDias,
+      capP,
+      capM,
+    });
+    setProgramacaoFichaSelecao({});
+  }, [programacaoPesponto, programacaoMontagem, programacaoDias, capacidadePespontoDia, capacidadeMontagemDia]);
 
   const dashboardData = useMemo(() => {
     const tempoTotal = (Number(tempoProducao?.pesponto) || 0) + (Number(tempoProducao?.montagem) || 0);
@@ -1803,7 +1892,7 @@ useEffect(() => {
     });
   };
 
-  const executeMov = async (tipo, form, force = false) => {
+  const executeMov = async (tipo, form, force = false, progFichaStorageKey) => {
     console.log("EXECUTE MOV FOI CHAMADO", { tipo, form });
     const items = sizes
       .map((size) => ({ size, qtd: Number(form.grid[size]) || 0 }))
@@ -1849,7 +1938,7 @@ useEffect(() => {
     const excedeLimite = (tipo === "Pesponto" || tipo === "Montagem") && totalLancamento > 396;
 
     if ((tipo === "Pesponto" || tipo === "Montagem") && (invalidos.length || excedeLimite) && !force) {
-      setConfirmMov({ tipo, form });
+      setConfirmMov({ tipo, form, progFichaStorageKey });
       return;
     }
 
@@ -1926,9 +2015,13 @@ const persistLaunch = await persistRowsToSupabase(nextRows);
     }
 
     console.log("ANTES DE SALVAR MOVIMENTACAO", movsParaSalvar);
-    await salvarMovimentacao(movsParaSalvar);
+    const movSave = await salvarMovimentacao(movsParaSalvar);
     console.log("DEPOIS DE SALVAR");
+    if (!movSave?.error && progFichaStorageKey) {
+      addLaunchedProgFichaKey(progFichaStorageKey);
+    }
     setConfirmMov(null);
+    setLancarFichaDaProgramacao(null);
   };
 
   const getMovErrorMessage = (tipo, form) => {
@@ -5027,24 +5120,54 @@ const salvarVendasManuais = async () => {
   const renderProgramacaoDia = () => {
     const quickDays = [1, 3, 7, 15];
 
+    const planoPespontoUI = programacaoPlanoCongelado?.pesponto ?? programacaoPesponto;
+    const planoMontagemUI = programacaoPlanoCongelado?.montagem ?? programacaoMontagem;
+    const diasPlanoExibicao = programacaoPlanoCongelado?.dias ?? programacaoDias;
+
     const subAbas = [
       {
         key: "Pesponto",
         titulo: "Programação de Pesponto",
         descricao: "Veja apenas a programação do pesponto no período selecionado.",
-        programacao: programacaoPesponto,
+        programacao: planoPespontoUI,
         corTag: "bg-amber-100 text-amber-700 border-amber-200",
       },
       {
         key: "Montagem",
         titulo: "Programação de Montagem",
         descricao: "Veja apenas a programação da montagem no período selecionado.",
-        programacao: programacaoMontagem,
+        programacao: planoMontagemUI,
         corTag: "bg-sky-100 text-[#8B1E2D] border-sky-200",
       },
     ];
 
     const subAbaAtiva = subAbas.find((item) => item.key === programacaoSubAba) || subAbas[0];
+
+    const abrirLancarFichaProgramacao = (ficha, tipoMov, diaNumero, fichaStorageKey) => {
+      const grid = makeEmptyGrid();
+      sizes.forEach((s) => {
+        grid[s] = Number(ficha.sizes?.[s]) || 0;
+      });
+      const baseNome = String(ficha.nome || "").trim();
+      let programacaoNome = baseNome;
+      if (diaNumero != null && diaNumero !== undefined && !Number.isNaN(Number(diaNumero))) {
+        programacaoNome = baseNome ? `${baseNome} · Dia ${diaNumero}` : `Dia ${diaNumero} · ${ficha.ref} · ${ficha.cor}`;
+      }
+      if (!String(programacaoNome || "").trim()) {
+        programacaoNome = `${ficha.ref} · ${ficha.cor}`;
+      }
+      setMovError((curr) => ({ ...curr, [tipoMov]: "" }));
+      setLancarFichaDaProgramacao({
+        tipo: tipoMov,
+        ref: ficha.ref,
+        cor: ficha.cor,
+        programacao: programacaoNome,
+        grid,
+        fichaStorageKey: fichaStorageKey || null,
+      });
+    };
+
+    const isProgFichaLancada = (key) => fichasProgramacaoLancadas.includes(key);
 
     const todasFichas = subAbaAtiva.programacao.diasProgramados.flatMap((dia) =>
       dia.fichas.map((ficha) => ({
@@ -5112,7 +5235,7 @@ const salvarVendasManuais = async () => {
           titulo: programacaoTituloImpressao,
           setor: programacaoSubAba,
           modoLabel: programacaoModoVisual === "normal" ? "Visão: por dia" : "Visão: todas as fichas",
-          diasCount: programacaoDias,
+          diasCount: diasPlanoExibicao,
           dataImpressao: new Date().toLocaleString("pt-BR"),
           observacoes: programacaoObsImpressao,
           itens: itensImpressao,
@@ -5210,13 +5333,31 @@ const salvarVendasManuais = async () => {
                                   <div className="font-semibold text-slate-900 mt-1">{ficha.cor}</div>
                                   <div className="text-sm text-slate-500 mt-1">{ficha.ref} • {ficha.nome}</div>
                                 </div>
-                                <div className="flex items-center gap-3 shrink-0">
+                                <div className="flex flex-wrap items-center gap-3 shrink-0 justify-end">
                                   <div className="text-right">
                                     <div className="text-xs text-slate-500">Prioridade</div>
                                     <div className="font-semibold text-slate-900">{Math.round(ficha.prioridade || 0)}</div>
                                   </div>
                                   <div className="px-3 py-1.5 rounded-xl bg-slate-950 text-white text-sm font-semibold">{ficha.total} pares</div>
+                                  {isProgFichaLancada(fKey) ? (
+                                    <span className="print:hidden px-3 py-1.5 text-xs font-semibold rounded-xl bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                      Lançada
+                                    </span>
+                                  ) : null}
                                   <button type="button" onClick={() => setPreviewFicha(ficha)} className="print:hidden px-3 py-1.5 text-xs font-semibold rounded-xl bg-[#FCECEE] text-[#8B1E2D] border border-[#E7C7CC] hover:bg-[#F7DDE1]">Visualizar</button>
+                                  <button
+                                    type="button"
+                                    title={`Lançar esta ficha em ${programacao.tipo}`}
+                                    onClick={() => abrirLancarFichaProgramacao(ficha, programacao.tipo, dia.dia, fKey)}
+                                    className={`print:hidden px-3 py-1.5 text-xs font-semibold rounded-xl border ${
+                                      isProgFichaLancada(fKey)
+                                        ? "bg-slate-100 text-slate-500 border-slate-200 cursor-not-allowed"
+                                        : "bg-[#0F172A] text-white border-[#0F172A] hover:bg-slate-800"
+                                    }`}
+                                    disabled={isProgFichaLancada(fKey)}
+                                  >
+                                    Lançar
+                                  </button>
                                 </div>
                               </div>
                             </div>
@@ -5332,7 +5473,7 @@ const salvarVendasManuais = async () => {
                 </div>
               </label>
 
-              <div className="flex items-center gap-3 print:ml-auto">
+              <div className="flex flex-wrap items-center gap-3 print:ml-auto">
                 <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-right min-w-[120px]">
                   <div className="text-xs text-slate-500">Total da ficha</div>
                   <div className="text-2xl font-black text-slate-900">{ficha.total}</div>
@@ -5344,6 +5485,24 @@ const salvarVendasManuais = async () => {
                   className="print:hidden px-4 py-2 rounded-2xl text-sm font-semibold border bg-[#FCECEE] text-[#8B1E2D] border-[#E7C7CC] hover:bg-[#F7DDE1]"
                 >
                   Visualizar
+                </button>
+                {isProgFichaLancada(fKey) ? (
+                  <span className="print:hidden px-4 py-2 rounded-2xl text-sm font-semibold border bg-emerald-100 text-emerald-800 border-emerald-200">
+                    Lançada
+                  </span>
+                ) : null}
+                <button
+                  type="button"
+                  title={`Lançar esta ficha em ${subAbaAtiva.programacao.tipo}`}
+                  onClick={() => abrirLancarFichaProgramacao(ficha, subAbaAtiva.programacao.tipo, ficha.dia, fKey)}
+                  className={`print:hidden px-4 py-2 rounded-2xl text-sm font-semibold border ${
+                    isProgFichaLancada(fKey)
+                      ? "bg-slate-100 text-slate-500 border-slate-200 cursor-not-allowed"
+                      : "bg-[#0F172A] text-white border-[#0F172A] hover:bg-slate-800"
+                  }`}
+                  disabled={isProgFichaLancada(fKey)}
+                >
+                  Lançar
                 </button>
               </div>
             </div>
@@ -5401,6 +5560,26 @@ const salvarVendasManuais = async () => {
       <PageShell title="Programação do Dia" subtitle="Defina quantos dias quer programar. O sistema monta períodos separados de Montagem e Pesponto para antecipar matérias-primas e execução.">
         <div id="print-programacao-root" className="space-y-6">
           <div className="print:hidden space-y-6">
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-950 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="min-w-0">
+              <span className="font-semibold">Plano congelado.</span>{" "}
+              Lançamentos no Pesponto/Montagem não alteram fichas e ordem desta página até você clicar em{" "}
+              <span className="font-semibold">Recalcular plano</span>. Mudar dias ou capacidade atualiza o plano automaticamente.
+            </p>
+            <button
+              type="button"
+              disabled={fichasProgramacaoLancadas.length === 0}
+              onClick={() => {
+                if (fichasProgramacaoLancadas.length === 0) return;
+                if (window.confirm("Limpar todas as marcas de fichas já lançadas (memória deste navegador)?")) {
+                  limparMarcasFichasLancadasProgramacao();
+                }
+              }}
+              className="print:hidden shrink-0 rounded-xl border border-emerald-300 bg-white px-3 py-2 text-xs font-semibold text-emerald-900 hover:bg-emerald-100 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Limpar marcas de lançadas
+            </button>
+          </div>
           <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
             <div className="font-bold text-lg text-slate-900">Impressão (A4)</div>
             <p className="text-sm text-slate-500 mt-1">Defina o título, a logo e as observações; marque as fichas e use Imprimir.</p>
@@ -5529,6 +5708,13 @@ const salvarVendasManuais = async () => {
                 >
                   {programacaoPdfBusy ? "A gerar PDF…" : "PDF p/ WhatsApp"}
                 </button>
+                <button
+                  type="button"
+                  onClick={recalcularProgramacaoCongelada}
+                  className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-slate-300 bg-white text-slate-900 hover:bg-slate-50"
+                >
+                  Recalcular plano
+                </button>
               </div>
             </div>
             <p className="mt-2 text-xs text-slate-500 print:hidden max-w-xl">
@@ -5578,7 +5764,7 @@ const salvarVendasManuais = async () => {
               logoSrc={programacaoLogoImpressao?.trim() || "/logo-rockstar-bandeira.png"}
               setor={programacaoSubAba}
               modoLabel={programacaoModoVisual === "normal" ? "Visão: por dia" : "Visão: todas as fichas"}
-              diasCount={programacaoDias}
+              diasCount={diasPlanoExibicao}
               dataImpressao={new Date().toLocaleString("pt-BR")}
               observacoes={programacaoObsImpressao}
               itens={itensImpressao}
@@ -6001,6 +6187,118 @@ const salvarVendasManuais = async () => {
         </main>
       </div>
 
+      {lancarFichaDaProgramacao && (
+        <div className="fixed inset-0 z-[55] flex items-center justify-center bg-slate-950/50 p-4 overflow-auto max-[1023px]:landscape:items-start max-[1023px]:landscape:py-4">
+          <div className="w-full max-w-4xl rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6 max-h-[min(92dvh,900px)] overflow-y-auto">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+              <div>
+                <div className="text-lg font-bold">Lançar ficha no sistema</div>
+                <div className="text-sm text-slate-500 mt-1">
+                  {lancarFichaDaProgramacao.tipo} · {lancarFichaDaProgramacao.ref} • {lancarFichaDaProgramacao.cor}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLancarFichaDaProgramacao(null)}
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold shrink-0"
+              >
+                Fechar
+              </button>
+            </div>
+
+            <label className="mt-6 block text-sm font-medium text-slate-700">
+              Nome da programação
+              <input
+                type="text"
+                value={lancarFichaDaProgramacao.programacao}
+                onChange={(e) =>
+                  setLancarFichaDaProgramacao((m) =>
+                    m ? { ...m, programacao: e.target.value } : null
+                  )
+                }
+                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-semibold"
+                placeholder="Ex.: Programação semana 12"
+              />
+            </label>
+
+            <div className="mt-6 overflow-x-auto">
+              <table className="w-full border-collapse text-sm min-w-[640px]">
+                <thead>
+                  <tr className="bg-slate-50">
+                    {sizes.map((size) => (
+                      <th key={`lanc-prog-h-${size}`} className="border border-slate-200 px-2 py-2 text-center font-bold text-slate-700">
+                        {size}
+                      </th>
+                    ))}
+                    <th className="border border-slate-200 px-3 py-2 text-center font-bold text-slate-700">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    {sizes.map((size) => (
+                      <td key={`lanc-prog-c-${size}`} className="border border-slate-200 px-1 py-2 text-center">
+                        <input
+                          type="number"
+                          min={0}
+                          value={lancarFichaDaProgramacao.grid[size] ?? 0}
+                          onChange={(e) => {
+                            const v = Math.max(0, Number(e.target.value) || 0);
+                            setLancarFichaDaProgramacao((m) =>
+                              m ? { ...m, grid: { ...m.grid, [size]: v } } : null
+                            );
+                          }}
+                          className="w-full max-w-[4.5rem] mx-auto rounded-xl border border-slate-200 bg-white px-2 py-2 text-center text-sm font-semibold"
+                        />
+                      </td>
+                    ))}
+                    <td className="border border-slate-200 px-3 py-2 text-center font-bold text-slate-900">
+                      {sizes.reduce((acc, s) => acc + (Number(lancarFichaDaProgramacao.grid[s]) || 0), 0)}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {movError[lancarFichaDaProgramacao.tipo] ? (
+              <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+                {movError[lancarFichaDaProgramacao.tipo]}
+              </div>
+            ) : null}
+
+            <div className="mt-6 flex flex-wrap gap-3 justify-end">
+              <button
+                type="button"
+                onClick={() => setLancarFichaDaProgramacao(null)}
+                className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold bg-white"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const m = lancarFichaDaProgramacao;
+                  if (!m) return;
+                  executeMov(
+                    m.tipo,
+                    {
+                      ref: m.ref,
+                      cor: m.cor,
+                      programacao: m.programacao,
+                      grid: { ...m.grid },
+                    },
+                    false,
+                    m.fichaStorageKey || undefined
+                  );
+                }}
+                className="rounded-2xl bg-[#8B1E2D] text-white px-4 py-3 text-sm font-semibold hover:bg-[#6F1421]"
+              >
+                Confirmar lançamento
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {previewFicha && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 overflow-auto max-[1023px]:landscape:items-start max-[1023px]:landscape:py-4">
           <div className="w-full max-w-3xl rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6 max-h-[min(92dvh,900px)] overflow-y-auto">
@@ -6067,7 +6365,7 @@ const salvarVendasManuais = async () => {
         }
 
         return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 max-[1023px]:landscape:items-start max-[1023px]:landscape:py-4">
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4 max-[1023px]:landscape:items-start max-[1023px]:landscape:py-4">
             <div className="w-full max-w-lg max-h-[min(88dvh,800px)] overflow-y-auto rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6">
               <div className="text-lg font-bold">Lançamento fora da regra</div>
               <p className="text-sm text-slate-600 mt-3 leading-relaxed">
@@ -6076,7 +6374,14 @@ const salvarVendasManuais = async () => {
               <p className="text-sm text-slate-600 mt-3 leading-relaxed">Deseja realmente continuar com esse lançamento?</p>
               <div className="mt-6 flex gap-3 justify-end">
                 <button onClick={() => setConfirmMov(null)} className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold bg-white">Cancelar</button>
-                <button onClick={() => executeMov(confirmMov.tipo, confirmMov.form, true)} className="rounded-2xl bg-slate-950 text-white px-4 py-3 text-sm font-semibold">Lançar mesmo assim</button>
+                <button
+                  onClick={() =>
+                    executeMov(confirmMov.tipo, confirmMov.form, true, confirmMov.progFichaStorageKey || undefined)
+                  }
+                  className="rounded-2xl bg-slate-950 text-white px-4 py-3 text-sm font-semibold"
+                >
+                  Lançar mesmo assim
+                </button>
               </div>
             </div>
           </div>
