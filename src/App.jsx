@@ -354,6 +354,32 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
     return Math.ceil(numero / 12) * 12;
   };
 
+  /**
+   * Mínimo múltiplo de 12 → sugere em múltiplos de 12.
+   * Outro mínimo > 0 (ex.: 4) → arredonda para cima em múltiplos desse mínimo.
+   * Sem mínimo de referência (0) → mantém a necessidade calculada.
+   */
+  const sugerirQtdPorMinimo = (necessidade, minReferencia) => {
+    const n = Math.max(0, Number(necessidade) || 0);
+    const minRef = Number(minReferencia) || 0;
+    if (n <= 0) return 0;
+    if (minRef > 0 && minRef % 12 === 0) {
+      return roundUp12(n);
+    }
+    if (minRef > 0) {
+      return Math.ceil(n / minRef) * minRef;
+    }
+    return n;
+  };
+
+  /** 12, 24, 84 → lote 12; caso contrário o próprio mínimo (ex.: 4). */
+  const passoLotePorMinimo = (minRef) => {
+    const m = Number(minRef) || 0;
+    if (m <= 0) return 0;
+    if (m % 12 === 0) return 12;
+    return m;
+  };
+
   const getVendaDia = (vendaMes) => (Number(vendaMes) || 0) / 30;
 
   const getCoberturaDias = (estoque, vendaDia) => {
@@ -417,39 +443,46 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
         return;
       }
 
+      const temMinimo = minPA > 0 || minProd > 0;
+
       const consumoDuranteMontagem = Math.ceil(vendaDia * diasMontagem);
       const consumoDuranteCicloTotal = Math.ceil(vendaDia * diasTotal);
 
-      const needPA = Math.max(
-  0,
-  (minPA + consumoDuranteMontagem) - pa
-);
+      const needPA = Math.max(0, minPA + consumoDuranteMontagem - pa);
 
-const needProd = Math.max(
-  0,
-  (minProd + consumoDuranteCicloTotal) - prodAtual
-);
+      const needProd = Math.max(0, minProd + consumoDuranteCicloTotal - prodAtual);
 
-// 1) Quanto o sistema gostaria de montar
-const montDesejado = Math.min(roundUp12(needPA), LIMITE_POR_NUMERO);
+      let mont = 0;
+      let pesp = 0;
 
-// 2) Quanto realmente pode montar, limitado pelo estoque de Costura Pronta
-const mont = Math.min(montDesejado, est);
+      if (temMinimo) {
+        const refMont = minPA > 0 ? minPA : minProd > 0 ? minProd : 0;
+        const refPesp = minProd > 0 ? minProd : minPA > 0 ? minPA : 0;
 
-// 3) O que faltou montar vira necessidade extra de Pesponto
-const faltaParaMontagem = Math.max(0, montDesejado - mont);
+        const montDesejado = Math.min(sugerirQtdPorMinimo(needPA, refMont), LIMITE_POR_NUMERO);
 
-// 4) Pesponto soma a necessidade normal + o que faltou para abastecer a montagem
-const pesp = Math.min(
-  roundUp12(needProd + faltaParaMontagem),
-  LIMITE_POR_NUMERO
-);
+        const passoMont = passoLotePorMinimo(refMont);
+        mont =
+          passoMont > 0
+            ? Math.floor(Math.min(montDesejado, est) / passoMont) * passoMont
+            : Math.min(montDesejado, est);
 
-montSizes[size] = mont;
-pespSizes[size] = pesp;
+        const faltaParaMontagem = Math.max(0, montDesejado - mont);
 
-montTotal += mont;
-pespTotal += pesp;
+        pesp = Math.min(
+          sugerirQtdPorMinimo(needProd + faltaParaMontagem, refPesp),
+          LIMITE_POR_NUMERO
+        );
+
+        montSizes[size] = mont;
+        pespSizes[size] = pesp;
+
+        montTotal += mont;
+        pespTotal += pesp;
+      } else {
+        montSizes[size] = 0;
+        pespSizes[size] = 0;
+      }
 
       const coberturaPA = getCoberturaDias(pa, vendaDia);
       const coberturaFutura = getCoberturaDias(pa + prodAtual, vendaDia);
@@ -831,7 +864,7 @@ function buildProgramacaoPeriodo(fichasBase, suggestionsBase, capacidadeDia = 39
     const selecionadas = [];
     const gruposSelecionadosNoDia = new Set();
 
-    while (restante >= 12) {
+    while (restante > 0) {
       const grupoEscolhido = escolherGrupo(
         ativos,
         restante,
