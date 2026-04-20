@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
+import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
 import { supabase } from "./supabase";
 
 import {
@@ -38,122 +38,192 @@ function readProgFichasLancadasFromStorage() {
   }
 }
 
-/** PDF da programação (várias páginas automáticas). */
-function buildProgramacaoDiaPdfBlob({
-  titulo,
-  setor,
-  modoLabel,
-  diasCount,
-  dataImpressao,
-  observacoes,
-  itens,
-  sizesList,
-}) {
-  const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait", compress: true });
-  const pageW = doc.internal.pageSize.getWidth();
-  const pageH = doc.internal.pageSize.getHeight();
-  const m = 11;
-  let y = m;
+const PROG_RESERVA_TOP_PCT_KEY = "rockstar-prog-reserva-top-pct-v1";
+const PROG_TOP_N_KEY = "rockstar-prog-top-n-v1";
+const PROG_TOP_MODE_KEY = "rockstar-prog-top-mode-v1";
+const PROG_TOP_MANUAL_KEYS_KEY = "rockstar-prog-top-manual-keys-v1";
 
-  const newPage = () => {
-    doc.addPage();
-    y = m;
-  };
+function readProgReservaTopPctFromStorage() {
+  try {
+    const raw = localStorage.getItem(PROG_RESERVA_TOP_PCT_KEY);
+    if (raw == null || raw === "") return 0;
+    const n = Number(raw);
+    if (Number.isNaN(n)) return 0;
+    return Math.min(100, Math.max(0, n));
+  } catch {
+    return 0;
+  }
+}
 
-  const needSpace = (h) => {
-    if (y + h > pageH - m) newPage();
-  };
+function readProgTopNFromStorage() {
+  try {
+    const raw = localStorage.getItem(PROG_TOP_N_KEY);
+    if (raw == null || raw === "") return 10;
+    const n = Number(raw);
+    if (Number.isNaN(n)) return 10;
+    return Math.min(200, Math.max(1, Math.round(n)));
+  } catch {
+    return 10;
+  }
+}
 
-  doc.setDrawColor(139, 30, 45);
-  doc.setLineWidth(0.9);
-  doc.line(m, y, pageW - m, y);
-  y += 5;
+function readProgTopModeFromStorage() {
+  try {
+    const raw = String(localStorage.getItem(PROG_TOP_MODE_KEY) || "").trim().toLowerCase();
+    return raw === "manual" ? "manual" : "auto";
+  } catch {
+    return "auto";
+  }
+}
 
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(15);
-  doc.setTextColor(15, 23, 42);
-  doc.text(titulo || "Programação do Dia", m, y);
-  y += 7;
+function readProgTopManualKeysFromStorage() {
+  try {
+    const raw = localStorage.getItem(PROG_TOP_MANUAL_KEYS_KEY);
+    if (!raw) return [];
+    const p = JSON.parse(raw);
+    return Array.isArray(p) ? p.filter((x) => typeof x === "string" && x.includes("__")) : [];
+  } catch {
+    return [];
+  }
+}
 
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8);
-  doc.setTextColor(90);
-  doc.text(`Impresso em: ${dataImpressao}`, pageW - m, y - 1, { align: "right" });
-  doc.setTextColor(30, 41, 59);
-  const meta = `Setor: ${setor}  ·  ${modoLabel}  ·  Período: ${diasCount} dia(s)  ·  ${itens.length} ficha(s)`;
-  const metaLines = doc.splitTextToSize(meta, pageW - 2 * m);
-  doc.text(metaLines, m, y);
-  y += metaLines.length * 3.6 + 3;
+let pdfCaptureProbeCtx = null;
+function getPdfCaptureProbeCtx() {
+  if (!pdfCaptureProbeCtx) {
+    const c = document.createElement("canvas");
+    c.width = 1;
+    c.height = 1;
+    pdfCaptureProbeCtx = c.getContext("2d");
+  }
+  return pdfCaptureProbeCtx;
+}
 
-  const obs = observacoes?.trim();
-  if (obs) {
-    needSpace(22);
-    doc.setFillColor(254, 252, 232);
-    const obsLines = doc.splitTextToSize(`Observações: ${obs}`, pageW - 2 * m - 4);
-    const boxH = Math.min(obsLines.length * 3.4 + 5, 45);
-    doc.rect(m, y - 2, pageW - 2 * m, boxH, "F");
-    doc.setTextColor(120, 53, 15);
-    doc.text(obsLines, m + 2, y + 2);
-    y += boxH + 4;
-    doc.setTextColor(0);
+/** Converte um token de cor (oklch/lab/etc.) para hex/rgb via Canvas — formato que html2canvas entende. */
+function coerceColorTokenForHtml2Canvas(token) {
+  const t = String(token || "").trim();
+  if (!t) return "#808080";
+  const ctx = getPdfCaptureProbeCtx();
+  try {
+    ctx.fillStyle = "#000000";
+    ctx.fillStyle = t;
+    const out = String(ctx.fillStyle);
+    if (out && !/oklch|lab\(|lch\(|color\(/i.test(out)) return out;
+  } catch {
+    /* ignore */
+  }
+  return "#808080";
+}
+
+/**
+ * Browsers podem devolver getComputedStyle já em oklch(); html2canvas não parseia.
+ * Normaliza tokens modernos e, em último caso, remove oklch/color-mix restantes.
+ */
+function sanitizeCssValueForHtml2Canvas(value) {
+  if (typeof value !== "string" || !value.trim()) return value;
+  if (!/oklch|lab\(|lch\(|color\(|color-mix\(/i.test(value)) return value;
+
+  const ctx = getPdfCaptureProbeCtx();
+  try {
+    ctx.fillStyle = "#000000";
+    ctx.fillStyle = value.trim();
+    const asFill = String(ctx.fillStyle);
+    if (asFill && !/oklch|lab\(|lch\(|color\(/i.test(asFill)) return asFill;
+  } catch {
+    /* continuar com substituições */
   }
 
-  for (let i = 0; i < itens.length; i++) {
-    const { ficha, dia, ordem } = itens[i];
-    const activeSizes = sizesList.filter((s) => Number(ficha.sizes?.[s] || 0) > 0);
-    needSpace(32);
+  let out = value
+    .replace(/\boklch\([^)]+\)/gi, (m) => coerceColorTokenForHtml2Canvas(m))
+    .replace(/\blab\([^)]+\)/gi, (m) => coerceColorTokenForHtml2Canvas(m))
+    .replace(/\blch\([^)]+\)/gi, (m) => coerceColorTokenForHtml2Canvas(m))
+    .replace(/\bcolor\([^)]+\)/gi, (m) => coerceColorTokenForHtml2Canvas(m));
 
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(9);
-    doc.setTextColor(139, 30, 45);
-    doc.text(`Dia ${String(dia).padStart(2, "0")} · Ordem ${String(ordem).padStart(2, "0")}`, m, y);
-    y += 4.5;
-    doc.setFontSize(11);
-    doc.setTextColor(15, 23, 42);
-    const corLinha = String(ficha.cor || "—");
-    doc.text(corLinha, m, y);
-    doc.text(`Total: ${ficha.total} pares`, pageW - m, y, { align: "right" });
-    y += 5;
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(8);
-    doc.text(`${ficha.ref} · ${ficha.nome}`, m, y);
-    y += 5.5;
+  if (/oklch|color-mix\(/i.test(out)) {
+    out = out
+      .replace(/\boklch\([^)]*\)/gi, "#808080")
+      .replace(/\bcolor-mix\([^)]*\)/gi, "#808080");
+  }
+  return out;
+}
 
-    if (activeSizes.length > 0) {
-      const fs = activeSizes.length > 16 ? 5.5 : activeSizes.length > 12 ? 6.5 : 7.5;
-      autoTable(doc, {
-        startY: y,
-        head: [activeSizes.map((s) => String(s))],
-        body: [activeSizes.map((s) => String(Number(ficha.sizes?.[s] || 0)))],
-        styles: { fontSize: fs, cellPadding: 0.5, halign: "center", valign: "middle" },
-        headStyles: { fillColor: [241, 245, 249], textColor: [30, 41, 59], fontStyle: "bold" },
-        margin: { left: m, right: m },
-        tableLineColor: [200, 200, 205],
-        tableLineWidth: 0.05,
-      });
-      y = doc.lastAutoTable.finalY + 6;
-    } else {
-      doc.setFontSize(7);
-      doc.setTextColor(120);
-      doc.text("Sem grade numérica", m, y);
-      y += 7;
-      doc.setTextColor(0);
+/**
+ * html2canvas não interpreta cores oklch() (Tailwind v4). Copiamos o estilo *calculado*
+ * para inline no clone (sanitizado), removemos classes e depois removemos folhas no onclone.
+ */
+function syncInlineComputedStylesForPdfCapture(origRoot, cloneRoot) {
+  if (
+    origRoot?.nodeType !== Node.ELEMENT_NODE ||
+    cloneRoot?.nodeType !== Node.ELEMENT_NODE
+  ) {
+    return;
+  }
+  const win = origRoot.ownerDocument?.defaultView;
+  if (!win) return;
+
+  try {
+    const cs = win.getComputedStyle(origRoot);
+    for (let i = 0; i < cs.length; i++) {
+      const name = cs[i];
+      try {
+        let value = cs.getPropertyValue(name);
+        const priority = cs.getPropertyPriority(name);
+        if (value) {
+          if (/oklch|lab\(|lch\(|color\(|color-mix\(/i.test(value)) {
+            value = sanitizeCssValueForHtml2Canvas(value);
+          }
+          cloneRoot.style.setProperty(name, value, priority);
+        }
+      } catch {
+        /* propriedade pode não aplicar-se ao nó clonado */
+      }
     }
+  } catch {
+    /* ignore */
   }
+  cloneRoot.removeAttribute("class");
 
-  needSpace(18);
-  const lineY = Math.min(y + 4, pageH - 16);
-  doc.setDrawColor(160);
-  doc.setLineWidth(0.2);
-  const mid = pageW / 2;
-  doc.line(m, lineY, mid - 2, lineY);
-  doc.line(mid + 2, lineY, pageW - m, lineY);
-  doc.setFontSize(7);
-  doc.setTextColor(70);
-  doc.text("Responsável", (m + mid - 2) / 2, lineY + 4, { align: "center" });
-  doc.text("Conferência", (mid + 2 + pageW - m) / 2, lineY + 4, { align: "center" });
+  const oCh = origRoot.children;
+  const cCh = cloneRoot.children;
+  const len = Math.min(oCh.length, cCh.length);
+  for (let i = 0; i < len; i++) {
+    syncInlineComputedStylesForPdfCapture(oCh[i], cCh[i]);
+  }
+}
 
-  return doc.output("blob");
+/** PDF a partir do mesmo DOM da folha de impressão (html2canvas + A4 com margens iguais ao @page). */
+async function buildProgramacaoPrintSheetPdfBlobFromElement(element) {
+  const canvas = await html2canvas(element, {
+    scale: 2,
+    useCORS: true,
+    logging: false,
+    backgroundColor: "#ffffff",
+    scrollX: 0,
+    scrollY: 0,
+    width: element.scrollWidth,
+    height: element.scrollHeight,
+    onclone(clonedDoc) {
+      const clonedRoot = clonedDoc.getElementById("programacao-print-sheet-root");
+      if (clonedRoot) syncInlineComputedStylesForPdfCapture(element, clonedRoot);
+      clonedDoc.querySelectorAll('link[rel="stylesheet"]').forEach((n) => n.remove());
+      clonedDoc.querySelectorAll("style").forEach((n) => n.remove());
+    },
+  });
+  const imgData = canvas.toDataURL("image/jpeg", 0.93);
+  const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait", compress: true });
+  const pageW = pdf.internal.pageSize.getWidth();
+  const pageH = pdf.internal.pageSize.getHeight();
+  const margin = 10;
+  const contentW = pageW - 2 * margin;
+  const contentH = pageH - 2 * margin;
+  const imgW = contentW;
+  const imgH = (canvas.height * imgW) / canvas.width;
+  let page = 0;
+  while (page * contentH < imgH - 0.05) {
+    if (page > 0) pdf.addPage();
+    pdf.addImage(imgData, "JPEG", margin, margin - page * contentH, imgW, imgH);
+    page += 1;
+  }
+  return pdf.output("blob");
 }
 
 /** Garante chaves numéricas por numeração (evita mismatch "34" vs 34 vindo do Supabase/JSON). */
@@ -738,6 +808,7 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
 }
 
 function splitIntoFichas(sizesObj, maxPorFicha = 396) {
+  const limite = Math.max(1, Number(maxPorFicha) || 396);
   const fichas = [];
 
   const tamanhos = Object.entries(sizesObj)
@@ -761,7 +832,7 @@ function splitIntoFichas(sizesObj, maxPorFicha = 396) {
       const item = restante[i];
       if (item.qtd <= 0) continue;
 
-      const podeAdicionar = Math.min(item.qtd, maxPorFicha - total);
+      const podeAdicionar = Math.min(item.qtd, limite - total);
 
       if (podeAdicionar <= 0) break;
 
@@ -769,7 +840,7 @@ function splitIntoFichas(sizesObj, maxPorFicha = 396) {
       item.qtd -= podeAdicionar;
       total += podeAdicionar;
 
-      if (total >= maxPorFicha) break;
+      if (total >= limite) break;
     }
 
     if (total > 0) {
@@ -787,11 +858,26 @@ function splitIntoFichas(sizesObj, maxPorFicha = 396) {
   return fichas;
 }
 
-function buildProgramacaoPeriodo(fichasBase, suggestionsBase, capacidadeDia = 396, dias = 1, tipo = "") {
+function buildProgramacaoPeriodo(
+  fichasBase,
+  suggestionsBase,
+  capacidadeDia = 396,
+  dias = 1,
+  tipo = "",
+  options = {}
+) {
+  const pctTop = Math.min(100, Math.max(0, Number(options.pctCapacidadeTop) || 0));
+  const topN = Math.max(1, Math.min(200, Number(options.topN) || 10));
+  const topMode = options.topMode === "manual" ? "manual" : "auto";
+  const topManualSet = new Set(
+    Array.isArray(options.topManualKeys) ? options.topManualKeys.filter((x) => typeof x === "string") : []
+  );
+
   const prioridadeMap = new Map();
   const urgenciaMap = new Map();
   const recuperacaoMap = new Map();
   const gradeRecuperacaoMap = new Map();
+  const vendaMap = new Map();
 
   (suggestionsBase || []).forEach((item) => {
     const key = `${item.ref}__${item.cor}`;
@@ -799,6 +885,7 @@ function buildProgramacaoPeriodo(fichasBase, suggestionsBase, capacidadeDia = 39
     urgenciaMap.set(key, !!item.urgente);
     recuperacaoMap.set(key, !!item.recuperacao);
     gradeRecuperacaoMap.set(key, !!item.gradeRecuperacao);
+    vendaMap.set(key, Number(item.vendaTotal) || 0);
   });
 
   const grupos = {};
@@ -823,25 +910,47 @@ function buildProgramacaoPeriodo(fichasBase, suggestionsBase, capacidadeDia = 39
         peso: Math.max(1, prioridade),
         current: 0,
         fichas: [],
+        topTier: false,
       };
     }
 
     grupos[key].fichas.push({ ...ficha, tipo });
   });
 
+  const keysGrupo = Object.keys(grupos);
+  const ranked = keysGrupo
+    .map((key) => ({ key, venda: vendaMap.get(key) || 0 }))
+    .sort((a, b) => b.venda - a.venda || String(a.key).localeCompare(String(b.key), "pt-BR"));
+  const topSet =
+    topMode === "manual"
+      ? new Set(
+          ranked
+            .filter((x) => topManualSet.has(x.key))
+            .map((x) => x.key)
+        )
+      : new Set(ranked.slice(0, Math.min(topN, ranked.length)).map((x) => x.key));
+
+  keysGrupo.forEach((key) => {
+    grupos[key].topTier = topSet.has(key);
+  });
+
   Object.values(grupos).forEach((grupo) => {
-    grupo.fichas.sort((a, b) => a.total - b.total || a.nome.localeCompare(b.nome, "pt-BR"));
+    // Mantem a ordem de execucao da maior para a menor ficha em cada grupo.
+    grupo.fichas.sort((a, b) => b.total - a.total || a.nome.localeCompare(b.nome, "pt-BR"));
   });
 
   const ativos = Object.values(grupos).filter((grupo) => grupo.fichas.length > 0);
   const totalPeso = ativos.reduce((acc, grupo) => acc + grupo.peso, 0) || 1;
+
+  const usarReservaTop = pctTop > 0 && ativos.some((g) => g.topTier);
+  const ativosTop = ativos.filter((g) => g.topTier);
 
   const diasProgramados = [];
   let gruposDiaAnterior = new Set();
 
   const escolherGrupo = (gruposDisponiveis, restante, ultimoGrupoDia, gruposBloqueadosDiaAnterior) => {
     const candidatos = gruposDisponiveis.filter(
-      (grupo) => grupo.fichas.length > 0 && grupo.fichas.some((ficha) => ficha.total <= restante)
+      (grupo) => grupo.fichas.length > 0 && Number(grupo.fichas[0]?.total || 0) <= restante
     );
 
     if (!candidatos.length) return null;
@@ -885,51 +994,59 @@ function buildProgramacaoPeriodo(fichasBase, suggestionsBase, capacidadeDia = 39
   };
 
   for (let dia = 1; dia <= dias; dia += 1) {
-    let restante = capacidadeDia;
     let ultimoGrupoDia = "";
     const selecionadas = [];
     const gruposSelecionadosNoDia = new Set();
 
-    while (restante > 0) {
-      const grupoEscolhido = escolherGrupo(
-        ativos,
-        restante,
-        ultimoGrupoDia,
-        gruposDiaAnterior
-      );
+    const runPhase = (restanteInicial, pool, marcarReservaTop) => {
+      let restante = restanteInicial;
+      while (restante > 0) {
+        const grupoEscolhido = escolherGrupo(pool, restante, ultimoGrupoDia, gruposDiaAnterior);
 
-      if (!grupoEscolhido) break;
+        if (!grupoEscolhido) break;
 
-      const fichaEscolhida = [...grupoEscolhido.fichas]
-        .filter((ficha) => ficha.total <= restante)
-        .sort((a, b) => b.total - a.total || a.nome.localeCompare(b.nome, "pt-BR"))[0];
+        const fichaEscolhida = grupoEscolhido.fichas[0];
 
-      if (!fichaEscolhida) {
-        grupoEscolhido.current -= totalPeso;
-        break;
+        if (!fichaEscolhida || fichaEscolhida.total > restante) {
+          grupoEscolhido.current -= totalPeso;
+          break;
+        }
+
+        grupoEscolhido.fichas = grupoEscolhido.fichas.filter((f) => f.nome !== fichaEscolhida.nome);
+
+        selecionadas.push({
+          ...fichaEscolhida,
+          prioridade: grupoEscolhido.prioridade,
+          urgente: grupoEscolhido.urgente,
+          recuperacao: grupoEscolhido.recuperacao,
+          gradeRecuperacao: grupoEscolhido.gradeRecuperacao,
+          grupoKey: grupoEscolhido.key,
+          ...(marcarReservaTop ? { programacaoReservaTop: true } : {}),
+        });
+
+        gruposSelecionadosNoDia.add(grupoEscolhido.key);
+        restante -= fichaEscolhida.total;
+        ultimoGrupoDia = grupoEscolhido.key;
       }
+      return restante;
+    };
 
-      grupoEscolhido.fichas = grupoEscolhido.fichas.filter((f) => f.nome !== fichaEscolhida.nome);
-
-      selecionadas.push({
-        ...fichaEscolhida,
-        prioridade: grupoEscolhido.prioridade,
-        urgente: grupoEscolhido.urgente,
-        recuperacao: grupoEscolhido.recuperacao,
-        gradeRecuperacao: grupoEscolhido.gradeRecuperacao,
-        grupoKey: grupoEscolhido.key,
-      });
-
-      gruposSelecionadosNoDia.add(grupoEscolhido.key);
-      restante -= fichaEscolhida.total;
-      ultimoGrupoDia = grupoEscolhido.key;
+    let restanteFinal;
+    if (usarReservaTop && ativosTop.length > 0) {
+      const reservaTopPares = Math.round((capacidadeDia * pctTop) / 100);
+      let restanteGeral = capacidadeDia - reservaTopPares;
+      const sobraTop = runPhase(reservaTopPares, ativosTop, true);
+      restanteGeral += sobraTop;
+      restanteFinal = runPhase(restanteGeral, ativos, false);
+    } else {
+      restanteFinal = runPhase(capacidadeDia, ativos, false);
     }
 
     diasProgramados.push({
       dia,
       capacidadeDia,
-      totalProgramado: capacidadeDia - restante,
-      restante,
+      totalProgramado: capacidadeDia - restanteFinal,
+      restante: restanteFinal,
       fichas: selecionadas,
     });
 
@@ -946,6 +1063,11 @@ function buildProgramacaoPeriodo(fichasBase, suggestionsBase, capacidadeDia = 39
     totalRestante: diasProgramados.reduce((acc, item) => acc + item.restante, 0),
     diasProgramados,
     totalFichas: todasFichas.length,
+    reservaTopVendasPct: usarReservaTop ? pctTop : 0,
+    reservaTopN: topN,
+    reservaTopAtiva: usarReservaTop,
+    reservaTopModo: topMode,
+    reservaTopManualSelecionados: topSet.size,
   };
 }
 
@@ -1114,99 +1236,220 @@ function ProgramacaoDiaFolhaImpressao({
   itens,
   sizesList,
   folhaSubtitle = "Fichas selecionadas — otimizado para A4",
+  copiasPorPagina = 1,
+  etiquetaFichaCustom = "",
+  cabecalhoFolha = "completo",
 }) {
   const obs = observacoes?.trim();
+  const etiquetaBase = String(etiquetaFichaCustom || "").trim();
+  const modoCabecalho = cabecalhoFolha === "minimo" || cabecalhoFolha === "oculto" ? cabecalhoFolha : "completo";
+  const extractFichaToken = (nome = "") => {
+    const m = String(nome).match(/ficha\s*(\d+)/i);
+    return m ? `Ficha ${String(m[1]).padStart(2, "0")}` : "";
+  };
+
+  const extractNomeSemFicha = (nome = "", ref = "", cor = "") => {
+    let base = String(nome || "");
+    if (ref) base = base.replace(String(ref), "");
+    if (cor) base = base.replace(String(cor), "");
+    base = base.replace(/[-–]\s*/g, " ").replace(/\bficha\s*\d+\b/i, "").replace(/\s+/g, " ").trim();
+    return base;
+  };
+
+  const gruposFichaMap = new Map();
+  (itens || []).forEach((row, idx) => {
+    const { ficha, dia, ordem } = row;
+    const copia = Math.max(1, Number(row?.copia) || 1);
+    const fichaToken = extractFichaToken(ficha?.nome || "");
+    const key = `${copia}__${dia}__${fichaToken || `ordem-${String(ordem || idx + 1).padStart(2, "0")}`}`;
+    if (!gruposFichaMap.has(key)) {
+      gruposFichaMap.set(key, {
+        key,
+        copia,
+        dia,
+        ordem: ordem || idx + 1,
+        fichaToken: fichaToken || `Ficha ${String(ordem || idx + 1).padStart(2, "0")}`,
+        itens: [],
+      });
+    }
+    gruposFichaMap.get(key).itens.push(row);
+  });
+
+  const gruposFicha = Array.from(gruposFichaMap.values()).sort((a, b) => a.copia - b.copia || a.dia - b.dia || a.ordem - b.ordem);
+  const totalCopias = Math.max(1, ...gruposFicha.map((g) => Number(g.copia) || 1), 1);
+  const copiasPorPaginaEfetivo = Math.max(1, Math.min(4, Number(copiasPorPagina) || 1));
+  const isEconomico = copiasPorPaginaEfetivo > 1;
+  const blocosPorPaginaEconomico = copiasPorPaginaEfetivo;
+  const repeticoesPorFichaBase = gruposFicha.reduce((acc, grupo) => {
+    const baseKey = `${grupo.dia}__${grupo.fichaToken}`;
+    acc[baseKey] = (acc[baseKey] || 0) + 1;
+    return acc;
+  }, {});
+
   return (
-    <div className="programacao-print-doc text-slate-900">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b-[3px] border-[#8B1E2D] pb-3 mb-3">
-        <img src={logoSrc} alt="Logo" className="h-11 w-auto max-w-[min(100%,280px)] object-contain object-left shrink-0" />
-        <div className="flex-1 text-center px-2 min-w-[120px]">
-          <h1 className="text-[15pt] font-black text-[#0F172A] leading-tight">{titulo || "Programação do Dia"}</h1>
-          <p className="text-[8pt] text-slate-500 mt-1">{folhaSubtitle}</p>
-        </div>
-        <div className="text-[8pt] text-slate-600 text-right shrink-0">
-          <div className="font-semibold text-slate-800">Impresso em</div>
-          <div>{dataImpressao}</div>
-        </div>
-      </div>
+    <div
+      className={`programacao-print-doc text-slate-900 ${modoCabecalho === "oculto" ? "programacao-print-doc--cabecalho-oculto" : ""} ${
+        isEconomico ? `programacao-print-economico programacao-print-economico-${blocosPorPaginaEconomico}` : ""
+      }`}
+    >
+      {modoCabecalho === "completo" ? (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b-[3px] border-[#8B1E2D] pb-3 mb-3">
+            <img src={logoSrc} alt="Logo" className="h-11 w-auto max-w-[min(100%,280px)] object-contain object-left shrink-0" />
+            <div className="flex-1 text-center px-2 min-w-[120px]">
+              <h1 className="text-[15pt] font-black text-[#0F172A] leading-tight">{titulo || "Programação do Dia"}</h1>
+              <p className="text-[8pt] text-slate-500 mt-1">{folhaSubtitle}</p>
+            </div>
+            <div className="text-[8pt] text-slate-600 text-right shrink-0">
+              <div className="font-semibold text-slate-800">Impresso em</div>
+              <div>{dataImpressao}</div>
+            </div>
+          </div>
 
-      <div className="flex flex-wrap gap-1.5 mb-3 text-[8pt]">
-        <span className="px-2 py-0.5 rounded-md border border-slate-300 bg-slate-100 font-bold text-[#0F172A]">Setor: {setor}</span>
-        <span className="px-2 py-0.5 rounded-md border border-slate-200 bg-white">{modoLabel}</span>
-        <span className="px-2 py-0.5 rounded-md border border-slate-200 bg-white">Período: {diasCount} dia(s)</span>
-        <span className="px-2 py-0.5 rounded-md border border-slate-200 bg-white">{itens.length} ficha(s)</span>
-      </div>
-
-      {obs ? (
-        <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 p-2 text-[8pt] print-section">
-          <span className="font-bold text-amber-900">Observações: </span>
-          <span className="whitespace-pre-wrap text-amber-950">{obs}</span>
+          <div className="flex flex-wrap gap-1.5 mb-3 text-[8pt]">
+            <span className="px-2 py-0.5 rounded-md border border-slate-300 bg-slate-100 font-bold text-[#0F172A]">Setor: {setor}</span>
+            <span className="px-2 py-0.5 rounded-md border border-slate-200 bg-white">{modoLabel}</span>
+            <span className="px-2 py-0.5 rounded-md border border-slate-200 bg-white">Período: {diasCount} dia(s)</span>
+            <span className="px-2 py-0.5 rounded-md border border-slate-200 bg-white">{itens.length} ficha(s)</span>
+          </div>
+        </>
+      ) : modoCabecalho === "minimo" ? (
+        <div className="programacao-print-cabecalho-minimo mb-2 pb-1.5 border-b border-slate-300 text-[7pt] text-slate-700 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <span className="font-black text-slate-900">{titulo || "Programação do Dia"}</span>
+          <span className="text-slate-600">
+            {setor} · {modoLabel} · {diasCount} dia(s) · {itens.length} bloco(s)
+          </span>
+          <span className="text-slate-500 tabular-nums">{dataImpressao}</span>
         </div>
       ) : null}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 print:grid-cols-2 print:gap-2">
-        {itens.map((row, i) => {
-          const { ficha, dia, ordem } = row;
-          const activeSizes = sizesList.filter((s) => Number(ficha.sizes?.[s] || 0) > 0);
+      <div className={isEconomico ? "programacao-print-grid-economico" : "space-y-3"}>
+        {gruposFicha.map((grupo, i) => {
+          const totalProg = grupo.itens.reduce((acc, row) => acc + (Number(row.ficha?.total) || 0), 0);
+          const refsMap = new Map();
+          grupo.itens.forEach((row) => {
+            const ficha = row.ficha || {};
+            const ref = String(ficha.ref || "—");
+            const cor = String(ficha.cor || "—");
+            if (!refsMap.has(ref)) {
+              refsMap.set(ref, {
+                ref,
+                nome: extractNomeSemFicha(ficha.nome || "", ficha.ref || "", ficha.cor || ""),
+                rows: [],
+              });
+            }
+            refsMap.get(ref).rows.push({
+              cor,
+              sizes: Object.fromEntries(sizesList.map((s) => [s, Number(ficha.sizes?.[s] || 0)])),
+              total: Number(ficha.total) || 0,
+            });
+          });
+          const refs = Array.from(refsMap.values());
+          const linhasCor = refs.reduce((acc, ref) => acc + ref.rows.length, 0);
+          const blocoGrande = refs.length > 2 || linhasCor > 4;
+          const baseKey = `${grupo.dia}__${grupo.fichaToken}`;
+          const fichaDuplicada = Number(repeticoesPorFichaBase[baseKey] || 0) > 1;
+          const quebraEconomica =
+            isEconomico &&
+            (((!fichaDuplicada && blocoGrande) || (((i + 1) % blocosPorPaginaEconomico === 0) && i !== gruposFicha.length - 1)));
+          const linhaEtiquetaFicha = etiquetaBase
+            ? etiquetaBase.replace(/\{dia\}/gi, String(grupo.dia).padStart(2, "0"))
+            : `PROGRAMAÇÃO: Dia ${String(grupo.dia).padStart(2, "0")} - ${grupo.fichaToken}`;
           return (
             <div
-              key={`pf-${ficha.nome}-${dia}-${i}`}
-              className="programacao-print-ficha rounded-lg border border-slate-400 bg-white p-2 break-inside-avoid page-break-inside-avoid shadow-sm"
+              key={`pf-group-${grupo.key}-${i}`}
+              className={`programacao-print-ficha rounded-lg border border-slate-400 bg-white p-2.5 break-inside-avoid page-break-inside-avoid shadow-sm ${
+                isEconomico ? "programacao-print-ficha-economica" : ""
+              } ${quebraEconomica ? "programacao-print-item-break" : ""}`}
             >
-              <div className="flex items-start justify-between gap-2 border-b border-slate-200 pb-1 mb-1.5">
-                <div className="min-w-0">
-                  <div className="text-[7pt] font-bold uppercase tracking-wide text-[#8B1E2D]">
-                    Dia {String(dia).padStart(2, "0")} · Ordem {String(ordem).padStart(2, "0")}
-                  </div>
-                  <div className="text-[9pt] font-black text-slate-900 truncate">{ficha.cor}</div>
-                  <div className="text-[7pt] text-slate-600 truncate">
-                    {ficha.ref} · {ficha.nome}
-                  </div>
+              <div className="border-b border-slate-300 pb-1.5 mb-2">
+                <div className="text-[9pt] font-black text-slate-900 flex items-center justify-between gap-2">
+                  <span className="min-w-0 whitespace-normal break-words leading-tight">{linhaEtiquetaFicha}</span>
+                  {totalCopias > 1 ? (
+                    <span className="text-[7pt] font-bold text-slate-600">Cópia {grupo.copia}/{totalCopias}</span>
+                  ) : null}
                 </div>
-                <div className="shrink-0 text-right">
-                  <div className="text-[7pt] text-slate-500">Total</div>
-                  <div className="text-[12pt] font-black tabular-nums text-[#0F172A]">{ficha.total}</div>
-                  <div className="text-[6pt] text-slate-400">pares</div>
+                <div className="text-[7pt] text-slate-500">
+                  {setor} · {modoLabel}
                 </div>
               </div>
-              {activeSizes.length > 0 ? (
-                <table className="w-full border-collapse text-[7pt]">
-                  <thead>
-                    <tr className="bg-slate-100">
-                      {activeSizes.map((s) => (
-                        <th key={s} className="border border-slate-300 px-0.5 py-0.5 text-center font-bold text-slate-700">
-                          {s}
-                        </th>
+
+              {refs.map((refBlock, refIdx) => (
+                <div key={`refblock-${grupo.key}-${refBlock.ref}-${refIdx}`} className={refIdx > 0 ? "mt-2.5" : ""}>
+                  <div className="text-[8pt] font-bold text-slate-800 mb-1">
+                    {refBlock.ref}{refBlock.nome ? ` - ${refBlock.nome}` : ""}
+                  </div>
+                  <table className="programacao-print-grade-table w-full border-collapse text-[8pt] leading-normal table-fixed box-border">
+                    <colgroup>
+                      <col className="w-[28mm]" />
+                      {sizesList.map((s) => (
+                        <col key={`${grupo.key}-${refBlock.ref}-col-${s}`} className="w-[8mm]" />
                       ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      {activeSizes.map((s) => (
-                        <td key={s} className="border border-slate-300 px-0.5 py-0.5 text-center font-semibold tabular-nums">
-                          {Number(ficha.sizes?.[s] || 0)}
-                        </td>
+                      <col className="w-[10mm]" />
+                    </colgroup>
+                    <thead>
+                      <tr className="bg-slate-600 text-white">
+                        <th className="border border-slate-500 bg-slate-600 px-1 py-1 align-middle text-left font-bold text-white">COR</th>
+                        {sizesList.map((s) => (
+                          <th
+                            key={`${grupo.key}-${refBlock.ref}-h-${s}`}
+                            className="border border-slate-500 bg-slate-600 px-0.5 py-1 align-middle text-center font-bold text-white"
+                          >
+                            {s}
+                          </th>
+                        ))}
+                        <th className="border border-slate-500 bg-slate-600 px-1 py-1 align-middle text-right font-black text-white">TOT</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {refBlock.rows.map((corRow, rowIdx) => (
+                        <tr key={`${grupo.key}-${refBlock.ref}-${corRow.cor}-${rowIdx}`}>
+                          <td className="border border-slate-300 px-1 py-1 align-middle text-left font-semibold text-slate-800 break-words [overflow-wrap:anywhere]">
+                            {corRow.cor}
+                          </td>
+                          {sizesList.map((s) => (
+                            <td
+                              key={`${grupo.key}-${refBlock.ref}-${corRow.cor}-${rowIdx}-${s}`}
+                              className="border border-slate-300 px-0.5 py-1 align-middle text-center tabular-nums text-slate-700"
+                            >
+                              {corRow.sizes[s] > 0 ? corRow.sizes[s] : ""}
+                            </td>
+                          ))}
+                          <td className="border border-slate-300 px-1 py-1 align-middle text-right font-bold tabular-nums text-slate-900">
+                            {corRow.total}
+                          </td>
+                        </tr>
                       ))}
-                    </tr>
-                  </tbody>
-                </table>
-              ) : (
-                <div className="text-[7pt] text-slate-400 italic">Sem grade numérica</div>
-              )}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+
+              <div className="mt-0.5 text-[7pt] text-slate-700 print-section">
+                <span className="font-bold">TOTAL PROG:</span>{" "}
+                <span className="font-black tabular-nums">{totalProg}</span>
+              </div>
+
+              {obs ? (
+                <div className={`mt-1 text-[7pt] text-slate-800 print-section ${isEconomico ? "text-[6pt] leading-snug" : ""}`}>
+                  <span className="font-bold">Obs.: </span>
+                  <span className="whitespace-pre-wrap break-words">{obs}</span>
+                </div>
+              ) : null}
+
+              <div className="mt-3 grid grid-cols-2 gap-3 border-t border-slate-300 pt-2 text-[7pt] print-section">
+                <div className="text-center">
+                  <div className="h-5 border-b border-slate-400" />
+                  <div className="mt-1 font-semibold text-slate-700">Responsável</div>
+                </div>
+                <div className="text-center">
+                  <div className="h-5 border-b border-slate-400" />
+                  <div className="mt-1 font-semibold text-slate-700">Conferência</div>
+                </div>
+              </div>
             </div>
           );
         })}
-      </div>
-
-      <div className="mt-6 grid grid-cols-2 gap-6 border-t border-slate-300 pt-4 text-[8pt] print-section">
-        <div className="text-center">
-          <div className="h-10 border-b border-slate-400" />
-          <div className="mt-1 font-semibold text-slate-700">Responsável</div>
-        </div>
-        <div className="text-center">
-          <div className="h-10 border-b border-slate-400" />
-          <div className="mt-1 font-semibold text-slate-700">Conferência</div>
-        </div>
       </div>
     </div>
   );
@@ -1285,6 +1528,10 @@ const [draftMinimos, setDraftMinimos] = useState({});
 const [dirtyMinimos, setDirtyMinimos] = useState(false);
 const [capacidadePespontoDia, setCapacidadePespontoDia] = useState(396);
 const [capacidadeMontagemDia, setCapacidadeMontagemDia] = useState(396);
+const [programacaoReservaTopPct, setProgramacaoReservaTopPct] = useState(readProgReservaTopPctFromStorage);
+const [programacaoTopN, setProgramacaoTopN] = useState(readProgTopNFromStorage);
+const [programacaoTopModo, setProgramacaoTopModo] = useState(readProgTopModeFromStorage);
+const [programacaoTopManualKeys, setProgramacaoTopManualKeys] = useState(readProgTopManualKeysFromStorage);
 const [tempoProducao, setTempoProducao] = useState(initialTempoProducao);
 const [tempoProducaoDraft, setTempoProducaoDraft] = useState(initialTempoProducao);
 const [fichasAbertas, setFichasAbertas] = useState({});
@@ -1306,8 +1553,12 @@ const [programacaoModoVisual, setProgramacaoModoVisual] = useState("normal");
 const [programacaoTituloImpressao, setProgramacaoTituloImpressao] = useState("Programação do Dia");
 const [programacaoObsImpressao, setProgramacaoObsImpressao] = useState("");
 const [programacaoLogoImpressao, setProgramacaoLogoImpressao] = useState("/logo-rockstar-bandeira.png");
+const [programacaoCopiasPorPagina, setProgramacaoCopiasPorPagina] = useState(1);
+const [programacaoEtiquetaFicha, setProgramacaoEtiquetaFicha] = useState("");
+const [programacaoCabecalhoFolha, setProgramacaoCabecalhoFolha] = useState("completo");
 const [programacaoFichaSelecao, setProgramacaoFichaSelecao] = useState({});
 const [programacaoPdfBusy, setProgramacaoPdfBusy] = useState(false);
+const programacaoPrintSheetRef = useRef(null);
 const [lancarFichaDaProgramacao, setLancarFichaDaProgramacao] = useState(null);
 /** Chaves de fichas já lançadas (persistido em localStorage). */
 const [fichasProgramacaoLancadas, setFichasProgramacaoLancadas] = useState(readProgFichasLancadasFromStorage);
@@ -1442,10 +1693,30 @@ const previewBySelection = (form) => {
   [rowsNormalized, minimos, vendas, tempoProducao]
 );
 
+const topVendasCadastroOpcoes = useMemo(
+  () =>
+    sortedRowsByRefCor
+      .map((row) => {
+        const vendaGrid = vendasDraft?.[row.ref]?.[row.cor] || vendas?.[row.ref]?.[row.cor] || {};
+        const vendaTotal = sizes.reduce((acc, size) => acc + (Number(vendaGrid[size]) || 0), 0);
+        return {
+          key: `${row.ref}__${row.cor}`,
+          ref: row.ref,
+          cor: row.cor,
+          vendaTotal,
+        };
+      })
+      .sort((a, b) => b.vendaTotal - a.vendaTotal || a.ref.localeCompare(b.ref, "pt-BR") || a.cor.localeCompare(b.cor, "pt-BR")),
+  [sortedRowsByRefCor, vendasDraft, vendas]
+);
+
+const limiteFichaPesponto = Math.max(1, Number(capacidadePespontoDia) || 396);
+const limiteFichaMontagem = Math.max(1, Number(capacidadeMontagemDia) || 396);
+
 const fichasMontagem = useMemo(
   () =>
     (suggestions.montagem || []).flatMap((item) =>
-      splitIntoFichas(item.sizes).map((ficha, index) => ({
+      splitIntoFichas(item.sizes, limiteFichaMontagem).map((ficha, index) => ({
         ...ficha,
         nome: `${item.ref} - ${item.cor} - Ficha ${index + 1}`,
         ref: item.ref,
@@ -1456,13 +1727,13 @@ const fichasMontagem = useMemo(
         recuperacao: item.recuperacao,
       }))
     ),
-  [suggestions]
+  [suggestions, limiteFichaMontagem]
 );
 
 const fichasPesponto = useMemo(
   () =>
     (suggestions.pesponto || []).flatMap((item) =>
-      splitIntoFichas(item.sizes).map((ficha, index) => ({
+      splitIntoFichas(item.sizes, limiteFichaPesponto).map((ficha, index) => ({
         ...ficha,
         nome: `${item.ref} - ${item.cor} - Ficha ${index + 1}`,
         ref: item.ref,
@@ -1473,7 +1744,7 @@ const fichasPesponto = useMemo(
         recuperacao: item.recuperacao,
       }))
     ),
-  [suggestions]
+  [suggestions, limiteFichaPesponto]
 );
 
 const programacaoPesponto = useMemo(
@@ -1483,9 +1754,10 @@ const programacaoPesponto = useMemo(
       suggestions.pesponto,
       Number(capacidadePespontoDia) || 396,
       programacaoDias,
-      "Pesponto"
+      "Pesponto",
+      { pctCapacidadeTop: programacaoReservaTopPct, topN: programacaoTopN, topMode: programacaoTopModo, topManualKeys: programacaoTopManualKeys }
     ),
-  [fichasPesponto, suggestions, programacaoDias, capacidadePespontoDia]
+  [fichasPesponto, suggestions, programacaoDias, capacidadePespontoDia, programacaoReservaTopPct, programacaoTopN, programacaoTopModo, programacaoTopManualKeys]
 );
 
 const programacaoMontagem = useMemo(
@@ -1495,18 +1767,30 @@ const programacaoMontagem = useMemo(
       suggestions.montagem,
       Number(capacidadeMontagemDia) || 396,
       programacaoDias,
-      "Montagem"
+      "Montagem",
+      { pctCapacidadeTop: programacaoReservaTopPct, topN: programacaoTopN, topMode: programacaoTopModo, topManualKeys: programacaoTopManualKeys }
     ),
-  [fichasMontagem, suggestions, programacaoDias, capacidadeMontagemDia]
+  [fichasMontagem, suggestions, programacaoDias, capacidadeMontagemDia, programacaoReservaTopPct, programacaoTopN, programacaoTopModo, programacaoTopManualKeys]
 );
 
   useEffect(() => {
     if (active !== "Programação do Dia") return;
     const capP = Number(capacidadePespontoDia) || 396;
     const capM = Number(capacidadeMontagemDia) || 396;
+    const reservaPct = Math.min(100, Math.max(0, Number(programacaoReservaTopPct) || 0));
+    const topN = Math.max(1, Math.min(200, Number(programacaoTopN) || 10));
+    const topMode = programacaoTopModo === "manual" ? "manual" : "auto";
+    const topManualSignature = [...new Set(programacaoTopManualKeys)].sort((a, b) => String(a).localeCompare(String(b), "pt-BR")).join("|");
     setProgramacaoPlanoCongelado((prev) => {
       if (prev != null) {
-        const configOk = prev.dias === programacaoDias && prev.capP === capP && prev.capM === capM;
+        const configOk =
+          prev.dias === programacaoDias &&
+          prev.capP === capP &&
+          prev.capM === capM &&
+          prev.reservaTopPct === reservaPct &&
+          prev.topN === topN &&
+          prev.topMode === topMode &&
+          prev.topManualSignature === topManualSignature;
         if (configOk) return prev;
       }
       return {
@@ -1515,6 +1799,10 @@ const programacaoMontagem = useMemo(
         dias: programacaoDias,
         capP,
         capM,
+        reservaTopPct: reservaPct,
+        topN,
+        topMode,
+        topManualSignature,
       };
     });
   }, [
@@ -1522,6 +1810,10 @@ const programacaoMontagem = useMemo(
     programacaoDias,
     capacidadePespontoDia,
     capacidadeMontagemDia,
+    programacaoReservaTopPct,
+    programacaoTopN,
+    programacaoTopModo,
+    programacaoTopManualKeys,
     programacaoPesponto,
     programacaoMontagem,
   ]);
@@ -1529,15 +1821,33 @@ const programacaoMontagem = useMemo(
   const recalcularProgramacaoCongelada = useCallback(() => {
     const capP = Number(capacidadePespontoDia) || 396;
     const capM = Number(capacidadeMontagemDia) || 396;
+    const reservaPct = Math.min(100, Math.max(0, Number(programacaoReservaTopPct) || 0));
+    const topN = Math.max(1, Math.min(200, Number(programacaoTopN) || 10));
+    const topMode = programacaoTopModo === "manual" ? "manual" : "auto";
+    const topManualSignature = [...new Set(programacaoTopManualKeys)].sort((a, b) => String(a).localeCompare(String(b), "pt-BR")).join("|");
     setProgramacaoPlanoCongelado({
       pesponto: deepClonePlain(programacaoPesponto),
       montagem: deepClonePlain(programacaoMontagem),
       dias: programacaoDias,
       capP,
       capM,
+      reservaTopPct: reservaPct,
+      topN,
+      topMode,
+      topManualSignature,
     });
     setProgramacaoFichaSelecao({});
-  }, [programacaoPesponto, programacaoMontagem, programacaoDias, capacidadePespontoDia, capacidadeMontagemDia]);
+  }, [
+    programacaoPesponto,
+    programacaoMontagem,
+    programacaoDias,
+    capacidadePespontoDia,
+    capacidadeMontagemDia,
+    programacaoReservaTopPct,
+    programacaoTopN,
+    programacaoTopModo,
+    programacaoTopManualKeys,
+  ]);
 
   const dashboardData = useMemo(() => {
     const tempoTotal = (Number(tempoProducao?.pesponto) || 0) + (Number(tempoProducao?.montagem) || 0);
@@ -1745,7 +2055,39 @@ useEffect(() => {
 
   useEffect(() => {
     setProgramacaoFichaSelecao({});
-  }, [programacaoSubAba, programacaoModoVisual, programacaoDias]);
+  }, [programacaoSubAba, programacaoModoVisual, programacaoDias, programacaoReservaTopPct, programacaoTopN, programacaoTopModo, programacaoTopManualKeys]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PROG_RESERVA_TOP_PCT_KEY, String(programacaoReservaTopPct));
+    } catch (_) {
+      /* ignore */
+    }
+  }, [programacaoReservaTopPct]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PROG_TOP_N_KEY, String(programacaoTopN));
+    } catch (_) {
+      /* ignore */
+    }
+  }, [programacaoTopN]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PROG_TOP_MODE_KEY, String(programacaoTopModo));
+    } catch (_) {
+      /* ignore */
+    }
+  }, [programacaoTopModo]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PROG_TOP_MANUAL_KEYS_KEY, JSON.stringify(programacaoTopManualKeys));
+    } catch (_) {
+      /* ignore */
+    }
+  }, [programacaoTopManualKeys]);
 
   useEffect(() => {
     setMovListPage((prev) => {
@@ -4738,57 +5080,114 @@ const salvarVendasManuais = async () => {
             </table>
           </div>
 
-          <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="font-bold text-lg">Histórico de vendas manuais</div>
-                <div className="text-sm text-slate-500 mt-1">Sempre mostra o último salvamento manual.</div>
+          <div className="space-y-6">
+            <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="font-bold text-lg">Top vendas manual</div>
+                  <div className="text-sm text-slate-500 mt-1">
+                    Marque aqui as ref+cor usadas no modo manual da Programação do Dia.
+                  </div>
+                </div>
+                <span className="text-sm text-slate-500">{programacaoTopManualKeys.length} selecionada(s)</span>
               </div>
-              <span className="text-sm text-slate-500">{historicoVendasManuais.length} registro(s)</span>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setProgramacaoTopManualKeys(topVendasCadastroOpcoes.map((item) => item.key))}
+                  className="px-3 py-1.5 rounded-xl text-xs font-semibold border border-slate-200 bg-white hover:bg-slate-100"
+                >
+                  Marcar todas
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setProgramacaoTopManualKeys([])}
+                  className="px-3 py-1.5 rounded-xl text-xs font-semibold border border-slate-200 bg-white hover:bg-slate-100"
+                >
+                  Limpar todas
+                </button>
+              </div>
+              <div className="mt-3 max-h-72 overflow-auto space-y-2 pr-1">
+                {topVendasCadastroOpcoes.map((item) => {
+                  const checked = programacaoTopManualKeys.includes(item.key);
+                  return (
+                    <label
+                      key={`top-cadastro-${item.key}`}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
+                      title={`${item.ref} • ${item.cor}`}
+                    >
+                      <span className="flex items-start gap-2 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() =>
+                            setProgramacaoTopManualKeys((prev) =>
+                              prev.includes(item.key) ? prev.filter((k) => k !== item.key) : [...prev, item.key]
+                            )
+                          }
+                          className="mt-0.5"
+                        />
+                        <span className="font-medium text-slate-800 whitespace-normal break-words leading-snug">{item.ref} • {item.cor}</span>
+                      </span>
+                      <span className="text-xs text-slate-500 tabular-nums">{item.vendaTotal} venda(s)</span>
+                    </label>
+                  );
+                })}
+              </div>
             </div>
 
-            <div className="mt-4 space-y-4">
-              {historicoVendasManuais.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500">
-                  Nenhum salvamento manual realizado ainda.
+            <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="font-bold text-lg">Histórico de vendas manuais</div>
+                  <div className="text-sm text-slate-500 mt-1">Sempre mostra o último salvamento manual.</div>
                 </div>
-              ) : (
-                historicoVendasManuais.map((registro) => (
-                  <div key={registro.id} className="rounded-2xl border border-slate-200 overflow-hidden">
-                    <div className="bg-slate-50 border-b border-slate-200 px-4 py-3">
-                      <div className="font-semibold text-slate-900">Salvamento manual</div>
-                      <div className="text-sm text-slate-500 mt-1">{registro.dataHora}</div>
-                    </div>
-                    <div className="p-4 space-y-3">
-                      <div className="grid grid-cols-2 gap-3 text-sm">
-                        <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2">
-                          <div className="text-slate-500">Itens com venda</div>
-                          <div className="font-semibold text-slate-900 mt-1">{registro.itens}</div>
-                        </div>
-                        <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2">
-                          <div className="text-slate-500">Total de pares</div>
-                          <div className="font-semibold text-slate-900 mt-1">{registro.totalPares}</div>
-                        </div>
-                      </div>
+                <span className="text-sm text-slate-500">{historicoVendasManuais.length} registro(s)</span>
+              </div>
 
-                      <div className="space-y-2">
-                        {registro.resumo.length === 0 ? (
-                          <div className="text-sm text-slate-500">Nenhum item com venda registrado.</div>
-                        ) : (
-                          registro.resumo.map((item, idx) => (
-                            <div key={`${registro.id}-${item.ref}-${item.cor}-${idx}`} className="rounded-xl border border-slate-200 px-3 py-2 flex items-center justify-between gap-3 text-sm">
-                              <div>
-                                <div className="font-semibold text-slate-900">{item.ref} • {item.cor}</div>
+              <div className="mt-4 space-y-4">
+                {historicoVendasManuais.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500">
+                    Nenhum salvamento manual realizado ainda.
+                  </div>
+                ) : (
+                  historicoVendasManuais.map((registro) => (
+                    <div key={registro.id} className="rounded-2xl border border-slate-200 overflow-hidden">
+                      <div className="bg-slate-50 border-b border-slate-200 px-4 py-3">
+                        <div className="font-semibold text-slate-900">Salvamento manual</div>
+                        <div className="text-sm text-slate-500 mt-1">{registro.dataHora}</div>
+                      </div>
+                      <div className="p-4 space-y-3">
+                        <div className="grid grid-cols-2 gap-3 text-sm">
+                          <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2">
+                            <div className="text-slate-500">Itens com venda</div>
+                            <div className="font-semibold text-slate-900 mt-1">{registro.itens}</div>
+                          </div>
+                          <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2">
+                            <div className="text-slate-500">Total de pares</div>
+                            <div className="font-semibold text-slate-900 mt-1">{registro.totalPares}</div>
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          {registro.resumo.length === 0 ? (
+                            <div className="text-sm text-slate-500">Nenhum item com venda registrado.</div>
+                          ) : (
+                            registro.resumo.map((item, idx) => (
+                              <div key={`${registro.id}-${item.ref}-${item.cor}-${idx}`} className="rounded-xl border border-slate-200 px-3 py-2 flex items-center justify-between gap-3 text-sm">
+                                <div>
+                                  <div className="font-semibold text-slate-900">{item.ref} • {item.cor}</div>
+                                </div>
+                                <div className="font-semibold text-slate-900">{item.total} pares</div>
                               </div>
-                              <div className="font-semibold text-slate-900">{item.total} pares</div>
-                            </div>
-                          ))
-                        )}
+                            ))
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))
-              )}
+                  ))
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -5119,6 +5518,15 @@ const salvarVendasManuais = async () => {
 
   const renderProgramacaoDia = () => {
     const quickDays = [1, 3, 7, 15];
+    const capPProg = Number(capacidadePespontoDia) || 396;
+    const capMProg = Number(capacidadeMontagemDia) || 396;
+    const fichasIncompativeisPesponto = fichasPesponto.filter((ficha) => Number(ficha.total) > capPProg);
+    const fichasIncompativeisMontagem = fichasMontagem.filter((ficha) => Number(ficha.total) > capMProg);
+    const fichasIncompativeisAtivas =
+      programacaoSubAba === "Pesponto" ? fichasIncompativeisPesponto : fichasIncompativeisMontagem;
+    const pctReservaTop = Math.min(100, Math.max(0, Number(programacaoReservaTopPct) || 0));
+    const reservaParesPespontoDia = Math.round((capPProg * pctReservaTop) / 100);
+    const reservaParesMontagemDia = Math.round((capMProg * pctReservaTop) / 100);
 
     const planoPespontoUI = programacaoPlanoCongelado?.pesponto ?? programacaoPesponto;
     const planoMontagemUI = programacaoPlanoCongelado?.montagem ?? programacaoMontagem;
@@ -5215,6 +5623,17 @@ const salvarVendasManuais = async () => {
       });
     }
     itensImpressao.sort((a, b) => a.dia - b.dia || a.ordem - b.ordem);
+    const copiasPorPaginaEfetivo = Math.max(1, Math.min(4, Math.round(Number(programacaoCopiasPorPagina) || 1)));
+    const blocosPorPaginaEfetivo = copiasPorPaginaEfetivo;
+    const itensImpressaoComCopias = [];
+    for (let copia = 1; copia <= copiasPorPaginaEfetivo; copia += 1) {
+      itensImpressao.forEach((item) => {
+        itensImpressaoComCopias.push({ ...item, copia });
+      });
+    }
+    const paginasEstimadas = itensImpressaoComCopias.length
+      ? Math.ceil(itensImpressaoComCopias.length / blocosPorPaginaEfetivo)
+      : 0;
 
     const imprimirProgramacaoDia = () => {
       if (itensImpressao.length === 0) {
@@ -5229,18 +5648,24 @@ const salvarVendasManuais = async () => {
         alert("Selecione pelo menos uma ficha para gerar o PDF.");
         return;
       }
+      const el = programacaoPrintSheetRef.current;
+      if (!el) {
+        alert("Não foi possível localizar a folha de impressão. Abra a Programação do Dia e tente de novo.");
+        return;
+      }
+      const root = document.documentElement;
       setProgramacaoPdfBusy(true);
+      root.classList.add("programacao-pdf-capture");
+      el.classList.remove("hidden");
+      el.classList.add("programacao-print-sheet--capture");
       try {
-        const blob = buildProgramacaoDiaPdfBlob({
-          titulo: programacaoTituloImpressao,
-          setor: programacaoSubAba,
-          modoLabel: programacaoModoVisual === "normal" ? "Visão: por dia" : "Visão: todas as fichas",
-          diasCount: diasPlanoExibicao,
-          dataImpressao: new Date().toLocaleString("pt-BR"),
-          observacoes: programacaoObsImpressao,
-          itens: itensImpressao,
-          sizesList: sizes,
-        });
+        try {
+          if (document.fonts?.ready) await document.fonts.ready;
+        } catch (_) {
+          /* ignore */
+        }
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const blob = await buildProgramacaoPrintSheetPdfBlobFromElement(el);
         const fname = `programacao-${programacaoSubAba}-${new Date().toISOString().slice(0, 10)}.pdf`;
         const file = new File([blob], fname, { type: "application/pdf" });
         const titulo = programacaoTituloImpressao?.trim() || "Programação do dia";
@@ -5267,11 +5692,14 @@ const salvarVendasManuais = async () => {
           alert("Não foi possível gerar o PDF. Tente novamente ou use Imprimir seleção.");
         }
       } finally {
+        el.classList.remove("programacao-print-sheet--capture");
+        el.classList.add("hidden");
+        root.classList.remove("programacao-pdf-capture");
         setProgramacaoPdfBusy(false);
       }
     };
 
-    const renderBlocoProgramacao = (programacao, corTag) => (
+    const renderBlocoProgramacao = (programacao, corTag, fichasIncompativeis = []) => (
       <section className="space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <SummaryCard title={`Capacidade ${programacao.tipo}`} value={programacao.capacidadeDia * programacao.dias} subtitle={`${programacao.dias} dia(s) planejados`} />
@@ -5286,6 +5714,27 @@ const salvarVendasManuais = async () => {
               <div>
                 <h2 className="font-bold text-lg">Programação de {programacao.tipo}</h2>
                 <p className="text-sm text-slate-500 mt-1">Período separado por setor para ajudar no planejamento de materiais e execução.</p>
+                {programacao.reservaTopAtiva ? (
+                  <p className="text-xs text-amber-800 mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+                    Reserva top vendas: <span className="font-semibold">{programacao.reservaTopVendasPct}%</span> do dia para{" "}
+                    {programacao.reservaTopModo === "manual" ? (
+                      <>
+                        as <span className="font-semibold">{programacao.reservaTopManualSelecionados}</span> ref+cor selecionadas manualmente
+                      </>
+                    ) : (
+                      <>
+                        as <span className="font-semibold">{programacao.reservaTopN}</span> ref+cor com maior venda
+                      </>
+                    )}
+                    ; o restante do dia segue o rodízio.
+                  </p>
+                ) : null}
+                {fichasIncompativeis.length > 0 ? (
+                  <p className="text-xs text-rose-800 mt-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2">
+                    Há <span className="font-semibold">{fichasIncompativeis.length}</span> ficha(s) acima da capacidade diária de{" "}
+                    <span className="font-semibold">{programacao.capacidadeDia}</span> pares e elas não podem ser alocadas neste plano.
+                  </p>
+                ) : null}
               </div>
               <span className={`px-3 py-1.5 rounded-xl border text-sm font-semibold ${corTag}`}>{programacao.tipo}</span>
             </div>
@@ -5332,6 +5781,11 @@ const salvarVendasManuais = async () => {
                                   <div className="text-xs uppercase tracking-wide text-slate-500">Ordem {String(idx + 1).padStart(2, "0")}</div>
                                   <div className="font-semibold text-slate-900 mt-1">{ficha.cor}</div>
                                   <div className="text-sm text-slate-500 mt-1">{ficha.ref} • {ficha.nome}</div>
+                                  {ficha.programacaoReservaTop ? (
+                                    <span className="inline-block mt-2 px-2 py-0.5 rounded-lg text-[10px] font-semibold bg-amber-100 text-amber-900 border border-amber-200">
+                                      Reserva top vendas
+                                    </span>
+                                  ) : null}
                                 </div>
                                 <div className="flex flex-wrap items-center gap-3 shrink-0 justify-end">
                                   <div className="text-right">
@@ -5470,6 +5924,11 @@ const salvarVendasManuais = async () => {
                 <div className="text-sm text-slate-500 mt-1">
                   <span className="font-semibold text-slate-800">{ficha.ref}</span> • {ficha.cor}
                 </div>
+                {ficha.programacaoReservaTop ? (
+                  <span className="inline-block mt-2 px-2 py-0.5 rounded-lg text-[10px] font-semibold bg-amber-100 text-amber-900 border border-amber-200">
+                    Reserva top vendas
+                  </span>
+                ) : null}
                 </div>
               </label>
 
@@ -5564,7 +6023,7 @@ const salvarVendasManuais = async () => {
             <p className="min-w-0">
               <span className="font-semibold">Plano congelado.</span>{" "}
               Lançamentos no Pesponto/Montagem não alteram fichas e ordem desta página até você clicar em{" "}
-              <span className="font-semibold">Recalcular plano</span>. Mudar dias ou capacidade atualiza o plano automaticamente.
+              <span className="font-semibold">Recalcular plano</span>. Mudar dias, capacidade ou reserva top vendas atualiza o plano automaticamente.
             </p>
             <button
               type="button"
@@ -5614,6 +6073,50 @@ const salvarVendasManuais = async () => {
                   placeholder="Notas para a equipe (aparecem na impressão)..."
                 />
               </label>
+              <label className="text-sm font-medium text-slate-700 block">
+                Cópias por página
+                <select
+                  value={programacaoCopiasPorPagina}
+                  onChange={(e) => setProgramacaoCopiasPorPagina(Math.min(4, Math.max(1, Number(e.target.value) || 1)))}
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+                >
+                  <option value={1}>1 cópia por página</option>
+                  <option value={2}>2 cópias por página</option>
+                  <option value={3}>3 cópias por página</option>
+                  <option value={4}>4 cópias por página</option>
+                </select>
+              </label>
+              <label className="text-sm font-medium text-slate-700 block">
+                Cabeçalho da folha (impressão)
+                <select
+                  value={programacaoCabecalhoFolha}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setProgramacaoCabecalhoFolha(v === "minimo" || v === "oculto" ? v : "completo");
+                  }}
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+                >
+                  <option value="completo">Completo (logo, título e resumo)</option>
+                  <option value="minimo">Mínimo (uma linha)</option>
+                  <option value="oculto">Oculto (só as fichas — mais espaço no A4)</option>
+                </select>
+                <p className="mt-1 text-xs text-slate-500">
+                  Use <span className="font-semibold">Oculto</span> ou <span className="font-semibold">Mínimo</span> para caber melhor 3 ou 4 cópias por página. As observações da folha repetem em <span className="font-semibold">cada ficha</span>, acima das assinaturas.
+                </p>
+              </label>
+              <label className="text-sm font-medium text-slate-700 block lg:col-span-2">
+                Texto no cabeçalho de cada ficha (opcional)
+                <input
+                  type="text"
+                  value={programacaoEtiquetaFicha}
+                  onChange={(e) => setProgramacaoEtiquetaFicha(e.target.value)}
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+                  placeholder='Ex.: FICHA 26-102 — CANO ALTO PRETO (texto exibido tal como está; vazio = padrão do sistema)'
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  Quando preenchido, o cabeçalho da ficha mostra <span className="font-semibold">apenas</span> este texto (sem acrescentar &quot;Ficha 01&quot;). Use <span className="font-mono">{`{dia}`}</span> para o número do dia (ex.: <span className="font-mono">PROG. DIA {`{dia}`}</span>). Vazio = padrão com dia e número da ficha.
+                </p>
+              </label>
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
               <button type="button" onClick={marcarTodasProg} className="px-4 py-2 rounded-2xl text-sm font-semibold border border-slate-200 bg-white hover:bg-slate-50">
@@ -5622,8 +6125,70 @@ const salvarVendasManuais = async () => {
               <button type="button" onClick={desmarcarTodasProg} className="px-4 py-2 rounded-2xl text-sm font-semibold border border-slate-200 bg-white hover:bg-slate-50">
                 Desmarcar todas
               </button>
-              <span className="text-sm text-slate-500 self-center ml-auto">{itensImpressao.length} selecionada(s)</span>
+              <span className="text-sm text-slate-500 self-center ml-auto">
+                {itensImpressao.length} bloco(s) selecionado(s) · {copiasPorPaginaEfetivo} cópia(s) por página ·{" "}
+                {blocosPorPaginaEfetivo} bloco(s)/página · {paginasEstimadas} página(s) estimada(s)
+              </span>
             </div>
+          </div>
+
+          <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
+            <div className="font-bold text-lg text-slate-900">Reserva para top vendas</div>
+            <p className="text-sm text-slate-500 mt-1">
+              Parte da capacidade de <strong>cada dia</strong> fica reservada para as ref+cor com maior volume de vendas (top N). O sistema preenche primeiro essa fatia com fichas dessas cores; em seguida usa o restante do dia com o rodízio habitual. A sobra da reserva (se nada couber) volta para o bloco geral no mesmo dia. Use <span className="font-semibold">0%</span> para desligar.
+            </p>
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <label className="text-sm font-medium text-slate-700">
+                Modo de seleção do top vendas
+                <select
+                  value={programacaoTopModo}
+                  onChange={(e) => setProgramacaoTopModo(e.target.value === "manual" ? "manual" : "auto")}
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
+                >
+                  <option value="auto">Automático (ranking por vendas)</option>
+                  <option value="manual">Manual (eu escolho as ref+cor)</option>
+                </select>
+              </label>
+              <label className="text-sm font-medium text-slate-700">
+                % do dia para o top vendas
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={programacaoReservaTopPct}
+                  onChange={(e) =>
+                    setProgramacaoReservaTopPct(Math.min(100, Math.max(0, Number(e.target.value) || 0)))
+                  }
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
+                />
+              </label>
+              <label className="text-sm font-medium text-slate-700">
+                Quantidade no ranking (top N)
+                <input
+                  type="number"
+                  min="1"
+                  max="200"
+                  value={programacaoTopN}
+                  onChange={(e) =>
+                    setProgramacaoTopN(Math.min(200, Math.max(1, Math.round(Number(e.target.value) || 1))))
+                  }
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
+                />
+              </label>
+            </div>
+            <p className="mt-3 text-xs text-slate-500">
+              Com a capacidade atual: Pesponto —{" "}
+              <span className="font-semibold text-slate-700">{reservaParesPespontoDia} pares</span> reserva +{" "}
+              <span className="font-semibold text-slate-700">{Math.max(0, capPProg - reservaParesPespontoDia)} pares</span> geral (por dia). Montagem —{" "}
+              <span className="font-semibold text-slate-700">{reservaParesMontagemDia} pares</span> reserva +{" "}
+              <span className="font-semibold text-slate-700">{Math.max(0, capMProg - reservaParesMontagemDia)} pares</span> geral.
+            </p>
+            {programacaoTopModo === "manual" ? (
+              <p className="mt-3 text-xs text-slate-500">
+                Seleção manual ativa: <span className="font-semibold text-slate-700">{programacaoTopManualKeys.length}</span> ref+cor marcada(s).
+                Para editar a lista, use a aba <span className="font-semibold">Vendas</span> no card <span className="font-semibold">Top vendas manual</span>.
+              </p>
+            ) : null}
           </div>
 
           <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
@@ -5718,7 +6283,7 @@ const salvarVendasManuais = async () => {
               </div>
             </div>
             <p className="mt-2 text-xs text-slate-500 print:hidden max-w-xl">
-              Gera um PDF com várias páginas A4 (mesmo conteúdo que a impressão). Partilhe ou descarregue e anexe no WhatsApp como documento.
+              Gera PDF a partir da mesma folha que a impressão (layout, cabeçalho, cópias por página e fichas). Partilhe ou descarregue e anexe no WhatsApp como documento.
             </p>
 
             <div className="mt-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -5754,11 +6319,15 @@ const salvarVendasManuais = async () => {
           </div>
 
           {programacaoModoVisual === "normal"
-            ? renderBlocoProgramacao(subAbaAtiva.programacao, subAbaAtiva.corTag)
+            ? renderBlocoProgramacao(subAbaAtiva.programacao, subAbaAtiva.corTag, fichasIncompativeisAtivas)
             : renderModoCompleto()}
           </div>
 
-          <div className="hidden print:block programacao-print-sheet">
+          <div
+            id="programacao-print-sheet-root"
+            ref={programacaoPrintSheetRef}
+            className="hidden print:block programacao-print-sheet"
+          >
             <ProgramacaoDiaFolhaImpressao
               titulo={programacaoTituloImpressao}
               logoSrc={programacaoLogoImpressao?.trim() || "/logo-rockstar-bandeira.png"}
@@ -5767,8 +6336,11 @@ const salvarVendasManuais = async () => {
               diasCount={diasPlanoExibicao}
               dataImpressao={new Date().toLocaleString("pt-BR")}
               observacoes={programacaoObsImpressao}
-              itens={itensImpressao}
+              itens={itensImpressaoComCopias}
               sizesList={sizes}
+              copiasPorPagina={programacaoCopiasPorPagina}
+              etiquetaFichaCustom={programacaoEtiquetaFicha}
+              cabecalhoFolha={programacaoCabecalhoFolha}
             />
           </div>
         </div>
@@ -6085,6 +6657,72 @@ const salvarVendasManuais = async () => {
           size: A4;
           margin: 10mm;
         }
+        html.programacao-pdf-capture .programacao-print-sheet.programacao-print-sheet--capture {
+          display: block !important;
+          position: fixed !important;
+          left: -12000px !important;
+          top: 0 !important;
+          width: 190mm !important;
+          max-width: 190mm !important;
+          background: #ffffff !important;
+          padding: 0 !important;
+          z-index: 2147483646 !important;
+          overflow: visible !important;
+          visibility: visible !important;
+        }
+        html.programacao-pdf-capture .programacao-print-sheet--capture .programacao-print-ficha {
+          break-inside: avoid;
+          page-break-inside: avoid;
+        }
+        html.programacao-pdf-capture .programacao-print-sheet--capture .programacao-print-doc {
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
+        html.programacao-pdf-capture .programacao-print-sheet--capture .programacao-print-doc--cabecalho-oculto {
+          margin-top: 0 !important;
+          padding-top: 0 !important;
+        }
+        html.programacao-pdf-capture .programacao-print-sheet--capture .programacao-print-grid-economico {
+          display: grid !important;
+          grid-template-columns: 1fr !important;
+          gap: 4mm !important;
+        }
+        html.programacao-pdf-capture .programacao-print-sheet--capture .programacao-print-ficha-economica {
+          padding: 2mm !important;
+        }
+        html.programacao-pdf-capture .programacao-print-sheet--capture .programacao-print-ficha-economica table {
+          font-size: 7pt !important;
+        }
+        html.programacao-pdf-capture .programacao-print-sheet--capture .programacao-print-economico-3 .programacao-print-ficha-economica {
+          padding: 1.6mm !important;
+        }
+        html.programacao-pdf-capture .programacao-print-sheet--capture .programacao-print-economico-3 .programacao-print-ficha-economica table {
+          font-size: 6.4pt !important;
+        }
+        html.programacao-pdf-capture .programacao-print-sheet--capture .programacao-print-economico-4 .programacao-print-ficha-economica {
+          padding: 1.2mm !important;
+        }
+        html.programacao-pdf-capture .programacao-print-sheet--capture .programacao-print-economico-4 .programacao-print-ficha-economica table {
+          font-size: 5.8pt !important;
+        }
+        html.programacao-pdf-capture .programacao-print-sheet--capture .programacao-print-grade-table th,
+        html.programacao-pdf-capture .programacao-print-sheet--capture .programacao-print-grade-table td {
+          vertical-align: middle !important;
+          box-sizing: border-box !important;
+          overflow: visible !important;
+        }
+        html.programacao-pdf-capture .programacao-print-sheet--capture .programacao-print-grade-table thead th {
+          color: #ffffff !important;
+          background-color: #475569 !important;
+          border-color: #64748b !important;
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
+        html.programacao-pdf-capture .programacao-print-sheet--capture .programacao-print-grade-table thead tr {
+          background-color: #475569 !important;
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
         @media print {
           body * { visibility: hidden !important; }
           #print-root, #print-root *,
@@ -6114,6 +6752,56 @@ const salvarVendasManuais = async () => {
           .programacao-print-doc {
             -webkit-print-color-adjust: exact;
             print-color-adjust: exact;
+          }
+          .programacao-print-doc--cabecalho-oculto {
+            margin-top: 0;
+            padding-top: 0;
+          }
+          .programacao-print-grid-economico {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 4mm;
+          }
+          .programacao-print-ficha-economica {
+            padding: 2mm;
+          }
+          .programacao-print-ficha-economica table {
+            font-size: 7pt !important;
+          }
+          .programacao-print-economico-3 .programacao-print-ficha-economica {
+            padding: 1.6mm;
+          }
+          .programacao-print-economico-3 .programacao-print-ficha-economica table {
+            font-size: 6.4pt !important;
+          }
+          .programacao-print-economico-4 .programacao-print-ficha-economica {
+            padding: 1.2mm;
+          }
+          .programacao-print-economico-4 .programacao-print-ficha-economica table {
+            font-size: 5.8pt !important;
+          }
+          .programacao-print-grade-table th,
+          .programacao-print-grade-table td {
+            vertical-align: middle !important;
+            box-sizing: border-box !important;
+            overflow: visible !important;
+          }
+          /* Cabeçalho da grade: #print-programacao-root usa color escuro; força branco no fundo cinza (P&B). */
+          .programacao-print-grade-table thead th {
+            color: #ffffff !important;
+            background-color: #475569 !important;
+            border-color: #64748b !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          .programacao-print-grade-table thead tr {
+            background-color: #475569 !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          .programacao-print-item-break {
+            break-after: page;
+            page-break-after: always;
           }
         }
       `}</style>
