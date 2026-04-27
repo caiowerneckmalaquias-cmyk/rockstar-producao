@@ -87,6 +87,15 @@ function readProgTopManualKeysFromStorage() {
   }
 }
 
+function parseTopManualKeysFromDb(raw) {
+  try {
+    const base = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return Array.isArray(base) ? base.filter((x) => typeof x === "string" && x.includes("__")) : [];
+  } catch {
+    return [];
+  }
+}
+
 let pdfCaptureProbeCtx = null;
 function getPdfCaptureProbeCtx() {
   if (!pdfCaptureProbeCtx) {
@@ -1239,10 +1248,32 @@ function ProgramacaoDiaFolhaImpressao({
   copiasPorPagina = 1,
   etiquetaFichaCustom = "",
   cabecalhoFolha = "completo",
+  valoresParTerceiros = {},
+  tipoFolhaImpressao = "folha1",
 }) {
   const obs = observacoes?.trim();
   const etiquetaBase = String(etiquetaFichaCustom || "").trim();
   const modoCabecalho = cabecalhoFolha === "minimo" || cabecalhoFolha === "oculto" ? cabecalhoFolha : "completo";
+  const tamanhosFolha = (Array.isArray(sizesList) ? sizesList : [])
+    .map((s) => Number(s))
+    .filter((s) => Number.isFinite(s) && s >= 34 && s <= 44);
+  const tamanhosGrade = tamanhosFolha.length > 0 ? tamanhosFolha : (Array.isArray(sizesList) ? sizesList : []);
+  const destinatariosFolha1 = [
+    { nome: "WEVERTON", chaveValor: "weverton", regra: "valor fixo" },
+    { nome: "ROMULO", chaveValor: "romulo", regra: "valor fixo" },
+    { nome: "GU", chaveValor: "guPorReferencia", regra: "por referencia" },
+  ];
+  const getValorGuPorReferencia = (ref) => {
+    const codigo = String(ref || "").trim().toUpperCase();
+    if (codigo === "BTCV010" || codigo === "TNCV010") return 0.4;
+    if (codigo === "CRVTNCV") return 0.3;
+    return Number.NaN;
+  };
+  const formatarMoedaBr = (valor) => {
+    const num = Number(valor);
+    if (!Number.isFinite(num)) return "—";
+    return num.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  };
   const extractFichaToken = (nome = "") => {
     const m = String(nome).match(/ficha\s*(\d+)/i);
     return m ? `Ficha ${String(m[1]).padStart(2, "0")}` : "";
@@ -1260,15 +1291,14 @@ function ProgramacaoDiaFolhaImpressao({
   (itens || []).forEach((row, idx) => {
     const { ficha, dia, ordem } = row;
     const copia = Math.max(1, Number(row?.copia) || 1);
-    const fichaToken = extractFichaToken(ficha?.nome || "");
-    const key = `${copia}__${dia}__${fichaToken || `ordem-${String(ordem || idx + 1).padStart(2, "0")}`}`;
+    const key = `${copia}__${dia}`;
     if (!gruposFichaMap.has(key)) {
       gruposFichaMap.set(key, {
         key,
         copia,
         dia,
         ordem: ordem || idx + 1,
-        fichaToken: fichaToken || `Ficha ${String(ordem || idx + 1).padStart(2, "0")}`,
+        fichaToken: "",
         itens: [],
       });
     }
@@ -1340,7 +1370,7 @@ function ProgramacaoDiaFolhaImpressao({
             }
             refsMap.get(ref).rows.push({
               cor,
-              sizes: Object.fromEntries(sizesList.map((s) => [s, Number(ficha.sizes?.[s] || 0)])),
+              sizes: Object.fromEntries(tamanhosGrade.map((s) => [s, Number(ficha.sizes?.[s] || 0)])),
               total: Number(ficha.total) || 0,
             });
           });
@@ -1354,7 +1384,27 @@ function ProgramacaoDiaFolhaImpressao({
             (((!fichaDuplicada && blocoGrande) || (((i + 1) % blocosPorPaginaEconomico === 0) && i !== gruposFicha.length - 1)));
           const linhaEtiquetaFicha = etiquetaBase
             ? etiquetaBase.replace(/\{dia\}/gi, String(grupo.dia).padStart(2, "0"))
-            : `PROGRAMAÇÃO: Dia ${String(grupo.dia).padStart(2, "0")} - ${grupo.fichaToken}`;
+            : `PROGRAMAÇÃO: Dia ${String(grupo.dia).padStart(2, "0")}`;
+          const isFolha1 = tipoFolhaImpressao === "folha1";
+          const destinatario = isFolha1 ? (destinatariosFolha1[grupo.copia - 1] || null) : null;
+          const etiquetaDestinatario = destinatario?.nome || "";
+          const valorParBaseNumero = Number(destinatario ? valoresParTerceiros?.[destinatario.chaveValor] : NaN);
+          const valorParTexto =
+            destinatario?.chaveValor === "guPorReferencia"
+              ? "BTCV010/TNCV010: R$ 0,40 · CRVTNCV: R$ 0,30"
+              : formatarMoedaBr(valorParBaseNumero);
+          const totalFichaValor =
+            destinatario?.chaveValor === "guPorReferencia"
+              ? refs.reduce((accRefs, refBlock) => {
+                  const valorRef = getValorGuPorReferencia(refBlock.ref);
+                  const valorAplicado = Number.isFinite(valorRef) ? valorRef : Number.NaN;
+                  const totalRef = refBlock.rows.reduce((accRows, rowCor) => accRows + (Number(rowCor.total) || 0), 0);
+                  if (!Number.isFinite(valorAplicado)) return accRefs;
+                  return accRefs + totalRef * valorAplicado;
+                }, 0)
+              : (Number.isFinite(valorParBaseNumero) ? totalProg * valorParBaseNumero : NaN);
+          const totalFichaTexto = formatarMoedaBr(totalFichaValor);
+          const etiquetaFolha2 = `PESPONTO (${grupo.copia}/${totalCopias})`;
           return (
             <div
               key={`pf-group-${grupo.key}-${i}`}
@@ -1366,23 +1416,39 @@ function ProgramacaoDiaFolhaImpressao({
                 <div className="text-[9pt] font-black text-slate-900 flex items-center justify-between gap-2">
                   <span className="min-w-0 whitespace-normal break-words leading-tight">{linhaEtiquetaFicha}</span>
                   {totalCopias > 1 ? (
-                    <span className="text-[7pt] font-bold text-slate-600">Cópia {grupo.copia}/{totalCopias}</span>
+                    <span className="text-[7pt] font-bold text-slate-600">
+                      {isFolha1
+                        ? (etiquetaDestinatario
+                          ? `${etiquetaDestinatario} (${grupo.copia}/${totalCopias})`
+                          : `Cópia ${grupo.copia}/${totalCopias}`)
+                        : etiquetaFolha2}
+                    </span>
                   ) : null}
                 </div>
                 <div className="text-[7pt] text-slate-500">
                   {setor} · {modoLabel}
                 </div>
+                {isFolha1 && destinatario ? (
+                  <div className="mt-0.5 text-[7pt] text-slate-700">
+                    <span className="font-semibold">Valor/par: </span>
+                    <span className="font-bold">{valorParTexto}</span>
+                    <span className="text-slate-500"> · {destinatario.regra}</span>
+                  </div>
+                ) : null}
               </div>
 
               {refs.map((refBlock, refIdx) => (
-                <div key={`refblock-${grupo.key}-${refBlock.ref}-${refIdx}`} className={refIdx > 0 ? "mt-2.5" : ""}>
+                <div
+                  key={`refblock-${grupo.key}-${refBlock.ref}-${refIdx}`}
+                  className={`programacao-print-ref-block ${refIdx > 0 ? "mt-2.5" : ""}`}
+                >
                   <div className="text-[8pt] font-bold text-slate-800 mb-1">
                     {refBlock.ref}{refBlock.nome ? ` - ${refBlock.nome}` : ""}
                   </div>
                   <table className="programacao-print-grade-table w-full border-collapse text-[8pt] leading-normal table-fixed box-border">
                     <colgroup>
                       <col className="w-[28mm]" />
-                      {sizesList.map((s) => (
+                      {tamanhosGrade.map((s) => (
                         <col key={`${grupo.key}-${refBlock.ref}-col-${s}`} className="w-[8mm]" />
                       ))}
                       <col className="w-[10mm]" />
@@ -1390,7 +1456,7 @@ function ProgramacaoDiaFolhaImpressao({
                     <thead>
                       <tr className="bg-slate-600 text-white">
                         <th className="border border-slate-500 bg-slate-600 px-1 py-1 align-middle text-left font-bold text-white">COR</th>
-                        {sizesList.map((s) => (
+                        {tamanhosGrade.map((s) => (
                           <th
                             key={`${grupo.key}-${refBlock.ref}-h-${s}`}
                             className="border border-slate-500 bg-slate-600 px-0.5 py-1 align-middle text-center font-bold text-white"
@@ -1407,7 +1473,7 @@ function ProgramacaoDiaFolhaImpressao({
                           <td className="border border-slate-300 px-1 py-1 align-middle text-left font-semibold text-slate-800 break-words [overflow-wrap:anywhere]">
                             {corRow.cor}
                           </td>
-                          {sizesList.map((s) => (
+                          {tamanhosGrade.map((s) => (
                             <td
                               key={`${grupo.key}-${refBlock.ref}-${corRow.cor}-${rowIdx}-${s}`}
                               className="border border-slate-300 px-0.5 py-1 align-middle text-center tabular-nums text-slate-700"
@@ -1429,6 +1495,13 @@ function ProgramacaoDiaFolhaImpressao({
                 <span className="font-bold">TOTAL PROG:</span>{" "}
                 <span className="font-black tabular-nums">{totalProg}</span>
               </div>
+              {isFolha1 && destinatario ? (
+                <div className="mt-0.5 text-[7pt] text-slate-700 print-section">
+                  <span className="font-bold">TOTAL FICHA:</span>{" "}
+                  <span className="font-black tabular-nums">{totalFichaTexto}</span>
+                  <span className="text-slate-500"> (qtd x valor/par)</span>
+                </div>
+              ) : null}
 
               {obs ? (
                 <div className={`mt-1 text-[7pt] text-slate-800 print-section ${isEconomico ? "text-[6pt] leading-snug" : ""}`}>
@@ -1550,12 +1623,16 @@ const [relatorioPrintTitulo, setRelatorioPrintTitulo] = useState("RELATÓRIO DE 
 const [relatorioPrintObs, setRelatorioPrintObs] = useState("");
 const [programacaoSubAba, setProgramacaoSubAba] = useState("Pesponto");
 const [programacaoModoVisual, setProgramacaoModoVisual] = useState("normal");
-const [programacaoTituloImpressao, setProgramacaoTituloImpressao] = useState("Programação do Dia");
 const [programacaoObsImpressao, setProgramacaoObsImpressao] = useState("");
 const [programacaoLogoImpressao, setProgramacaoLogoImpressao] = useState("/logo-rockstar-bandeira.png");
 const [programacaoCopiasPorPagina, setProgramacaoCopiasPorPagina] = useState(1);
 const [programacaoEtiquetaFicha, setProgramacaoEtiquetaFicha] = useState("");
 const [programacaoCabecalhoFolha, setProgramacaoCabecalhoFolha] = useState("completo");
+const [programacaoValoresTerceiros, setProgramacaoValoresTerceiros] = useState({
+  weverton: "",
+  romulo: "",
+});
+const [programacaoTipoFolha, setProgramacaoTipoFolha] = useState("folha1");
 const [programacaoFichaSelecao, setProgramacaoFichaSelecao] = useState({});
 const [programacaoPdfBusy, setProgramacaoPdfBusy] = useState(false);
 const programacaoPrintSheetRef = useRef(null);
@@ -2011,6 +2088,19 @@ useEffect(() => {
         pesponto: Number(configProducao.dias_pesponto) || 3,
         montagem: Number(configProducao.dias_montagem) || 2,
       });
+
+      if (Object.prototype.hasOwnProperty.call(configProducao, "reserva_top_pct")) {
+        setProgramacaoReservaTopPct(Math.min(100, Math.max(0, Number(configProducao.reserva_top_pct) || 0)));
+      }
+      if (Object.prototype.hasOwnProperty.call(configProducao, "top_n")) {
+        setProgramacaoTopN(Math.min(200, Math.max(1, Math.round(Number(configProducao.top_n) || 10))));
+      }
+      if (Object.prototype.hasOwnProperty.call(configProducao, "top_mode")) {
+        setProgramacaoTopModo(String(configProducao.top_mode).trim().toLowerCase() === "manual" ? "manual" : "auto");
+      }
+      if (Object.prototype.hasOwnProperty.call(configProducao, "top_manual_keys")) {
+        setProgramacaoTopManualKeys(parseTopManualKeysFromDb(configProducao.top_manual_keys));
+      }
     }
   };
 
@@ -2824,22 +2914,48 @@ const salvarConfiguracoesProducaoNoBanco = async ({
   capacidadeMontagemDia,
   diasPesponto,
   diasMontagem,
+  reservaTopPct,
+  topN,
+  topMode,
+  topManualKeys,
 }) => {
   try {
     const atual = await carregarConfiguracoesProducaoDoBanco();
+    const payloadBase = {
+      capacidade_pesponto_dia: Number(capacidadePespontoDia) || 396,
+      capacidade_montagem_dia: Number(capacidadeMontagemDia) || 396,
+      dias_pesponto: Number(diasPesponto) || 3,
+      dias_montagem: Number(diasMontagem) || 2,
+    };
+    const payload = {
+      ...payloadBase,
+      reserva_top_pct: Math.min(100, Math.max(0, Number(reservaTopPct) || 0)),
+      top_n: Math.min(200, Math.max(1, Math.round(Number(topN) || 10))),
+      top_mode: topMode === "manual" ? "manual" : "auto",
+      top_manual_keys: [...new Set(Array.isArray(topManualKeys) ? topManualKeys : [])]
+        .filter((x) => typeof x === "string" && x.includes("__")),
+    };
 
     if (atual?.id) {
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from("configuracoes_producao")
-        .update({
-          capacidade_pesponto_dia: Number(capacidadePespontoDia) || 396,
-          capacidade_montagem_dia: Number(capacidadeMontagemDia) || 396,
-          dias_pesponto: Number(diasPesponto) || 3,
-          dias_montagem: Number(diasMontagem) || 2,
-        })
+        .update(payload)
         .eq("id", atual.id)
         .select()
         .single();
+      if (error) {
+        const msg = String(error?.message || "").toLowerCase();
+        const missingTopColumn =
+          msg.includes("reserva_top_pct") || msg.includes("top_n") || msg.includes("top_mode") || msg.includes("top_manual_keys");
+        if (missingTopColumn) {
+          ({ data, error } = await supabase
+            .from("configuracoes_producao")
+            .update(payloadBase)
+            .eq("id", atual.id)
+            .select()
+            .single());
+        }
+      }
 
       console.log("CONFIG PRODUCAO ATUALIZADA:", data);
       console.log("ERRO CONFIG PRODUCAO:", error);
@@ -2847,16 +2963,23 @@ const salvarConfiguracoesProducaoNoBanco = async ({
       return { data, error };
     }
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("configuracoes_producao")
-      .insert({
-        capacidade_pesponto_dia: Number(capacidadePespontoDia) || 396,
-        capacidade_montagem_dia: Number(capacidadeMontagemDia) || 396,
-        dias_pesponto: Number(diasPesponto) || 3,
-        dias_montagem: Number(diasMontagem) || 2,
-      })
+      .insert(payload)
       .select()
       .single();
+    if (error) {
+      const msg = String(error?.message || "").toLowerCase();
+      const missingTopColumn =
+        msg.includes("reserva_top_pct") || msg.includes("top_n") || msg.includes("top_mode") || msg.includes("top_manual_keys");
+      if (missingTopColumn) {
+        ({ data, error } = await supabase
+          .from("configuracoes_producao")
+          .insert(payloadBase)
+          .select()
+          .single());
+      }
+    }
 
     console.log("CONFIG PRODUCAO CRIADA:", data);
     console.log("ERRO CONFIG PRODUCAO:", error);
@@ -4829,6 +4952,10 @@ const salvarVendasManuais = async () => {
     capacidadeMontagemDia,
     diasPesponto: tempoProducaoDraft.pesponto,
     diasMontagem: tempoProducaoDraft.montagem,
+    reservaTopPct: programacaoReservaTopPct,
+    topN: programacaoTopN,
+    topMode: programacaoTopModo,
+    topManualKeys: programacaoTopManualKeys,
   });
 
   setDirtyMinimos(false);
@@ -5624,16 +5751,38 @@ const salvarVendasManuais = async () => {
     }
     itensImpressao.sort((a, b) => a.dia - b.dia || a.ordem - b.ordem);
     const copiasPorPaginaEfetivo = Math.max(1, Math.min(4, Math.round(Number(programacaoCopiasPorPagina) || 1)));
-    const blocosPorPaginaEfetivo = copiasPorPaginaEfetivo;
-    const itensImpressaoComCopias = [];
-    for (let copia = 1; copia <= copiasPorPaginaEfetivo; copia += 1) {
-      itensImpressao.forEach((item) => {
-        itensImpressaoComCopias.push({ ...item, copia });
-      });
-    }
-    const paginasEstimadas = itensImpressaoComCopias.length
-      ? Math.ceil(itensImpressaoComCopias.length / blocosPorPaginaEfetivo)
-      : 0;
+    const buildItensComCopias = (copias) => {
+      const lista = [];
+      for (let copia = 1; copia <= copias; copia += 1) {
+        itensImpressao.forEach((item) => {
+          lista.push({ ...item, copia });
+        });
+      }
+      return lista;
+    };
+    const itensImpressaoFolha1 = buildItensComCopias(3);
+    const itensImpressaoFolha2 = buildItensComCopias(copiasPorPaginaEfetivo);
+    const tituloFolhaImpressao = (String(programacaoEtiquetaFicha || "").trim() || "Programação do Dia");
+    const itensImpressaoComCopias =
+      programacaoTipoFolha === "folha1"
+        ? itensImpressaoFolha1
+        : programacaoTipoFolha === "folha2"
+          ? itensImpressaoFolha2
+          : [...itensImpressaoFolha1, ...itensImpressaoFolha2];
+    const copiasResumo =
+      programacaoTipoFolha === "folha1"
+        ? "3 (Folha 1)"
+        : programacaoTipoFolha === "folha2"
+          ? `${copiasPorPaginaEfetivo} (Folha 2)`
+          : `3 (Folha 1) + ${copiasPorPaginaEfetivo} (Folha 2)`;
+    const blocosPorPaginaEfetivo = programacaoTipoFolha === "folha1" ? 3 : copiasPorPaginaEfetivo;
+    const paginasEstimadas =
+      programacaoTipoFolha === "ambas"
+        ? ((itensImpressaoFolha1.length ? Math.ceil(itensImpressaoFolha1.length / 3) : 0) +
+          (itensImpressaoFolha2.length ? Math.ceil(itensImpressaoFolha2.length / copiasPorPaginaEfetivo) : 0))
+        : (itensImpressaoComCopias.length
+          ? Math.ceil(itensImpressaoComCopias.length / blocosPorPaginaEfetivo)
+          : 0);
 
     const imprimirProgramacaoDia = () => {
       if (itensImpressao.length === 0) {
@@ -5668,7 +5817,7 @@ const salvarVendasManuais = async () => {
         const blob = await buildProgramacaoPrintSheetPdfBlobFromElement(el);
         const fname = `programacao-${programacaoSubAba}-${new Date().toISOString().slice(0, 10)}.pdf`;
         const file = new File([blob], fname, { type: "application/pdf" });
-        const titulo = programacaoTituloImpressao?.trim() || "Programação do dia";
+        const titulo = tituloFolhaImpressao;
         const texto = `${titulo} · ${programacaoSubAba}`;
         const payload = { files: [file], title: titulo, text: texto };
         if (typeof navigator !== "undefined" && navigator.canShare && navigator.canShare(payload)) {
@@ -6039,37 +6188,42 @@ const salvarVendasManuais = async () => {
               Limpar marcas de lançadas
             </button>
           </div>
-          <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
+          <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-4 md:p-5">
             <div className="font-bold text-lg text-slate-900">Impressão (A4)</div>
-            <p className="text-sm text-slate-500 mt-1">Defina o título, a logo e as observações; marque as fichas e use Imprimir.</p>
-            <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <label className="text-sm font-medium text-slate-700 block">
-                Título na folha
-                <input
-                  type="text"
-                  value={programacaoTituloImpressao}
-                  onChange={(e) => setProgramacaoTituloImpressao(e.target.value)}
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-semibold"
-                  placeholder="Programação do Dia"
-                />
-              </label>
+            <p className="text-xs text-slate-500 mt-1">Configuração rápida da folha de impressão.</p>
+            <div className="mt-3 grid grid-cols-1 lg:grid-cols-3 gap-3">
               <label className="text-sm font-medium text-slate-700 block">
                 Caminho da logo (ficheiro em <code className="text-xs bg-slate-100 px-1 rounded">public/</code>)
                 <input
                   type="text"
                   value={programacaoLogoImpressao}
                   onChange={(e) => setProgramacaoLogoImpressao(e.target.value)}
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+                  className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-sm"
                   placeholder="/logo-rockstar-bandeira.png"
                 />
               </label>
-              <label className="text-sm font-medium text-slate-700 block lg:col-span-2">
+              <label className="text-sm font-medium text-slate-700 block">
+                Tipo de impressão
+                <select
+                  value={programacaoTipoFolha}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setProgramacaoTipoFolha(v === "folha2" || v === "ambas" ? v : "folha1");
+                  }}
+                  className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-sm"
+                >
+                  <option value="folha1">Folha 1 - Terceirizados</option>
+                  <option value="folha2">Folha 2 - Pesponto</option>
+                  <option value="ambas">Ambas - Folha 1 + Folha 2</option>
+                </select>
+              </label>
+              <label className="text-sm font-medium text-slate-700 block lg:col-span-3">
                 Observações na folha
                 <textarea
                   value={programacaoObsImpressao}
                   onChange={(e) => setProgramacaoObsImpressao(e.target.value)}
-                  rows={2}
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm resize-y"
+                  rows={1}
+                  className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-sm resize-y"
                   placeholder="Notas para a equipe (aparecem na impressão)..."
                 />
               </label>
@@ -6078,13 +6232,17 @@ const salvarVendasManuais = async () => {
                 <select
                   value={programacaoCopiasPorPagina}
                   onChange={(e) => setProgramacaoCopiasPorPagina(Math.min(4, Math.max(1, Number(e.target.value) || 1)))}
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+                  disabled={programacaoTipoFolha === "folha1"}
+                  className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-sm"
                 >
                   <option value={1}>1 cópia por página</option>
                   <option value={2}>2 cópias por página</option>
                   <option value={3}>3 cópias por página</option>
                   <option value={4}>4 cópias por página</option>
                 </select>
+                {programacaoTipoFolha === "folha1" ? (
+                  <p className="mt-1 text-[11px] text-slate-500">Folha 1 usa 3 cópias fixas.</p>
+                ) : null}
               </label>
               <label className="text-sm font-medium text-slate-700 block">
                 Cabeçalho da folha (impressão)
@@ -6094,39 +6252,71 @@ const salvarVendasManuais = async () => {
                     const v = e.target.value;
                     setProgramacaoCabecalhoFolha(v === "minimo" || v === "oculto" ? v : "completo");
                   }}
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+                  className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-sm"
                 >
                   <option value="completo">Completo (logo, título e resumo)</option>
                   <option value="minimo">Mínimo (uma linha)</option>
                   <option value="oculto">Oculto (só as fichas — mais espaço no A4)</option>
                 </select>
-                <p className="mt-1 text-xs text-slate-500">
-                  Use <span className="font-semibold">Oculto</span> ou <span className="font-semibold">Mínimo</span> para caber melhor 3 ou 4 cópias por página. As observações da folha repetem em <span className="font-semibold">cada ficha</span>, acima das assinaturas.
-                </p>
               </label>
-              <label className="text-sm font-medium text-slate-700 block lg:col-span-2">
+              <label className="text-sm font-medium text-slate-700 block lg:col-span-3">
                 Texto no cabeçalho de cada ficha (opcional)
                 <input
                   type="text"
                   value={programacaoEtiquetaFicha}
                   onChange={(e) => setProgramacaoEtiquetaFicha(e.target.value)}
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+                  className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-sm"
                   placeholder='Ex.: FICHA 26-102 — CANO ALTO PRETO (texto exibido tal como está; vazio = padrão do sistema)'
                 />
-                <p className="mt-1 text-xs text-slate-500">
-                  Quando preenchido, o cabeçalho da ficha mostra <span className="font-semibold">apenas</span> este texto (sem acrescentar &quot;Ficha 01&quot;). Use <span className="font-mono">{`{dia}`}</span> para o número do dia (ex.: <span className="font-mono">PROG. DIA {`{dia}`}</span>). Vazio = padrão com dia e número da ficha.
-                </p>
               </label>
+              <div className={`lg:col-span-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-3 ${programacaoTipoFolha === "folha2" ? "opacity-60" : ""}`}>
+                <div className="text-sm font-semibold text-slate-800">Valor por par (Folha 1 · Terceirizados)</div>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  Weverton e Romulo usam valor fixo. Gu segue regra fixa por referencia: BTCV010/TNCV010 = R$ 0,40 e CRVTNCV = R$ 0,30.
+                </p>
+                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="text-xs font-medium text-slate-700">
+                    Weverton (fixo)
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={programacaoValoresTerceiros.weverton}
+                      disabled={programacaoTipoFolha === "folha2"}
+                      onChange={(e) =>
+                        setProgramacaoValoresTerceiros((curr) => ({ ...curr, weverton: e.target.value }))
+                      }
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm"
+                      placeholder="0,00"
+                    />
+                  </label>
+                  <label className="text-xs font-medium text-slate-700">
+                    Romulo (fixo)
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={programacaoValoresTerceiros.romulo}
+                      disabled={programacaoTipoFolha === "folha2"}
+                      onChange={(e) =>
+                        setProgramacaoValoresTerceiros((curr) => ({ ...curr, romulo: e.target.value }))
+                      }
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm"
+                      placeholder="0,00"
+                    />
+                  </label>
+                </div>
+              </div>
             </div>
-            <div className="mt-4 flex flex-wrap gap-2">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               <button type="button" onClick={marcarTodasProg} className="px-4 py-2 rounded-2xl text-sm font-semibold border border-slate-200 bg-white hover:bg-slate-50">
                 Marcar todas as fichas
               </button>
               <button type="button" onClick={desmarcarTodasProg} className="px-4 py-2 rounded-2xl text-sm font-semibold border border-slate-200 bg-white hover:bg-slate-50">
                 Desmarcar todas
               </button>
-              <span className="text-sm text-slate-500 self-center ml-auto">
-                {itensImpressao.length} bloco(s) selecionado(s) · {copiasPorPaginaEfetivo} cópia(s) por página ·{" "}
+              <span className="text-xs text-slate-500 self-center ml-auto">
+                {itensImpressao.length} bloco(s) selecionado(s) · {copiasResumo} ·{" "}
                 {blocosPorPaginaEfetivo} bloco(s)/página · {paginasEstimadas} página(s) estimada(s)
               </span>
             </div>
@@ -6328,20 +6518,60 @@ const salvarVendasManuais = async () => {
             ref={programacaoPrintSheetRef}
             className="hidden print:block programacao-print-sheet"
           >
-            <ProgramacaoDiaFolhaImpressao
-              titulo={programacaoTituloImpressao}
-              logoSrc={programacaoLogoImpressao?.trim() || "/logo-rockstar-bandeira.png"}
-              setor={programacaoSubAba}
-              modoLabel={programacaoModoVisual === "normal" ? "Visão: por dia" : "Visão: todas as fichas"}
-              diasCount={diasPlanoExibicao}
-              dataImpressao={new Date().toLocaleString("pt-BR")}
-              observacoes={programacaoObsImpressao}
-              itens={itensImpressaoComCopias}
-              sizesList={sizes}
-              copiasPorPagina={programacaoCopiasPorPagina}
-              etiquetaFichaCustom={programacaoEtiquetaFicha}
-              cabecalhoFolha={programacaoCabecalhoFolha}
-            />
+            {programacaoTipoFolha === "ambas" ? (
+              <>
+                <ProgramacaoDiaFolhaImpressao
+                  titulo={`${tituloFolhaImpressao} - Folha 1`}
+                  logoSrc={programacaoLogoImpressao?.trim() || "/logo-rockstar-bandeira.png"}
+                  setor={programacaoSubAba}
+                  modoLabel={programacaoModoVisual === "normal" ? "Visão: por dia" : "Visão: todas as fichas"}
+                  diasCount={diasPlanoExibicao}
+                  dataImpressao={new Date().toLocaleString("pt-BR")}
+                  observacoes={programacaoObsImpressao}
+                  itens={itensImpressaoFolha1}
+                  sizesList={sizes}
+                  copiasPorPagina={3}
+                  etiquetaFichaCustom={programacaoEtiquetaFicha}
+                  cabecalhoFolha={programacaoCabecalhoFolha}
+                  valoresParTerceiros={programacaoValoresTerceiros}
+                  tipoFolhaImpressao="folha1"
+                />
+                <div className="programacao-print-item-break" />
+                <ProgramacaoDiaFolhaImpressao
+                  titulo={`${tituloFolhaImpressao} - Folha 2`}
+                  logoSrc={programacaoLogoImpressao?.trim() || "/logo-rockstar-bandeira.png"}
+                  setor={programacaoSubAba}
+                  modoLabel={programacaoModoVisual === "normal" ? "Visão: por dia" : "Visão: todas as fichas"}
+                  diasCount={diasPlanoExibicao}
+                  dataImpressao={new Date().toLocaleString("pt-BR")}
+                  observacoes={programacaoObsImpressao}
+                  itens={itensImpressaoFolha2}
+                  sizesList={sizes}
+                  copiasPorPagina={programacaoCopiasPorPagina}
+                  etiquetaFichaCustom={programacaoEtiquetaFicha}
+                  cabecalhoFolha={programacaoCabecalhoFolha}
+                  valoresParTerceiros={programacaoValoresTerceiros}
+                  tipoFolhaImpressao="folha2"
+                />
+              </>
+            ) : (
+              <ProgramacaoDiaFolhaImpressao
+                titulo={tituloFolhaImpressao}
+                logoSrc={programacaoLogoImpressao?.trim() || "/logo-rockstar-bandeira.png"}
+                setor={programacaoSubAba}
+                modoLabel={programacaoModoVisual === "normal" ? "Visão: por dia" : "Visão: todas as fichas"}
+                diasCount={diasPlanoExibicao}
+                dataImpressao={new Date().toLocaleString("pt-BR")}
+                observacoes={programacaoObsImpressao}
+                itens={itensImpressaoComCopias}
+                sizesList={sizes}
+                copiasPorPagina={programacaoCopiasPorPagina}
+                etiquetaFichaCustom={programacaoEtiquetaFicha}
+                cabecalhoFolha={programacaoCabecalhoFolha}
+                valoresParTerceiros={programacaoValoresTerceiros}
+                tipoFolhaImpressao={programacaoTipoFolha}
+              />
+            )}
           </div>
         </div>
       </PageShell>
@@ -6748,6 +6978,12 @@ const salvarVendasManuais = async () => {
           .programacao-print-ficha {
             break-inside: avoid;
             page-break-inside: avoid;
+            break-inside: avoid-page;
+          }
+          .programacao-print-ref-block {
+            break-inside: avoid;
+            page-break-inside: avoid;
+            break-inside: avoid-page;
           }
           .programacao-print-doc {
             -webkit-print-color-adjust: exact;
