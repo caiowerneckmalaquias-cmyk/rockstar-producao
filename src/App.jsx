@@ -1269,6 +1269,13 @@ function ProgramacaoDiaFolhaImpressao({
     if (codigo === "CRVTNCV") return 0.3;
     return Number.NaN;
   };
+  const getNomeReferencia = (ref) => {
+    const codigo = String(ref || "").trim().toUpperCase();
+    if (codigo === "TNCV010") return "CANO BAIXO";
+    if (codigo === "BTCV010") return "CANO ALTO";
+    if (codigo === "CRVTNCV") return "COURINO";
+    return "";
+  };
   const formatarMoedaBr = (valor) => {
     const num = Number(valor);
     if (!Number.isFinite(num)) return "—";
@@ -1443,7 +1450,7 @@ function ProgramacaoDiaFolhaImpressao({
                   className={`programacao-print-ref-block ${refIdx > 0 ? "mt-2.5" : ""}`}
                 >
                   <div className="text-[8pt] font-bold text-slate-800 mb-1">
-                    {refBlock.ref}{refBlock.nome ? ` - ${refBlock.nome}` : ""}
+                    {`${refBlock.ref}${getNomeReferencia(refBlock.ref) ? ` - ${getNomeReferencia(refBlock.ref)}` : ""}`}
                   </div>
                   <table className="programacao-print-grade-table w-full border-collapse text-[8pt] leading-normal table-fixed box-border">
                     <colgroup>
@@ -1491,17 +1498,26 @@ function ProgramacaoDiaFolhaImpressao({
                 </div>
               ))}
 
-              <div className="mt-0.5 text-[7pt] text-slate-700 print-section">
-                <span className="font-bold">TOTAL PROG:</span>{" "}
-                <span className="font-black tabular-nums">{totalProg}</span>
-              </div>
-              {isFolha1 && destinatario ? (
-                <div className="mt-0.5 text-[7pt] text-slate-700 print-section">
-                  <span className="font-bold">TOTAL FICHA:</span>{" "}
-                  <span className="font-black tabular-nums">{totalFichaTexto}</span>
-                  <span className="text-slate-500"> (qtd x valor/par)</span>
+              {isFolha1 ? (
+                <div className="mt-1 rounded-md border border-slate-300 bg-slate-50 px-2 py-1.5 print-section">
+                  <div className="text-[6.5pt] font-semibold uppercase tracking-wide text-slate-500">Resumo da ficha</div>
+                  <div className="mt-0.5 flex items-baseline justify-between gap-2">
+                    <span className="text-[9pt] font-bold text-slate-800">TOTAL PROG</span>
+                    <span className="text-[11pt] font-black tabular-nums text-slate-900">{totalProg}</span>
+                  </div>
+                  {destinatario ? (
+                    <div className="mt-0.5 flex items-baseline justify-between gap-2 border-t border-slate-200 pt-0.5">
+                      <span className="text-[9pt] font-black text-slate-900">TOTAL FICHA</span>
+                      <span className="text-[12pt] font-black tabular-nums text-slate-900">{totalFichaTexto}</span>
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
+              ) : (
+                <div className="mt-0.5 text-[7pt] text-slate-700 print-section">
+                  <span className="font-bold">TOTAL PROG:</span>{" "}
+                  <span className="font-black tabular-nums">{totalProg}</span>
+                </div>
+              )}
 
               {obs ? (
                 <div className={`mt-1 text-[7pt] text-slate-800 print-section ${isEconomico ? "text-[6pt] leading-snug" : ""}`}>
