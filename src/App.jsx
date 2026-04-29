@@ -1298,12 +1298,15 @@ function ProgramacaoDiaFolhaImpressao({
   (itens || []).forEach((row, idx) => {
     const { ficha, dia, ordem } = row;
     const copia = Math.max(1, Number(row?.copia) || 1);
-    const key = `${copia}__${dia}`;
+    const programacaoNomeGrupo = String(row?.programacaoNome || "").trim();
+    const agrupador = programacaoNomeGrupo ? `prog__${programacaoNomeGrupo}` : `dia__${dia}`;
+    const key = `${copia}__${agrupador}`;
     if (!gruposFichaMap.has(key)) {
       gruposFichaMap.set(key, {
         key,
         copia,
         dia,
+        programacaoNome: programacaoNomeGrupo,
         ordem: ordem || idx + 1,
         fichaToken: "",
         itens: [],
@@ -1391,7 +1394,9 @@ function ProgramacaoDiaFolhaImpressao({
             (((!fichaDuplicada && blocoGrande) || (((i + 1) % blocosPorPaginaEconomico === 0) && i !== gruposFicha.length - 1)));
           const linhaEtiquetaFicha = etiquetaBase
             ? etiquetaBase.replace(/\{dia\}/gi, String(grupo.dia).padStart(2, "0"))
-            : `PROGRAMAÇÃO: Dia ${String(grupo.dia).padStart(2, "0")}`;
+            : (grupo.programacaoNome
+              ? `PROGRAMAÇÃO: ${grupo.programacaoNome}`
+              : `PROGRAMAÇÃO: Dia ${String(grupo.dia).padStart(2, "0")}`);
           const isFolha1 = tipoFolhaImpressao === "folha1";
           const destinatario = isFolha1 ? (destinatariosFolha1[grupo.copia - 1] || null) : null;
           const etiquetaDestinatario = destinatario?.nome || "";
@@ -1643,6 +1648,7 @@ const [programacaoObsImpressao, setProgramacaoObsImpressao] = useState("");
 const [programacaoLogoImpressao, setProgramacaoLogoImpressao] = useState("/logo-rockstar-bandeira.png");
 const [programacaoCopiasPorPagina, setProgramacaoCopiasPorPagina] = useState(1);
 const [programacaoEtiquetaFicha, setProgramacaoEtiquetaFicha] = useState("");
+const [programacaoNomeLoteImpressao, setProgramacaoNomeLoteImpressao] = useState("");
 const [programacaoCabecalhoFolha, setProgramacaoCabecalhoFolha] = useState("completo");
 const [programacaoValoresTerceiros, setProgramacaoValoresTerceiros] = useState({
   weverton: "",
@@ -5883,17 +5889,18 @@ const salvarVendasManuais = async () => {
     };
 
     const itensImpressao = [];
+    const nomeProgramacaoLote = String(programacaoNomeLoteImpressao || "").trim();
     if (programacaoModoVisual === "normal") {
       subAbaAtiva.programacao.diasProgramados.forEach((dia) => {
         dia.fichas.forEach((ficha, idx) => {
           const key = `n-${programacaoSubAba}-${dia.dia}-${idx}-${ficha.nome}`;
-          if (isFichaSel(key)) itensImpressao.push({ ficha, dia: dia.dia, ordem: idx + 1 });
+          if (isFichaSel(key)) itensImpressao.push({ ficha, dia: dia.dia, ordem: idx + 1, programacaoNome: nomeProgramacaoLote });
         });
       });
     } else {
       todasFichas.forEach((ficha, idx) => {
         const key = `c-${programacaoSubAba}-${ficha.dia}-${idx}-${ficha.nome}`;
-        if (isFichaSel(key)) itensImpressao.push({ ficha, dia: ficha.dia, ordem: idx + 1 });
+        if (isFichaSel(key)) itensImpressao.push({ ficha, dia: ficha.dia, ordem: idx + 1, programacaoNome: nomeProgramacaoLote });
       });
     }
     itensImpressao.sort((a, b) => a.dia - b.dia || a.ordem - b.ordem);
@@ -5936,12 +5943,20 @@ const salvarVendasManuais = async () => {
         alert("Selecione pelo menos uma ficha para imprimir.");
         return;
       }
+      if (itensImpressao.length > 1 && !nomeProgramacaoLote) {
+        alert("Informe o nome da programação para imprimir várias fichas como uma programação única.");
+        return;
+      }
       window.print();
     };
 
     const gerarPdfWhatsappProgramacao = async () => {
       if (itensImpressao.length === 0) {
         alert("Selecione pelo menos uma ficha para gerar o PDF.");
+        return;
+      }
+      if (itensImpressao.length > 1 && !nomeProgramacaoLote) {
+        alert("Informe o nome da programação para gerar o PDF em lote.");
         return;
       }
       const el = programacaoPrintSheetRef.current;
@@ -6372,6 +6387,16 @@ const salvarVendasManuais = async () => {
                   rows={1}
                   className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-sm resize-y"
                   placeholder="Notas para a equipe (aparecem na impressão)..."
+                />
+              </label>
+              <label className="text-sm font-medium text-slate-700 block lg:col-span-3">
+                Nome da programação (lote)
+                <input
+                  type="text"
+                  value={programacaoNomeLoteImpressao}
+                  onChange={(e) => setProgramacaoNomeLoteImpressao(e.target.value)}
+                  className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-sm"
+                  placeholder="Ex.: PROG 29/04 - LOTE A (obrigatório ao imprimir mais de 1 ficha)"
                 />
               </label>
               <label className="text-sm font-medium text-slate-700 block">
