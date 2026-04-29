@@ -4328,6 +4328,30 @@ const salvarVendasManuais = async () => {
       );
     });
     const totalAtual = sizes.reduce((acc, size) => acc + (Number(form.grid[size]) || 0), 0);
+    const isPespontoPage = title === "Pesponto";
+    const tituloFolhaMov = (String(programacaoEtiquetaFicha || "").trim() || `${title} - Ficha`);
+    const buildItensMovComCopias = (copias) => {
+      const fichaMov = {
+        ref: form.ref,
+        cor: form.cor,
+        nome: form.programacao || `${form.ref} - ${form.cor}`,
+        sizes: Object.fromEntries(sizes.map((size) => [size, Number(form.grid?.[size] || 0)])),
+        total: totalAtual,
+      };
+      const lista = [];
+      for (let copia = 1; copia <= copias; copia += 1) {
+        lista.push({ ficha: fichaMov, dia: 1, ordem: 1, copia });
+      }
+      return lista;
+    };
+    const itensMovFolha1 = buildItensMovComCopias(3);
+    const itensMovFolha2 = buildItensMovComCopias(Math.max(1, Math.min(4, Number(programacaoCopiasPorPagina) || 1)));
+    const itensMovImpressao =
+      programacaoTipoFolha === "folha1"
+        ? itensMovFolha1
+        : programacaoTipoFolha === "folha2"
+          ? itensMovFolha2
+          : [...itensMovFolha1, ...itensMovFolha2];
     const totalPages = Math.max(1, Math.ceil(lancamentos.length / MOV_PAGE_SIZE));
     const currentPage = Math.min(movListPage[title] || 1, totalPages);
     const startIdx = (currentPage - 1) * MOV_PAGE_SIZE;
@@ -4402,6 +4426,55 @@ const salvarVendasManuais = async () => {
                   Lançar
                 </button>
               </div>
+              {isPespontoPage && (
+                <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-3">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-600">Impressão da ficha</div>
+                  <div className="grid grid-cols-1 gap-3">
+                    <label className="text-xs font-medium text-slate-700">
+                      Tipo de impressão
+                      <select
+                        value={programacaoTipoFolha}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setProgramacaoTipoFolha(v === "folha2" || v === "ambas" ? v : "folha1");
+                        }}
+                        className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                      >
+                        <option value="folha1">Folha 1 - Terceirizados</option>
+                        <option value="folha2">Folha 2 - Pesponto</option>
+                        <option value="ambas">Ambas - Folha 1 + Folha 2</option>
+                      </select>
+                    </label>
+                    <label className="text-xs font-medium text-slate-700">
+                      Cópias da Folha 2
+                      <select
+                        value={programacaoCopiasPorPagina}
+                        onChange={(e) => setProgramacaoCopiasPorPagina(Math.min(4, Math.max(1, Number(e.target.value) || 1)))}
+                        disabled={programacaoTipoFolha === "folha1"}
+                        className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                      >
+                        <option value={1}>1 cópia</option>
+                        <option value={2}>2 cópias</option>
+                        <option value={3}>3 cópias</option>
+                        <option value={4}>4 cópias</option>
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if ((Number(totalAtual) || 0) <= 0) {
+                          alert("Informe a grade da ficha antes de imprimir.");
+                          return;
+                        }
+                        window.print();
+                      }}
+                      className="rounded-xl bg-[#0F172A] text-white px-4 py-2.5 text-sm font-semibold"
+                    >
+                      Imprimir ficha (Folha 1/2)
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {(liveError || movError[title]) && (
                 <div className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
@@ -4661,6 +4734,64 @@ const salvarVendasManuais = async () => {
             </div>
           </div>
         </div>
+        {isPespontoPage && (
+          <div id="print-mov-root" className="hidden print:block programacao-print-sheet">
+            {programacaoTipoFolha === "ambas" ? (
+              <>
+                <ProgramacaoDiaFolhaImpressao
+                  titulo={`${tituloFolhaMov} - Folha 1`}
+                  logoSrc={programacaoLogoImpressao?.trim() || "/logo-rockstar-bandeira.png"}
+                  setor="Pesponto"
+                  modoLabel="Ficha direta da aba Pesponto"
+                  diasCount={1}
+                  dataImpressao={new Date().toLocaleString("pt-BR")}
+                  observacoes={programacaoObsImpressao}
+                  itens={itensMovFolha1}
+                  sizesList={sizes}
+                  copiasPorPagina={3}
+                  etiquetaFichaCustom={programacaoEtiquetaFicha}
+                  cabecalhoFolha={programacaoCabecalhoFolha}
+                  valoresParTerceiros={programacaoValoresTerceiros}
+                  tipoFolhaImpressao="folha1"
+                />
+                <div className="programacao-print-item-break" />
+                <ProgramacaoDiaFolhaImpressao
+                  titulo={`${tituloFolhaMov} - Folha 2`}
+                  logoSrc={programacaoLogoImpressao?.trim() || "/logo-rockstar-bandeira.png"}
+                  setor="Pesponto"
+                  modoLabel="Ficha direta da aba Pesponto"
+                  diasCount={1}
+                  dataImpressao={new Date().toLocaleString("pt-BR")}
+                  observacoes={programacaoObsImpressao}
+                  itens={itensMovFolha2}
+                  sizesList={sizes}
+                  copiasPorPagina={programacaoCopiasPorPagina}
+                  etiquetaFichaCustom={programacaoEtiquetaFicha}
+                  cabecalhoFolha={programacaoCabecalhoFolha}
+                  valoresParTerceiros={programacaoValoresTerceiros}
+                  tipoFolhaImpressao="folha2"
+                />
+              </>
+            ) : (
+              <ProgramacaoDiaFolhaImpressao
+                titulo={tituloFolhaMov}
+                logoSrc={programacaoLogoImpressao?.trim() || "/logo-rockstar-bandeira.png"}
+                setor="Pesponto"
+                modoLabel="Ficha direta da aba Pesponto"
+                diasCount={1}
+                dataImpressao={new Date().toLocaleString("pt-BR")}
+                observacoes={programacaoObsImpressao}
+                itens={itensMovImpressao}
+                sizesList={sizes}
+                copiasPorPagina={programacaoCopiasPorPagina}
+                etiquetaFichaCustom={programacaoEtiquetaFicha}
+                cabecalhoFolha={programacaoCabecalhoFolha}
+                valoresParTerceiros={programacaoValoresTerceiros}
+                tipoFolhaImpressao={programacaoTipoFolha}
+              />
+            )}
+          </div>
+        )}
       </PageShell>
     );
   };
@@ -6972,8 +7103,9 @@ const salvarVendasManuais = async () => {
         @media print {
           body * { visibility: hidden !important; }
           #print-root, #print-root *,
-          #print-programacao-root, #print-programacao-root * { visibility: visible !important; }
-          #print-root, #print-programacao-root {
+          #print-programacao-root, #print-programacao-root *,
+          #print-mov-root, #print-mov-root * { visibility: visible !important; }
+          #print-root, #print-programacao-root, #print-mov-root {
             position: absolute;
             left: 0;
             top: 0;
