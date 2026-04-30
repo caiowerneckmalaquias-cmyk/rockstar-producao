@@ -42,6 +42,7 @@ const PROG_RESERVA_TOP_PCT_KEY = "rockstar-prog-reserva-top-pct-v1";
 const PROG_TOP_N_KEY = "rockstar-prog-top-n-v1";
 const PROG_TOP_MODE_KEY = "rockstar-prog-top-mode-v1";
 const PROG_TOP_MANUAL_KEYS_KEY = "rockstar-prog-top-manual-keys-v1";
+const PROG_VALORES_PAGAMENTO_KEY = "rockstar-prog-valores-pagamento-v1";
 
 function readProgReservaTopPctFromStorage() {
   try {
@@ -85,6 +86,28 @@ function readProgTopManualKeysFromStorage() {
   } catch {
     return [];
   }
+}
+
+function readProgValoresPagamentoFromStorage() {
+  try {
+    const raw = localStorage.getItem(PROG_VALORES_PAGAMENTO_KEY);
+    if (!raw) return { weverton: "", romulo: "" };
+    const p = JSON.parse(raw);
+    return {
+      weverton: String(p?.weverton ?? ""),
+      romulo: String(p?.romulo ?? ""),
+    };
+  } catch {
+    return { weverton: "", romulo: "" };
+  }
+}
+
+function parseDecimalInput(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return Number.NaN;
+  const normalized = raw.replace(/\s+/g, "").replace(",", ".");
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
 }
 
 function parseTopManualKeysFromDb(raw) {
@@ -1400,7 +1423,7 @@ function ProgramacaoDiaFolhaImpressao({
           const isFolha1 = tipoFolhaImpressao === "folha1";
           const destinatario = isFolha1 ? (destinatariosFolha1[grupo.copia - 1] || null) : null;
           const etiquetaDestinatario = destinatario?.nome || "";
-          const valorParBaseNumero = Number(destinatario ? valoresParTerceiros?.[destinatario.chaveValor] : NaN);
+          const valorParBaseNumero = parseDecimalInput(destinatario ? valoresParTerceiros?.[destinatario.chaveValor] : "");
           const valorParTexto =
             destinatario?.chaveValor === "guPorReferencia"
               ? "BTCV010/TNCV010: R$ 0,40 · CRVTNCV: R$ 0,30"
@@ -1650,11 +1673,9 @@ const [programacaoCopiasPorPagina, setProgramacaoCopiasPorPagina] = useState(1);
 const [programacaoEtiquetaFicha, setProgramacaoEtiquetaFicha] = useState("");
 const [programacaoNomeLoteImpressao, setProgramacaoNomeLoteImpressao] = useState("");
 const [programacaoCabecalhoFolha, setProgramacaoCabecalhoFolha] = useState("completo");
-const [programacaoValoresTerceiros, setProgramacaoValoresTerceiros] = useState({
-  weverton: "",
-  romulo: "",
-});
+const [programacaoValoresTerceiros, setProgramacaoValoresTerceiros] = useState(readProgValoresPagamentoFromStorage);
 const [programacaoTipoFolha, setProgramacaoTipoFolha] = useState("folha1");
+const [movImpressaoSelecao, setMovImpressaoSelecao] = useState({ Pesponto: {}, Montagem: {} });
 const [programacaoFichaSelecao, setProgramacaoFichaSelecao] = useState({});
 const [programacaoPdfBusy, setProgramacaoPdfBusy] = useState(false);
 const programacaoPrintSheetRef = useRef(null);
@@ -2123,6 +2144,18 @@ useEffect(() => {
       if (Object.prototype.hasOwnProperty.call(configProducao, "top_manual_keys")) {
         setProgramacaoTopManualKeys(parseTopManualKeysFromDb(configProducao.top_manual_keys));
       }
+      if (Object.prototype.hasOwnProperty.call(configProducao, "valor_par_weverton")) {
+        setProgramacaoValoresTerceiros((curr) => ({
+          ...curr,
+          weverton: String(configProducao.valor_par_weverton ?? ""),
+        }));
+      }
+      if (Object.prototype.hasOwnProperty.call(configProducao, "valor_par_romulo")) {
+        setProgramacaoValoresTerceiros((curr) => ({
+          ...curr,
+          romulo: String(configProducao.valor_par_romulo ?? ""),
+        }));
+      }
     }
   };
 
@@ -2200,6 +2233,20 @@ useEffect(() => {
       /* ignore */
     }
   }, [programacaoTopManualKeys]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        PROG_VALORES_PAGAMENTO_KEY,
+        JSON.stringify({
+          weverton: String(programacaoValoresTerceiros.weverton ?? ""),
+          romulo: String(programacaoValoresTerceiros.romulo ?? ""),
+        })
+      );
+    } catch (_) {
+      /* ignore */
+    }
+  }, [programacaoValoresTerceiros]);
 
   useEffect(() => {
     setMovListPage((prev) => {
@@ -2940,9 +2987,13 @@ const salvarConfiguracoesProducaoNoBanco = async ({
   topN,
   topMode,
   topManualKeys,
+  valorParWeverton,
+  valorParRomulo,
 }) => {
   try {
     const atual = await carregarConfiguracoesProducaoDoBanco();
+    const parsedWeverton = parseDecimalInput(valorParWeverton);
+    const parsedRomulo = parseDecimalInput(valorParRomulo);
     const payloadBase = {
       capacidade_pesponto_dia: Number(capacidadePespontoDia) || 396,
       capacidade_montagem_dia: Number(capacidadeMontagemDia) || 396,
@@ -2956,6 +3007,8 @@ const salvarConfiguracoesProducaoNoBanco = async ({
       top_mode: topMode === "manual" ? "manual" : "auto",
       top_manual_keys: [...new Set(Array.isArray(topManualKeys) ? topManualKeys : [])]
         .filter((x) => typeof x === "string" && x.includes("__")),
+      valor_par_weverton: Number.isFinite(parsedWeverton) ? parsedWeverton : (Number(atual?.valor_par_weverton) || 0),
+      valor_par_romulo: Number.isFinite(parsedRomulo) ? parsedRomulo : (Number(atual?.valor_par_romulo) || 0),
     };
 
     if (atual?.id) {
@@ -2968,7 +3021,12 @@ const salvarConfiguracoesProducaoNoBanco = async ({
       if (error) {
         const msg = String(error?.message || "").toLowerCase();
         const missingTopColumn =
-          msg.includes("reserva_top_pct") || msg.includes("top_n") || msg.includes("top_mode") || msg.includes("top_manual_keys");
+          msg.includes("reserva_top_pct") ||
+          msg.includes("top_n") ||
+          msg.includes("top_mode") ||
+          msg.includes("top_manual_keys") ||
+          msg.includes("valor_par_weverton") ||
+          msg.includes("valor_par_romulo");
         if (missingTopColumn) {
           ({ data, error } = await supabase
             .from("configuracoes_producao")
@@ -2993,7 +3051,12 @@ const salvarConfiguracoesProducaoNoBanco = async ({
     if (error) {
       const msg = String(error?.message || "").toLowerCase();
       const missingTopColumn =
-        msg.includes("reserva_top_pct") || msg.includes("top_n") || msg.includes("top_mode") || msg.includes("top_manual_keys");
+        msg.includes("reserva_top_pct") ||
+        msg.includes("top_n") ||
+        msg.includes("top_mode") ||
+        msg.includes("top_manual_keys") ||
+        msg.includes("valor_par_weverton") ||
+        msg.includes("valor_par_romulo");
       if (missingTopColumn) {
         ({ data, error } = await supabase
           .from("configuracoes_producao")
@@ -4336,17 +4399,53 @@ const salvarVendasManuais = async () => {
     const totalAtual = sizes.reduce((acc, size) => acc + (Number(form.grid[size]) || 0), 0);
     const isPespontoPage = title === "Pesponto";
     const tituloFolhaMov = (String(programacaoEtiquetaFicha || "").trim() || `${title} - Ficha`);
-    const buildItensMovComCopias = (copias) => {
-      const fichaMov = {
-        ref: form.ref,
-        cor: form.cor,
-        nome: form.programacao || `${form.ref} - ${form.cor}`,
-        sizes: Object.fromEntries(sizes.map((size) => [size, Number(form.grid?.[size] || 0)])),
-        total: totalAtual,
+    const nomeProgramacaoMov = String(programacaoNomeLoteImpressao || "").trim() || String(programacaoEtiquetaFicha || "").trim();
+    const selecaoMovAtual = movImpressaoSelecao[title] || {};
+    const lancamentosSelecionadosMov = lancamentos.filter((item) => selecaoMovAtual[item.id] === true);
+    const buildFichaFromLancamento = (item, idx) => {
+      const grid = Object.fromEntries(sizes.map((size) => [size, 0]));
+      (item.items || []).forEach((entry) => {
+        const sizeNum = Number(entry.size);
+        if (Number.isFinite(sizeNum) && Object.prototype.hasOwnProperty.call(grid, sizeNum)) {
+          grid[sizeNum] = Number(entry.qtd) || 0;
+        }
+      });
+      return {
+        ficha: {
+          ref: item.ref,
+          cor: item.cor,
+          nome: item.programacao || `${item.ref} - ${item.cor}`,
+          sizes: grid,
+          total: Number(item.total) || sizes.reduce((acc, s) => acc + (Number(grid[s]) || 0), 0),
+        },
+        dia: 1,
+        ordem: idx + 1,
+        programacaoNome: nomeProgramacaoMov || item.programacao || "",
       };
+    };
+    const itensMovBase =
+      lancamentosSelecionadosMov.length > 0
+        ? lancamentosSelecionadosMov.map(buildFichaFromLancamento)
+        : [
+            {
+              ficha: {
+                ref: form.ref,
+                cor: form.cor,
+                nome: form.programacao || `${form.ref} - ${form.cor}`,
+                sizes: Object.fromEntries(sizes.map((size) => [size, Number(form.grid?.[size] || 0)])),
+                total: totalAtual,
+              },
+              dia: 1,
+              ordem: 1,
+              programacaoNome: nomeProgramacaoMov,
+            },
+          ];
+    const buildItensMovComCopias = (copias) => {
       const lista = [];
       for (let copia = 1; copia <= copias; copia += 1) {
-        lista.push({ ficha: fichaMov, dia: 1, ordem: 1, copia });
+        itensMovBase.forEach((item) => {
+          lista.push({ ...item, copia });
+        });
       }
       return lista;
     };
@@ -4437,6 +4536,16 @@ const salvarVendasManuais = async () => {
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-600">Impressão da ficha</div>
                   <div className="grid grid-cols-1 gap-3">
                     <label className="text-xs font-medium text-slate-700">
+                      Texto no cabeçalho de cada ficha (opcional)
+                      <input
+                        type="text"
+                        value={programacaoEtiquetaFicha}
+                        onChange={(e) => setProgramacaoEtiquetaFicha(e.target.value)}
+                        className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                        placeholder="Ex.: FICHA 26-102 - CANO ALTO PRETO"
+                      />
+                    </label>
+                    <label className="text-xs font-medium text-slate-700">
                       Tipo de impressão
                       <select
                         value={programacaoTipoFolha}
@@ -4465,11 +4574,31 @@ const salvarVendasManuais = async () => {
                         <option value={4}>4 cópias</option>
                       </select>
                     </label>
+                    <label className="text-xs font-medium text-slate-700">
+                      Cabeçalho da folha (impressão)
+                      <select
+                        value={programacaoCabecalhoFolha}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setProgramacaoCabecalhoFolha(v === "minimo" || v === "oculto" ? v : "completo");
+                        }}
+                        className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                      >
+                        <option value="completo">Completo (logo, título e resumo)</option>
+                        <option value="minimo">Mínimo (uma linha)</option>
+                        <option value="oculto">Oculto (só as fichas)</option>
+                      </select>
+                    </label>
                     <button
                       type="button"
                       onClick={() => {
-                        if ((Number(totalAtual) || 0) <= 0) {
-                          alert("Informe a grade da ficha antes de imprimir.");
+                        const nenhumSelecionado = lancamentosSelecionadosMov.length === 0;
+                        if (nenhumSelecionado && (Number(totalAtual) || 0) <= 0) {
+                          alert("Selecione pelo menos uma ficha ou informe a grade antes de imprimir.");
+                          return;
+                        }
+                        if (itensMovBase.length > 1 && !nomeProgramacaoMov) {
+                          alert("Informe o nome da programação para imprimir várias fichas como programação única.");
                           return;
                         }
                         window.print();
@@ -4478,6 +4607,11 @@ const salvarVendasManuais = async () => {
                     >
                       Imprimir ficha (Folha 1/2)
                     </button>
+                    <div className="text-[11px] text-slate-500">
+                      {lancamentosSelecionadosMov.length > 0
+                        ? `${lancamentosSelecionadosMov.length} ficha(s) selecionada(s) para impressão`
+                        : "Sem seleção: usa a ficha atual do formulário"}
+                    </div>
                   </div>
                 </div>
               )}
@@ -4609,6 +4743,37 @@ const salvarVendasManuais = async () => {
                   )}
                 </div>
               </div>
+              {isPespontoPage && (
+                <div className="mb-4 flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setMovImpressaoSelecao((prev) => ({
+                        ...prev,
+                        [title]: Object.fromEntries(lancamentos.map((item) => [item.id, true])),
+                      }))
+                    }
+                    className="px-3 py-1.5 text-xs font-semibold rounded-xl border border-slate-200 bg-white hover:bg-slate-100"
+                  >
+                    Marcar todas p/ impressão
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setMovImpressaoSelecao((prev) => ({
+                        ...prev,
+                        [title]: {},
+                      }))
+                    }
+                    className="px-3 py-1.5 text-xs font-semibold rounded-xl border border-slate-200 bg-white hover:bg-slate-100"
+                  >
+                    Limpar seleção
+                  </button>
+                  <span className="text-xs text-slate-600 ml-auto">
+                    {lancamentosSelecionadosMov.length} selecionada(s) para impressão
+                  </span>
+                </div>
+              )}
 
               {!Object.keys(agrupados).length ? (
                 <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">
@@ -4623,6 +4788,27 @@ const salvarVendasManuais = async () => {
                           <div className="font-semibold">{programacao}</div>
                         </div>
                         <div className="flex items-center gap-2">
+                          {isPespontoPage && (
+                            <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer mr-1">
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4 rounded border-slate-300 text-[#8B1E2D]"
+                                checked={items.every((item) => selecaoMovAtual[item.id] === true)}
+                                onChange={(e) =>
+                                  setMovImpressaoSelecao((prev) => {
+                                    const base = { ...(prev[title] || {}) };
+                                    items.forEach((item) => {
+                                      base[item.id] = e.target.checked;
+                                    });
+                                    return {
+                                      ...prev,
+                                      [title]: base,
+                                    };
+                                  })
+                                }
+                              />
+                            </label>
+                          )}
                           <div className="text-sm text-slate-500">
                             {items.reduce((acc, item) => acc + item.total, 0)} pares
                           </div>
@@ -5095,6 +5281,16 @@ const salvarVendasManuais = async () => {
   };
 
   const salvar = async () => {
+  const valorWevertonValido = parseDecimalInput(programacaoValoresTerceiros.weverton);
+  const valorRomuloValido = parseDecimalInput(programacaoValoresTerceiros.romulo);
+  if (String(programacaoValoresTerceiros.weverton ?? "").trim() && !Number.isFinite(valorWevertonValido)) {
+    alert("Valor de Weverton inválido. Use número com ponto ou vírgula (ex.: 0,70).");
+    return;
+  }
+  if (String(programacaoValoresTerceiros.romulo ?? "").trim() && !Number.isFinite(valorRomuloValido)) {
+    alert("Valor de Romulo inválido. Use número com ponto ou vírgula (ex.: 0,50).");
+    return;
+  }
   setMinimos(draftMinimos);
   setTempoProducao(tempoProducaoDraft);
 
@@ -5109,6 +5305,8 @@ const salvarVendasManuais = async () => {
     topN: programacaoTopN,
     topMode: programacaoTopModo,
     topManualKeys: programacaoTopManualKeys,
+    valorParWeverton: programacaoValoresTerceiros.weverton,
+    valorParRomulo: programacaoValoresTerceiros.romulo,
   });
 
   setDirtyMinimos(false);
@@ -5193,6 +5391,45 @@ const salvarVendasManuais = async () => {
                     setDirtyMinimos(true);
                   }}
                   className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+                />
+              </label>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
+            <div className="flex items-center justify-between gap-4 mb-4">
+              <div>
+                <div className="font-bold text-lg">Configuração de pagamentos</div>
+                <div className="text-sm text-slate-500 mt-1">
+                  Valores por par usados na Folha 1 (terceirizados). O GU segue regra fixa por referência.
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <label className="text-sm font-medium text-slate-700">
+                Weverton (valor por par)
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={programacaoValoresTerceiros.weverton}
+                  onChange={(e) => {
+                    setProgramacaoValoresTerceiros((curr) => ({ ...curr, weverton: e.target.value }));
+                    setDirtyMinimos(true);
+                  }}
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
+                />
+              </label>
+              <label className="text-sm font-medium text-slate-700">
+                Romulo (valor por par)
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={programacaoValoresTerceiros.romulo}
+                  onChange={(e) => {
+                    setProgramacaoValoresTerceiros((curr) => ({ ...curr, romulo: e.target.value }));
+                    setDirtyMinimos(true);
+                  }}
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
                 />
               </label>
             </div>
@@ -5889,7 +6126,7 @@ const salvarVendasManuais = async () => {
     };
 
     const itensImpressao = [];
-    const nomeProgramacaoLote = String(programacaoNomeLoteImpressao || "").trim();
+    const nomeProgramacaoLote = String(programacaoNomeLoteImpressao || "").trim() || String(programacaoEtiquetaFicha || "").trim();
     if (programacaoModoVisual === "normal") {
       subAbaAtiva.programacao.diasProgramados.forEach((dia) => {
         dia.fichas.forEach((ficha, idx) => {
@@ -6450,9 +6687,8 @@ const salvarVendasManuais = async () => {
                   <label className="text-xs font-medium text-slate-700">
                     Weverton (fixo)
                     <input
-                      type="number"
-                      min="0"
-                      step="0.01"
+                      type="text"
+                      inputMode="decimal"
                       value={programacaoValoresTerceiros.weverton}
                       disabled={programacaoTipoFolha === "folha2"}
                       onChange={(e) =>
@@ -6465,9 +6701,8 @@ const salvarVendasManuais = async () => {
                   <label className="text-xs font-medium text-slate-700">
                     Romulo (fixo)
                     <input
-                      type="number"
-                      min="0"
-                      step="0.01"
+                      type="text"
+                      inputMode="decimal"
                       value={programacaoValoresTerceiros.romulo}
                       disabled={programacaoTipoFolha === "folha2"}
                       onChange={(e) =>
