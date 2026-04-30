@@ -43,6 +43,11 @@ const PROG_TOP_N_KEY = "rockstar-prog-top-n-v1";
 const PROG_TOP_MODE_KEY = "rockstar-prog-top-mode-v1";
 const PROG_TOP_MANUAL_KEYS_KEY = "rockstar-prog-top-manual-keys-v1";
 const PROG_VALORES_PAGAMENTO_KEY = "rockstar-prog-valores-pagamento-v1";
+const PRINT_TARGET_CLASS_MAP = {
+  mov: "print-target-mov",
+  programacao: "print-target-programacao",
+  relatorio: "print-target-relatorio",
+};
 
 function readProgReservaTopPctFromStorage() {
   try {
@@ -2178,11 +2183,30 @@ useEffect(() => {
   });
 }, [refs, firstRef, firstCor]);
 
+const clearPrintTargetClass = useCallback(() => {
+  if (typeof document === "undefined") return;
+  document.body.classList.remove(...Object.values(PRINT_TARGET_CLASS_MAP));
+}, []);
+
+const startPrintWithTarget = useCallback((target) => {
+  if (typeof document === "undefined" || typeof window === "undefined") return;
+  const targetClass = PRINT_TARGET_CLASS_MAP[target];
+  if (!targetClass) {
+    window.print();
+    return;
+  }
+  clearPrintTargetClass();
+  document.body.classList.add(targetClass);
+  const clearAfterPrint = () => clearPrintTargetClass();
+  window.addEventListener("afterprint", clearAfterPrint, { once: true });
+  window.print();
+}, [clearPrintTargetClass]);
+
   useEffect(() => {
     if (!printRelatorioData) return undefined;
 
     const runPrint = () => {
-      window.print();
+      startPrintWithTarget("relatorio");
     };
 
     const clearAfterPrint = () => {
@@ -2196,7 +2220,7 @@ useEffect(() => {
       window.clearTimeout(timer);
       window.removeEventListener("afterprint", clearAfterPrint);
     };
-  }, [printRelatorioData]);
+  }, [printRelatorioData, startPrintWithTarget]);
 
   useEffect(() => {
     setProgramacaoFichaSelecao({});
@@ -4601,7 +4625,7 @@ const salvarVendasManuais = async () => {
                           alert("Informe o nome da programação para imprimir várias fichas como programação única.");
                           return;
                         }
-                        window.print();
+                        startPrintWithTarget("mov");
                       }}
                       className="rounded-xl bg-[#0F172A] text-white px-4 py-2.5 text-sm font-semibold"
                     >
@@ -6184,7 +6208,7 @@ const salvarVendasManuais = async () => {
         alert("Informe o nome da programação para imprimir várias fichas como uma programação única.");
         return;
       }
-      window.print();
+      startPrintWithTarget("programacao");
     };
 
     const gerarPdfWhatsappProgramacao = async () => {
@@ -7362,10 +7386,15 @@ const salvarVendasManuais = async () => {
         }
         @media print {
           body * { visibility: hidden !important; }
-          #print-root, #print-root *,
-          #print-programacao-root, #print-programacao-root *,
-          #print-mov-root, #print-mov-root * { visibility: visible !important; }
-          #print-root, #print-programacao-root, #print-mov-root {
+          body.print-target-relatorio #print-root,
+          body.print-target-relatorio #print-root *,
+          body.print-target-programacao #print-programacao-root,
+          body.print-target-programacao #print-programacao-root *,
+          body.print-target-mov #print-mov-root,
+          body.print-target-mov #print-mov-root * { visibility: visible !important; }
+          body.print-target-relatorio #print-root,
+          body.print-target-programacao #print-programacao-root,
+          body.print-target-mov #print-mov-root {
             position: absolute;
             left: 0;
             top: 0;
