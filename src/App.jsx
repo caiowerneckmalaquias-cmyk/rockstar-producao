@@ -1579,8 +1579,8 @@ function ProgramacaoDiaFolhaImpressao({
 
 function PageShell({ children, title, subtitle, action }) {
   return (
-    <div className="space-y-6">
-      <header className="rounded-[32px] border border-[#E5E7EB] bg-white p-6 shadow-[0_14px_35px_rgba(15,23,42,0.08)] backdrop-blur">
+    <div className="app-page-shell space-y-6">
+      <header className="app-page-header print:hidden rounded-[32px] border border-[#E5E7EB] bg-white p-6 shadow-[0_14px_35px_rgba(15,23,42,0.08)] backdrop-blur">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <div className="inline-flex items-center rounded-full border border-[#E7C7CC] bg-[#FFF7F8] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-[#8B1E2D]">
@@ -4497,7 +4497,7 @@ const salvarVendasManuais = async () => {
 
     return (
       <PageShell title={title} subtitle={subtitle}>
-        <div className="grid grid-cols-1 xl:grid-cols-[440px_1fr] gap-6 items-start">
+        <div className="mov-screen-panel print:hidden grid grid-cols-1 xl:grid-cols-[440px_1fr] gap-6 items-start">
           <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6 space-y-4">
             <label className="text-sm font-medium">
               Programação
@@ -6590,7 +6590,7 @@ const salvarVendasManuais = async () => {
     return (
       <PageShell title="Programação do Dia" subtitle="Defina quantos dias quer programar. O sistema monta períodos separados de Montagem e Pesponto para antecipar matérias-primas e execução.">
         <div id="print-programacao-root" className="space-y-6">
-          <div className="print:hidden space-y-6">
+          <div className="programacao-screen-panel print:hidden space-y-6">
           <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-950 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="min-w-0">
               <span className="font-semibold">Plano congelado.</span>{" "}
@@ -7312,7 +7312,7 @@ const salvarVendasManuais = async () => {
   };
 
   return (
-    <div className="min-h-screen min-h-[100dvh] bg-[radial-gradient(circle_at_top,_#FDF2F4_0%,_#FFFFFF_30%,_#F8FAFC_100%)] text-slate-900">
+    <div className="app-root-shell min-h-screen min-h-[100dvh] bg-[radial-gradient(circle_at_top,_#FDF2F4_0%,_#FFFFFF_30%,_#F8FAFC_100%)] text-slate-900">
       <style>{`
         @page {
           size: A4;
@@ -7385,6 +7385,63 @@ const salvarVendasManuais = async () => {
           print-color-adjust: exact !important;
         }
         @media print {
+          html,
+          body,
+          #root {
+            width: 100% !important;
+            min-height: 0 !important;
+            height: auto !important;
+            margin: 0 !important;
+            overflow: visible !important;
+            background: #ffffff !important;
+          }
+          body.print-target-relatorio .app-layout-shell {
+            display: none !important;
+          }
+          body.print-target-relatorio .app-root-shell,
+          body.print-target-programacao .app-root-shell,
+          body.print-target-mov .app-root-shell,
+          body.print-target-programacao .app-layout-shell,
+          body.print-target-mov .app-layout-shell,
+          body.print-target-programacao .app-page-shell,
+          body.print-target-mov .app-page-shell {
+            display: block !important;
+            min-height: 0 !important;
+            height: auto !important;
+            background: #ffffff !important;
+          }
+          body.print-target-programacao .app-main-shell,
+          body.print-target-mov .app-main-shell {
+            display: block !important;
+            width: 100% !important;
+            min-height: 0 !important;
+            height: auto !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            background: #ffffff !important;
+          }
+          body.print-target-programacao .app-main-shell > div,
+          body.print-target-mov .app-main-shell > div,
+          body.print-target-programacao .app-main-shell > div > div,
+          body.print-target-mov .app-main-shell > div > div {
+            display: block !important;
+            width: 100% !important;
+            max-width: none !important;
+            min-height: 0 !important;
+            height: auto !important;
+            margin: 0 !important;
+            padding: 0 !important;
+          }
+          body.print-target-programacao aside,
+          body.print-target-mov aside,
+          body.print-target-programacao .app-mobile-nav-card,
+          body.print-target-mov .app-mobile-nav-card,
+          body.print-target-programacao .app-page-header,
+          body.print-target-mov .app-page-header,
+          body.print-target-programacao .programacao-screen-panel,
+          body.print-target-mov .mov-screen-panel {
+            display: none !important;
+          }
           body * { visibility: hidden !important; }
           body.print-target-relatorio #print-root,
           body.print-target-relatorio #print-root *,
@@ -7395,10 +7452,11 @@ const salvarVendasManuais = async () => {
           body.print-target-relatorio #print-root,
           body.print-target-programacao #print-programacao-root,
           body.print-target-mov #print-mov-root {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 100%;
+            display: block !important;
+            position: static !important;
+            left: auto;
+            top: auto;
+            width: 100% !important;
             background: white;
             padding: 0;
             color: #0f172a;
@@ -7478,7 +7536,7 @@ const salvarVendasManuais = async () => {
           }
         }
       `}</style>
-      <div className="flex min-h-[100dvh] min-h-screen">
+      <div className="app-layout-shell flex min-h-[100dvh] min-h-screen">
         <aside className="hidden lg:flex lg:w-[280px] lg:shrink-0 lg:flex-col lg:justify-between lg:border-r lg:border-white/50 lg:bg-[#0F172A] lg:p-5 lg:text-white lg:shadow-[20px_0_60px_rgba(15,23,42,0.18)] xl:w-[310px] xl:p-6">
           <div>
             <div className="rounded-[30px] border border-white/10 bg-white/5 p-5 shadow-inner shadow-white/5">
