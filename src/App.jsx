@@ -7398,6 +7398,7 @@ const salvarVendasManuais = async () => {
           body.print-target-relatorio .app-layout-shell {
             display: none !important;
           }
+          body.print-target-relatorio .app-root-shell,
           body.print-target-programacao .app-root-shell,
           body.print-target-mov .app-root-shell,
           body.print-target-programacao .app-layout-shell,
