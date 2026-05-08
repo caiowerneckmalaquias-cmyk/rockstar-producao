@@ -895,6 +895,91 @@ function splitIntoFichas(sizesObj, maxPorFicha = 396) {
   return fichas;
 }
 
+function buildMovImpressaoPayload(
+  title,
+  {
+    sizes,
+    form,
+    lancamentos,
+    selecaoMap,
+    programacaoEtiquetaFicha,
+    programacaoNomeLoteImpressao,
+    programacaoTipoFolha,
+    programacaoCopiasPorPagina,
+  }
+) {
+  const tituloFolhaMov = (String(programacaoEtiquetaFicha || "").trim() || `${title} - Ficha`);
+  const nomeProgramacaoMov = String(programacaoNomeLoteImpressao || "").trim() || String(programacaoEtiquetaFicha || "").trim();
+  const selecaoMovAtual = selecaoMap || {};
+  const lancamentosSelecionadosMov = lancamentos.filter((item) => selecaoMovAtual[item.id] === true);
+  const totalAtual = sizes.reduce((acc, size) => acc + (Number(form.grid[size]) || 0), 0);
+  const buildFichaFromLancamento = (item, idx) => {
+    const grid = Object.fromEntries(sizes.map((size) => [size, 0]));
+    (item.items || []).forEach((entry) => {
+      const sizeNum = Number(entry.size);
+      if (Number.isFinite(sizeNum) && Object.prototype.hasOwnProperty.call(grid, sizeNum)) {
+        grid[sizeNum] = Number(entry.qtd) || 0;
+      }
+    });
+    return {
+      ficha: {
+        ref: item.ref,
+        cor: item.cor,
+        nome: item.programacao || `${item.ref} - ${item.cor}`,
+        sizes: grid,
+        total: Number(item.total) || sizes.reduce((acc, s) => acc + (Number(grid[s]) || 0), 0),
+      },
+      dia: 1,
+      ordem: idx + 1,
+      programacaoNome: nomeProgramacaoMov || item.programacao || "",
+    };
+  };
+  const itensMovBase =
+    lancamentosSelecionadosMov.length > 0
+      ? lancamentosSelecionadosMov.map(buildFichaFromLancamento)
+      : [
+          {
+            ficha: {
+              ref: form.ref,
+              cor: form.cor,
+              nome: form.programacao || `${form.ref} - ${form.cor}`,
+              sizes: Object.fromEntries(sizes.map((size) => [size, Number(form.grid?.[size] || 0)])),
+              total: totalAtual,
+            },
+            dia: 1,
+            ordem: 1,
+            programacaoNome: nomeProgramacaoMov,
+          },
+        ];
+  const buildItensMovComCopias = (copias) => {
+    const lista = [];
+    for (let copia = 1; copia <= copias; copia += 1) {
+      itensMovBase.forEach((item) => {
+        lista.push({ ...item, copia });
+      });
+    }
+    return lista;
+  };
+  const itensMovFolha1 = buildItensMovComCopias(3);
+  const itensMovFolha2 = buildItensMovComCopias(Math.max(1, Math.min(4, Number(programacaoCopiasPorPagina) || 1)));
+  const itensMovImpressao =
+    programacaoTipoFolha === "folha1"
+      ? itensMovFolha1
+      : programacaoTipoFolha === "folha2"
+        ? itensMovFolha2
+        : [...itensMovFolha1, ...itensMovFolha2];
+  return {
+    tituloFolhaMov,
+    nomeProgramacaoMov,
+    lancamentosSelecionadosMov,
+    totalAtual,
+    itensMovBase,
+    itensMovFolha1,
+    itensMovFolha2,
+    itensMovImpressao,
+  };
+}
+
 function buildProgramacaoPeriodo(
   fichasBase,
   suggestionsBase,
@@ -2079,6 +2164,30 @@ const programacaoMontagem = useMemo(
     programacaoPesponto,
     programacaoMontagem,
   ]);
+
+  const pespontoMovPrintPayload = useMemo(
+    () =>
+      buildMovImpressaoPayload("Pesponto", {
+        sizes,
+        form: pespontoForm,
+        lancamentos: pespontoLancamentos,
+        selecaoMap: movImpressaoSelecao.Pesponto || {},
+        programacaoEtiquetaFicha,
+        programacaoNomeLoteImpressao,
+        programacaoTipoFolha,
+        programacaoCopiasPorPagina,
+      }),
+    [
+      sizes,
+      pespontoForm,
+      pespontoLancamentos,
+      movImpressaoSelecao,
+      programacaoEtiquetaFicha,
+      programacaoNomeLoteImpressao,
+      programacaoTipoFolha,
+      programacaoCopiasPorPagina,
+    ]
+  );
 
   const irControleGeral = useCallback((ref, cor, numero) => {
     setControleFiltroRef(ref != null && ref !== "" ? ref : "TODAS");
@@ -4420,67 +4529,23 @@ const salvarVendasManuais = async () => {
         normalizeKey(String(item.cor || "")) === normalizeKey(String(form.cor || ""))
       );
     });
-    const totalAtual = sizes.reduce((acc, size) => acc + (Number(form.grid[size]) || 0), 0);
     const isPespontoPage = title === "Pesponto";
-    const tituloFolhaMov = (String(programacaoEtiquetaFicha || "").trim() || `${title} - Ficha`);
-    const nomeProgramacaoMov = String(programacaoNomeLoteImpressao || "").trim() || String(programacaoEtiquetaFicha || "").trim();
     const selecaoMovAtual = movImpressaoSelecao[title] || {};
-    const lancamentosSelecionadosMov = lancamentos.filter((item) => selecaoMovAtual[item.id] === true);
-    const buildFichaFromLancamento = (item, idx) => {
-      const grid = Object.fromEntries(sizes.map((size) => [size, 0]));
-      (item.items || []).forEach((entry) => {
-        const sizeNum = Number(entry.size);
-        if (Number.isFinite(sizeNum) && Object.prototype.hasOwnProperty.call(grid, sizeNum)) {
-          grid[sizeNum] = Number(entry.qtd) || 0;
-        }
-      });
-      return {
-        ficha: {
-          ref: item.ref,
-          cor: item.cor,
-          nome: item.programacao || `${item.ref} - ${item.cor}`,
-          sizes: grid,
-          total: Number(item.total) || sizes.reduce((acc, s) => acc + (Number(grid[s]) || 0), 0),
-        },
-        dia: 1,
-        ordem: idx + 1,
-        programacaoNome: nomeProgramacaoMov || item.programacao || "",
-      };
-    };
-    const itensMovBase =
-      lancamentosSelecionadosMov.length > 0
-        ? lancamentosSelecionadosMov.map(buildFichaFromLancamento)
-        : [
-            {
-              ficha: {
-                ref: form.ref,
-                cor: form.cor,
-                nome: form.programacao || `${form.ref} - ${form.cor}`,
-                sizes: Object.fromEntries(sizes.map((size) => [size, Number(form.grid?.[size] || 0)])),
-                total: totalAtual,
-              },
-              dia: 1,
-              ordem: 1,
-              programacaoNome: nomeProgramacaoMov,
-            },
-          ];
-    const buildItensMovComCopias = (copias) => {
-      const lista = [];
-      for (let copia = 1; copia <= copias; copia += 1) {
-        itensMovBase.forEach((item) => {
-          lista.push({ ...item, copia });
-        });
-      }
-      return lista;
-    };
-    const itensMovFolha1 = buildItensMovComCopias(3);
-    const itensMovFolha2 = buildItensMovComCopias(Math.max(1, Math.min(4, Number(programacaoCopiasPorPagina) || 1)));
-    const itensMovImpressao =
-      programacaoTipoFolha === "folha1"
-        ? itensMovFolha1
-        : programacaoTipoFolha === "folha2"
-          ? itensMovFolha2
-          : [...itensMovFolha1, ...itensMovFolha2];
+    const {
+      nomeProgramacaoMov,
+      lancamentosSelecionadosMov,
+      totalAtual,
+      itensMovBase,
+    } = buildMovImpressaoPayload(title, {
+      sizes,
+      form,
+      lancamentos,
+      selecaoMap: selecaoMovAtual,
+      programacaoEtiquetaFicha,
+      programacaoNomeLoteImpressao,
+      programacaoTipoFolha,
+      programacaoCopiasPorPagina,
+    });
     const totalPages = Math.max(1, Math.ceil(lancamentos.length / MOV_PAGE_SIZE));
     const currentPage = Math.min(movListPage[title] || 1, totalPages);
     const startIdx = (currentPage - 1) * MOV_PAGE_SIZE;
@@ -4950,64 +5015,6 @@ const salvarVendasManuais = async () => {
             </div>
           </div>
         </div>
-        {isPespontoPage && (
-          <div id="print-mov-root" className="hidden print:block programacao-print-sheet">
-            {programacaoTipoFolha === "ambas" ? (
-              <>
-                <ProgramacaoDiaFolhaImpressao
-                  titulo={`${tituloFolhaMov} - Folha 1`}
-                  logoSrc={programacaoLogoImpressao?.trim() || "/logo-rockstar-bandeira.png"}
-                  setor="Pesponto"
-                  modoLabel="Ficha direta da aba Pesponto"
-                  diasCount={1}
-                  dataImpressao={new Date().toLocaleString("pt-BR")}
-                  observacoes={programacaoObsImpressao}
-                  itens={itensMovFolha1}
-                  sizesList={sizes}
-                  copiasPorPagina={3}
-                  etiquetaFichaCustom={programacaoEtiquetaFicha}
-                  cabecalhoFolha={programacaoCabecalhoFolha}
-                  valoresParTerceiros={programacaoValoresTerceiros}
-                  tipoFolhaImpressao="folha1"
-                />
-                <div className="programacao-print-item-break" />
-                <ProgramacaoDiaFolhaImpressao
-                  titulo={`${tituloFolhaMov} - Folha 2`}
-                  logoSrc={programacaoLogoImpressao?.trim() || "/logo-rockstar-bandeira.png"}
-                  setor="Pesponto"
-                  modoLabel="Ficha direta da aba Pesponto"
-                  diasCount={1}
-                  dataImpressao={new Date().toLocaleString("pt-BR")}
-                  observacoes={programacaoObsImpressao}
-                  itens={itensMovFolha2}
-                  sizesList={sizes}
-                  copiasPorPagina={programacaoCopiasPorPagina}
-                  etiquetaFichaCustom={programacaoEtiquetaFicha}
-                  cabecalhoFolha={programacaoCabecalhoFolha}
-                  valoresParTerceiros={programacaoValoresTerceiros}
-                  tipoFolhaImpressao="folha2"
-                />
-              </>
-            ) : (
-              <ProgramacaoDiaFolhaImpressao
-                titulo={tituloFolhaMov}
-                logoSrc={programacaoLogoImpressao?.trim() || "/logo-rockstar-bandeira.png"}
-                setor="Pesponto"
-                modoLabel="Ficha direta da aba Pesponto"
-                diasCount={1}
-                dataImpressao={new Date().toLocaleString("pt-BR")}
-                observacoes={programacaoObsImpressao}
-                itens={itensMovImpressao}
-                sizesList={sizes}
-                copiasPorPagina={programacaoCopiasPorPagina}
-                etiquetaFichaCustom={programacaoEtiquetaFicha}
-                cabecalhoFolha={programacaoCabecalhoFolha}
-                valoresParTerceiros={programacaoValoresTerceiros}
-                tipoFolhaImpressao={programacaoTipoFolha}
-              />
-            )}
-          </div>
-        )}
       </PageShell>
     );
   };
@@ -7385,16 +7392,19 @@ const salvarVendasManuais = async () => {
           print-color-adjust: exact !important;
         }
         @media print {
-          body * { visibility: hidden !important; }
-          body.print-target-relatorio #print-root,
-          body.print-target-relatorio #print-root *,
+          html,
+          body {
+            height: auto !important;
+          }
+          /* Programação do Dia: miolo ainda dentro do painel — visibility (display:none quebraria o fluxo). */
+          body.print-target-programacao * {
+            visibility: hidden !important;
+          }
           body.print-target-programacao #print-programacao-root,
-          body.print-target-programacao #print-programacao-root *,
-          body.print-target-mov #print-mov-root,
-          body.print-target-mov #print-mov-root * { visibility: visible !important; }
-          body.print-target-relatorio #print-root,
-          body.print-target-programacao #print-programacao-root,
-          body.print-target-mov #print-mov-root {
+          body.print-target-programacao #print-programacao-root * {
+            visibility: visible !important;
+          }
+          body.print-target-programacao #print-programacao-root {
             position: absolute;
             left: 0;
             top: 0;
@@ -7402,6 +7412,27 @@ const salvarVendasManuais = async () => {
             background: white;
             padding: 0;
             color: #0f172a;
+          }
+          /* Pesponto e Relatório: #print-mov-root / #print-root ficam fora de #app-print-suppress — esconde o painel inteiro. */
+          body.print-target-mov #app-print-suppress,
+          body.print-target-relatorio #app-print-suppress {
+            display: none !important;
+          }
+          body.print-target-mov #print-mov-root,
+          body.print-target-relatorio #print-root {
+            display: block !important;
+            visibility: visible !important;
+            position: relative !important;
+            left: auto !important;
+            top: auto !important;
+            width: 100% !important;
+            background: white !important;
+            padding: 0 !important;
+            color: #0f172a !important;
+          }
+          body.print-target-mov #print-mov-root *,
+          body.print-target-relatorio #print-root * {
+            visibility: visible !important;
           }
           #print-root {
             padding: 24px;
@@ -7478,6 +7509,7 @@ const salvarVendasManuais = async () => {
           }
         }
       `}</style>
+      <div id="app-print-suppress">
       <div className="flex min-h-[100dvh] min-h-screen">
         <aside className="hidden lg:flex lg:w-[280px] lg:shrink-0 lg:flex-col lg:justify-between lg:border-r lg:border-white/50 lg:bg-[#0F172A] lg:p-5 lg:text-white lg:shadow-[20px_0_60px_rgba(15,23,42,0.18)] xl:w-[310px] xl:p-6">
           <div>
@@ -7832,6 +7864,67 @@ const salvarVendasManuais = async () => {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      </div>
+
+      {active === "Pesponto" && (
+        <div id="print-mov-root" className="hidden print:block programacao-print-sheet">
+          {programacaoTipoFolha === "ambas" ? (
+            <>
+              <ProgramacaoDiaFolhaImpressao
+                titulo={`${pespontoMovPrintPayload.tituloFolhaMov} - Folha 1`}
+                logoSrc={programacaoLogoImpressao?.trim() || "/logo-rockstar-bandeira.png"}
+                setor="Pesponto"
+                modoLabel="Ficha direta da aba Pesponto"
+                diasCount={1}
+                dataImpressao={new Date().toLocaleString("pt-BR")}
+                observacoes={programacaoObsImpressao}
+                itens={pespontoMovPrintPayload.itensMovFolha1}
+                sizesList={sizes}
+                copiasPorPagina={3}
+                etiquetaFichaCustom={programacaoEtiquetaFicha}
+                cabecalhoFolha={programacaoCabecalhoFolha}
+                valoresParTerceiros={programacaoValoresTerceiros}
+                tipoFolhaImpressao="folha1"
+              />
+              <div className="programacao-print-item-break" />
+              <ProgramacaoDiaFolhaImpressao
+                titulo={`${pespontoMovPrintPayload.tituloFolhaMov} - Folha 2`}
+                logoSrc={programacaoLogoImpressao?.trim() || "/logo-rockstar-bandeira.png"}
+                setor="Pesponto"
+                modoLabel="Ficha direta da aba Pesponto"
+                diasCount={1}
+                dataImpressao={new Date().toLocaleString("pt-BR")}
+                observacoes={programacaoObsImpressao}
+                itens={pespontoMovPrintPayload.itensMovFolha2}
+                sizesList={sizes}
+                copiasPorPagina={programacaoCopiasPorPagina}
+                etiquetaFichaCustom={programacaoEtiquetaFicha}
+                cabecalhoFolha={programacaoCabecalhoFolha}
+                valoresParTerceiros={programacaoValoresTerceiros}
+                tipoFolhaImpressao="folha2"
+              />
+            </>
+          ) : (
+            <ProgramacaoDiaFolhaImpressao
+              titulo={pespontoMovPrintPayload.tituloFolhaMov}
+              logoSrc={programacaoLogoImpressao?.trim() || "/logo-rockstar-bandeira.png"}
+              setor="Pesponto"
+              modoLabel="Ficha direta da aba Pesponto"
+              diasCount={1}
+              dataImpressao={new Date().toLocaleString("pt-BR")}
+              observacoes={programacaoObsImpressao}
+              itens={pespontoMovPrintPayload.itensMovImpressao}
+              sizesList={sizes}
+              copiasPorPagina={programacaoCopiasPorPagina}
+              etiquetaFichaCustom={programacaoEtiquetaFicha}
+              cabecalhoFolha={programacaoCabecalhoFolha}
+              valoresParTerceiros={programacaoValoresTerceiros}
+              tipoFolhaImpressao={programacaoTipoFolha}
+            />
+          )}
         </div>
       )}
 
