@@ -49,6 +49,9 @@ const PRINT_TARGET_CLASS_MAP = {
   relatorio: "print-target-relatorio",
 };
 
+/** Senha para zerar todo o EST (costura pronta). Defina VITE_SENHA_ZERAR_EST na Vercel para produção. */
+const SENHA_ZERAR_COSTURA_PRONTA = String(import.meta.env.VITE_SENHA_ZERAR_EST || "132701").trim();
+
 function readProgReservaTopPctFromStorage() {
   try {
     const raw = localStorage.getItem(PROG_RESERVA_TOP_PCT_KEY);
@@ -1725,12 +1728,16 @@ const [ajusteEstForm, setAjusteEstForm] = useState({
   ref: "",
   cor: "",
   tipo: "entrada",
-  size: 34,
-  qtd: 0,
+  grid: makeEmptyGrid(),
   motivo: "",
 });
 const [ajustesEst, setAjustesEst] = useState([]);
 const [ajusteEstErro, setAjusteEstErro] = useState("");
+const [zerarEstModalOpen, setZerarEstModalOpen] = useState(false);
+const [zerarEstSenha, setZerarEstSenha] = useState("");
+const [zerarEstConfirmacao, setZerarEstConfirmacao] = useState("");
+const [zerarEstErro, setZerarEstErro] = useState("");
+const [zerarEstBusy, setZerarEstBusy] = useState(false);
 const [draftMinimos, setDraftMinimos] = useState({});
 const [dirtyMinimos, setDirtyMinimos] = useState(false);
 const [capacidadePespontoDia, setCapacidadePespontoDia] = useState(396);
@@ -1742,6 +1749,7 @@ const [programacaoTopManualKeys, setProgramacaoTopManualKeys] = useState(readPro
 const [tempoProducao, setTempoProducao] = useState(initialTempoProducao);
 const [tempoProducaoDraft, setTempoProducaoDraft] = useState(initialTempoProducao);
 const [fichasAbertas, setFichasAbertas] = useState({});
+const [costuraProntaRefsAbertas, setCosturaProntaRefsAbertas] = useState({});
 const [programacaoDias, setProgramacaoDias] = useState(7);
 const [confirmAction, setConfirmAction] = useState(null);
 const [relatorioDataInicial, setRelatorioDataInicial] = useState("");
@@ -1863,6 +1871,17 @@ const previewBySelection = (form) => {
     });
   }, [rowsNormalized]);
 
+  const gruposCosturaProntaPorRef = useMemo(() => {
+    const map = new Map();
+    sortedRowsByRefCor.forEach((row) => {
+      if (!map.has(row.ref)) map.set(row.ref, []);
+      map.get(row.ref).push(row);
+    });
+    return Array.from(map.entries()).sort((a, b) =>
+      a[0].localeCompare(b[0], "pt-BR", { sensitivity: "base" })
+    );
+  }, [sortedRowsByRefCor]);
+
   const pespontoFinalizadosHistorico = useMemo(() => {
     const ts = (lanc) => {
       const s = lanc?.dataFinalizacao || lanc?.dataLancamento || "";
@@ -1902,6 +1921,15 @@ const previewBySelection = (form) => {
   () => buildSuggestions(rowsNormalized, minimos, vendas, tempoProducao),
   [rowsNormalized, minimos, vendas, tempoProducao]
 );
+
+  const totalCosturaProntaAtual = useMemo(
+    () =>
+      rows.reduce(
+        (acc, row) => acc + sizes.reduce((sum, size) => sum + (Number(row.data?.[size]?.est) || 0), 0),
+        0
+      ),
+    [rows]
+  );
 
 const topVendasCadastroOpcoes = useMemo(
   () =>
@@ -2286,6 +2314,12 @@ useEffect(() => {
   });
 
   setMontagemForm((current) => {
+    const isValid = refs.includes(`${current.ref}__${current.cor}`);
+    if (isValid) return current;
+    return { ...current, ref: firstRef, cor: firstCor };
+  });
+
+  setAjusteEstForm((current) => {
     const isValid = refs.includes(`${current.ref}__${current.cor}`);
     if (isValid) return current;
     return { ...current, ref: firstRef, cor: firstCor };
@@ -5020,84 +5054,198 @@ const salvarVendasManuais = async () => {
   };
 
   const aplicarAjusteEst = async () => {
-  const qtd = Number(ajusteEstForm.qtd) || 0;
-  if (!qtd) {
-    setAjusteEstErro("Informe uma quantidade válida para o ajuste.");
-    return;
-  }
+    const row = rows.find((item) => item.ref === ajusteEstForm.ref && item.cor === ajusteEstForm.cor);
+    const itensGrade = sizes
+      .map((size) => ({ size, qtd: Number(ajusteEstForm.grid?.[size]) || 0 }))
+      .filter((item) => item.qtd > 0);
 
-  const row = rows.find((item) => item.ref === ajusteEstForm.ref && item.cor === ajusteEstForm.cor);
-  const atual = row?.data?.[ajusteEstForm.size]?.est || 0;
+    if (!itensGrade.length) {
+      setAjusteEstErro("Informe ao menos um tamanho na grade com quantidade maior que zero.");
+      return;
+    }
 
-  if (ajusteEstForm.tipo === "saida" && qtd > atual) {
-    setAjusteEstErro(`A saída não pode ser maior que o saldo atual da costura pronta (${atual}).`);
-    return;
-  }
+    if (ajusteEstForm.tipo === "saida") {
+      for (const { size, qtd } of itensGrade) {
+        const atual = row?.data?.[size]?.est || 0;
+        if (qtd > atual) {
+          setAjusteEstErro(
+            `Saída no tamanho ${size} (${qtd} par(es)) é maior que o saldo em costura pronta (${atual}).`
+          );
+          return;
+        }
+      }
+    }
 
-  setAjusteEstErro("");
+    setAjusteEstErro("");
 
-  const delta = ajusteEstForm.tipo === "entrada" ? qtd : -qtd;
+    const nextRows = rows.map((item) => {
+      if (item.ref !== ajusteEstForm.ref || item.cor !== ajusteEstForm.cor) return item;
 
-  const nextRows = rows.map((item) => {
-    if (item.ref !== ajusteEstForm.ref || item.cor !== ajusteEstForm.cor) return item;
+      const nextData = { ...item.data };
+      itensGrade.forEach(({ size, qtd }) => {
+        const delta = ajusteEstForm.tipo === "entrada" ? qtd : -qtd;
+        const cell = nextData[size] || { pa: 0, est: 0, m: 0, p: 0 };
+        nextData[size] = {
+          ...cell,
+          est: Math.max(0, (Number(cell.est) || 0) + delta),
+        };
+      });
 
-    const nextData = { ...item.data };
-    const atualNumero = nextData[ajusteEstForm.size] || { pa: 0, est: 0, m: 0, p: 0 };
+      return { ...item, data: nextData };
+    });
 
-    nextData[ajusteEstForm.size] = {
-      ...atualNumero,
-      est: Math.max(0, (atualNumero.est || 0) + delta),
-    };
+    const persistAjuste = await persistRowsToSupabase(nextRows);
+    if (!persistAjuste.ok) {
+      setAjusteEstErro(
+        `Erro ao salvar o ajuste no Supabase: ${persistAjuste.error?.message || persistAjuste.error || "tente novamente"}.`
+      );
+      return;
+    }
 
-    return {
-      ...item,
-      data: nextData,
-    };
-  });
+    setRows(nextRows);
 
-  const persistAjuste = await persistRowsToSupabase(nextRows);
-  if (!persistAjuste.ok) {
-    setAjusteEstErro(
-      `Erro ao salvar o ajuste no Supabase: ${persistAjuste.error?.message || persistAjuste.error || "tente novamente"}.`
-    );
-    return;
-  }
-
-  setRows(nextRows);
-
-  const ajuste = {
-    id: `ajuste-est-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    data: new Date().toLocaleDateString("pt-BR"),
-    dataLancamento: new Date().toLocaleDateString("pt-BR"),
-    ref: ajusteEstForm.ref,
-    cor: ajusteEstForm.cor,
-    tipo: ajusteEstForm.tipo,
-    size: ajusteEstForm.size,
-    qtd,
-    motivo: ajusteEstForm.motivo || "Sem motivo informado",
-  };
-
-  setAjustesEst((curr) => [ajuste, ...curr]);
-
-  await salvarMovimentacao([
-    {
-      tipo: "Costura Pronta",
+    const totalQtd = itensGrade.reduce((acc, item) => acc + item.qtd, 0);
+    const ajuste = {
+      id: `ajuste-est-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      data: new Date().toLocaleDateString("pt-BR"),
+      dataLancamento: new Date().toLocaleString("pt-BR"),
       ref: ajusteEstForm.ref,
       cor: ajusteEstForm.cor,
-      numero: ajusteEstForm.size,
-      quantidade: qtd,
-      programacao: `Ajuste manual - ${ajusteEstForm.tipo}`,
-      status: "Lançado",
-    },
-  ]);
+      tipo: ajusteEstForm.tipo,
+      items: itensGrade,
+      total: totalQtd,
+      grade: true,
+      motivo: ajusteEstForm.motivo || "Sem motivo informado",
+    };
 
-  setAjusteEstForm((curr) => ({ ...curr, qtd: 0, motivo: "" }));
-};
+    setAjustesEst((curr) => [ajuste, ...curr]);
 
-  const renderCosturaPronta = () => (
+    await salvarMovimentacao(
+      itensGrade.map(({ size, qtd }) => ({
+        tipo: "Costura Pronta",
+        ref: ajusteEstForm.ref,
+        cor: ajusteEstForm.cor,
+        numero: size,
+        quantidade: qtd,
+        programacao: `Ajuste manual grade - ${ajusteEstForm.tipo}`,
+        status: "Lançado",
+      }))
+    );
+
+    setAjusteEstForm((curr) => ({ ...curr, grid: makeEmptyGrid(), motivo: "" }));
+  };
+
+  const fecharModalZerarEst = () => {
+    setZerarEstModalOpen(false);
+    setZerarEstSenha("");
+    setZerarEstConfirmacao("");
+    setZerarEstErro("");
+    setZerarEstBusy(false);
+  };
+
+  const executarZerarTodoEstoqueCosturaPronta = async () => {
+    if (zerarEstBusy) return;
+    const senha = String(zerarEstSenha || "").trim();
+    const confirmacao = String(zerarEstConfirmacao || "").trim().toUpperCase();
+
+    if (!senha) {
+      setZerarEstErro("Informe a senha.");
+      return;
+    }
+    if (senha !== SENHA_ZERAR_COSTURA_PRONTA) {
+      setZerarEstErro("Senha incorreta.");
+      return;
+    }
+    if (confirmacao !== "ZERAR") {
+      setZerarEstErro('Digite ZERAR no campo de confirmação (em maiúsculas).');
+      return;
+    }
+    if (totalCosturaProntaAtual <= 0) {
+      setZerarEstErro("O estoque de costura pronta já está zerado.");
+      return;
+    }
+
+    setZerarEstErro("");
+    setZerarEstBusy(true);
+
+    const totalAntes = totalCosturaProntaAtual;
+    const nextRows = rows.map((row) => ({
+      ...row,
+      data: Object.fromEntries(
+        sizes.map((size) => {
+          const cell = row.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 };
+          return [size, { ...cell, est: 0 }];
+        })
+      ),
+    }));
+
+    const persist = await persistRowsToSupabase(nextRows);
+    if (!persist.ok) {
+      setZerarEstErro(
+        `Erro ao salvar no Supabase: ${persist.error?.message || persist.error || "tente novamente"}.`
+      );
+      setZerarEstBusy(false);
+      return;
+    }
+
+    setRows(nextRows);
+    setAjustesEst((curr) => [
+      {
+        id: `zerar-est-total-${Date.now()}`,
+        data: new Date().toLocaleDateString("pt-BR"),
+        dataLancamento: new Date().toLocaleString("pt-BR"),
+        ref: "TODOS",
+        cor: "—",
+        tipo: "saida",
+        size: "—",
+        qtd: totalAntes,
+        motivo: "Zerar todo o estoque de costura pronta (operação protegida)",
+      },
+      ...curr,
+    ]);
+    fecharModalZerarEst();
+    alert(`Costura pronta zerada. ${totalAntes.toLocaleString("pt-BR")} par(es) removidos do EST. PA, Pesponto e Montagem não foram alterados.`);
+  };
+
+  const renderCosturaPronta = () => {
+    const rowAjusteEst = rowsNormalized.find(
+      (item) => item.ref === ajusteEstForm.ref && item.cor === ajusteEstForm.cor
+    );
+    const totalAjusteEstGrade = sizes.reduce(
+      (acc, size) => acc + (Number(ajusteEstForm.grid?.[size]) || 0),
+      0
+    );
+
+    return (
     <PageShell title="Costura Pronta" subtitle="Etapa intermediária alimentada pelo Pesponto finalizado.">
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-6 items-start">
         <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm overflow-auto p-6">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="text-sm text-slate-600">
+              <span className="font-semibold text-slate-900">{gruposCosturaProntaPorRef.length}</span> referência(s) ·{" "}
+              <span className="font-semibold text-slate-900">{sortedRowsByRefCor.length}</span> cor(es)
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setCosturaProntaRefsAbertas(
+                    Object.fromEntries(gruposCosturaProntaPorRef.map(([ref]) => [ref, true]))
+                  )
+                }
+                className="px-3 py-1.5 text-xs font-semibold rounded-xl border border-slate-200 bg-white hover:bg-slate-50"
+              >
+                Expandir todas
+              </button>
+              <button
+                type="button"
+                onClick={() => setCosturaProntaRefsAbertas({})}
+                className="px-3 py-1.5 text-xs font-semibold rounded-xl border border-slate-200 bg-white hover:bg-slate-50"
+              >
+                Recolher todas
+              </button>
+            </div>
+          </div>
           <table className="min-w-[1200px] w-full border-collapse text-sm">
             <thead>
               <tr className="bg-slate-50 text-slate-500">
@@ -5108,18 +5256,70 @@ const salvarVendasManuais = async () => {
               </tr>
             </thead>
             <tbody>
-              {sortedRowsByRefCor.map((row) => (
-                <tr key={`cp-${row.ref}-${row.cor}`}>
-                  <td className="border px-4 py-3 font-semibold">{row.ref}</td>
-                  <td className="border px-4 py-3">{row.cor}</td>
-                  {sizes.map((size) => (
-                    <td key={size} className="border px-3 py-3 text-center">{row.data[size]?.est ?? 0}</td>
-                  ))}
-                  <td className="border px-4 py-3 text-center font-bold">
-                    {sizes.reduce((acc, size) => acc + (row.data[size]?.est ?? 0), 0)}
-                  </td>
-                </tr>
-              ))}
+              {gruposCosturaProntaPorRef.map(([ref, corRows]) => {
+                const aberto = Boolean(costuraProntaRefsAbertas[ref]);
+                const totaisPorSize = Object.fromEntries(
+                  sizes.map((size) => [
+                    size,
+                    corRows.reduce((acc, row) => acc + (Number(row.data?.[size]?.est) || 0), 0),
+                  ])
+                );
+                const totalRef = sizes.reduce((acc, size) => acc + (totaisPorSize[size] || 0), 0);
+                return (
+                  <React.Fragment key={`cp-ref-${ref}`}>
+                    <tr className="bg-slate-100/90 hover:bg-slate-200/80 transition-colors">
+                      <td className="border px-2 py-2 font-bold text-slate-900" colSpan={2}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCosturaProntaRefsAbertas((curr) => ({
+                              ...curr,
+                              [ref]: !curr[ref],
+                            }))
+                          }
+                          className="w-full flex items-center justify-between gap-3 text-left px-2 py-1 rounded-lg hover:bg-white/60"
+                        >
+                          <span className="inline-flex items-center gap-2 min-w-0">
+                            <span className="text-slate-500 shrink-0 w-4 text-center" aria-hidden>
+                              {aberto ? "▼" : "▶"}
+                            </span>
+                            <span className="truncate">{ref}</span>
+                          </span>
+                          <span className="text-xs font-semibold text-slate-600 shrink-0">
+                            {corRows.length} cor{corRows.length !== 1 ? "es" : ""}
+                          </span>
+                        </button>
+                      </td>
+                      {sizes.map((size) => (
+                        <td key={`${ref}-sum-${size}`} className="border px-3 py-3 text-center font-semibold text-slate-800">
+                          {totaisPorSize[size]}
+                        </td>
+                      ))}
+                      <td className="border px-4 py-3 text-center font-bold text-slate-900">{totalRef}</td>
+                    </tr>
+                    {aberto
+                      ? corRows.map((row) => {
+                          const totalCor = sizes.reduce(
+                            (acc, size) => acc + (Number(row.data?.[size]?.est) || 0),
+                            0
+                          );
+                          return (
+                            <tr key={`cp-${row.ref}-${row.cor}`} className="bg-white">
+                              <td className="border px-4 py-2 w-8" />
+                              <td className="border px-4 py-2 pl-6 text-slate-800">{row.cor}</td>
+                              {sizes.map((size) => (
+                                <td key={size} className="border px-3 py-2 text-center text-slate-700">
+                                  {row.data[size]?.est ?? 0}
+                                </td>
+                              ))}
+                              <td className="border px-4 py-2 text-center font-semibold text-slate-800">{totalCor}</td>
+                            </tr>
+                          );
+                        })
+                      : null}
+                  </React.Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -5127,7 +5327,9 @@ const salvarVendasManuais = async () => {
         <div className="space-y-6">
           <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
             <div className="font-bold text-lg">Ajuste manual</div>
-            <p className="text-sm text-slate-500 mt-1">Use para adicionar ou retirar pares da costura pronta.</p>
+            <p className="text-sm text-slate-500 mt-1">
+              Informe a grade completa (como no Pesponto). Entrada soma e saída retira pares do EST desta ref/cor.
+            </p>
 
             <div className="mt-4 space-y-4">
               <label className="text-sm font-medium">
@@ -5136,7 +5338,7 @@ const salvarVendasManuais = async () => {
                   value={`${ajusteEstForm.ref}__${ajusteEstForm.cor}`}
                   onChange={(e) => {
                     const [ref, cor] = e.target.value.split("__");
-                    setAjusteEstForm((curr) => ({ ...curr, ref, cor }));
+                    setAjusteEstForm((curr) => ({ ...curr, ref, cor, grid: makeEmptyGrid() }));
                   }}
                   className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
                 >
@@ -5146,28 +5348,35 @@ const salvarVendasManuais = async () => {
                 </select>
               </label>
 
-              <div className="grid grid-cols-2 gap-3">
-                <label className="text-sm font-medium">
-                  Numeração
-                  <select
-                    value={ajusteEstForm.size}
-                    onChange={(e) => setAjusteEstForm((curr) => ({ ...curr, size: Number(e.target.value) }))}
-                    className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
-                  >
-                    {sizes.map((size) => <option key={size} value={size}>{size}</option>)}
-                  </select>
-                </label>
-
-                <label className="text-sm font-medium">
-                  Quantidade
-                  <input
-                    type="number"
-                    min="0"
-                    value={ajusteEstForm.qtd}
-                    onChange={(e) => setAjusteEstForm((curr) => ({ ...curr, qtd: Number(e.target.value) || 0 }))}
-                    className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
-                  />
-                </label>
+              <div>
+                <div className="text-sm font-medium mb-2">Grade completa</div>
+                <div className="grid grid-cols-4 gap-2">
+                  {sizes.map((size) => {
+                    const saldoAtual = rowAjusteEst?.data?.[size]?.est ?? 0;
+                    return (
+                      <div key={`ajuste-est-${size}`} className="bg-slate-50 rounded-xl p-2 border border-slate-200">
+                        <div className="text-xs text-slate-500 text-center">{size}</div>
+                        <div className="text-[10px] text-slate-400 text-center">EST: {saldoAtual}</div>
+                        <input
+                          type="number"
+                          min="0"
+                          value={ajusteEstForm.grid?.[size] ?? 0}
+                          onChange={(e) =>
+                            setAjusteEstForm({
+                              ...ajusteEstForm,
+                              grid: { ...ajusteEstForm.grid, [size]: Number(e.target.value) || 0 },
+                            })
+                          }
+                          className="w-full text-center mt-1 rounded-lg border border-slate-200 p-1.5 text-sm"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="mt-3 flex items-center justify-between gap-2 text-sm">
+                  <span className="text-slate-500">Total na grade</span>
+                  <span className="font-semibold text-slate-900">{totalAjusteEstGrade} par(es)</span>
+                </div>
               </div>
 
               <label className="text-sm font-medium">
@@ -5210,6 +5419,30 @@ const salvarVendasManuais = async () => {
             </div>
           </div>
 
+          <div className="bg-white rounded-[28px] border border-red-200 shadow-sm p-6">
+            <div className="font-bold text-lg text-red-900">Zerar costura pronta (protegido)</div>
+            <p className="text-sm text-slate-600 mt-1">
+              Zera apenas a coluna <span className="font-semibold">EST</span> em todas as referências e cores. PA, Pesponto (P) e Montagem (M) permanecem iguais.
+            </p>
+            <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
+              <span className="text-slate-500">Total atual em costura pronta:</span>{" "}
+              <span className="font-bold text-slate-900">{totalCosturaProntaAtual.toLocaleString("pt-BR")} par(es)</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setZerarEstErro("");
+                setZerarEstSenha("");
+                setZerarEstConfirmacao("");
+                setZerarEstModalOpen(true);
+              }}
+              disabled={totalCosturaProntaAtual <= 0}
+              className="mt-4 w-full rounded-2xl border border-red-300 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800 hover:bg-red-100 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Zerar todo o estoque de costura pronta
+            </button>
+          </div>
+
           <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -5225,20 +5458,47 @@ const salvarVendasManuais = async () => {
                   Nenhum ajuste manual registrado ainda.
                 </div>
               ) : (
-                ajustesEst.map((ajuste) => (
+                ajustesEst.map((ajuste) => {
+                  const totalExib =
+                    Number(ajuste.total) ||
+                    (Array.isArray(ajuste.items)
+                      ? ajuste.items.reduce((acc, it) => acc + (Number(it.qtd) || 0), 0)
+                      : Number(ajuste.qtd) || 0);
+                  const itensLista = Array.isArray(ajuste.items)
+                    ? ajuste.items
+                    : ajuste.size != null && ajuste.size !== "—"
+                      ? [{ size: ajuste.size, qtd: ajuste.qtd }]
+                      : [];
+                  return (
                   <div key={ajuste.id} className="rounded-2xl border border-slate-200 px-4 py-3">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <div className="font-semibold">{ajuste.ref} • {ajuste.cor}</div>
-                        <div className="text-xs text-slate-500 mt-1">{ajuste.dataLancamento || ajuste.data} • Numeração {ajuste.size}</div>
+                        <div className="text-xs text-slate-500 mt-1">
+                          {ajuste.dataLancamento || ajuste.data}
+                          {ajuste.grade ? " • Ajuste por grade" : ajuste.size != null ? ` • Numeração ${ajuste.size}` : ""}
+                        </div>
                       </div>
-                      <span className={`px-3 py-1 rounded-full border text-xs font-semibold ${ajuste.tipo === "entrada" ? "bg-emerald-100 text-emerald-700 border-emerald-200" : "bg-red-100 text-red-700 border-red-200"}`}>
-                        {ajuste.tipo === "entrada" ? `+${ajuste.qtd}` : `-${ajuste.qtd}`}
+                      <span className={`px-3 py-1 rounded-full border text-xs font-semibold shrink-0 ${ajuste.tipo === "entrada" ? "bg-emerald-100 text-emerald-700 border-emerald-200" : "bg-red-100 text-red-700 border-red-200"}`}>
+                        {ajuste.tipo === "entrada" ? `+${totalExib}` : `-${totalExib}`}
                       </span>
                     </div>
+                    {itensLista.length > 0 ? (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {itensLista.map((entry) => (
+                          <span
+                            key={`${ajuste.id}-${entry.size}`}
+                            className="inline-flex px-2 py-1 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-800"
+                          >
+                            {entry.size} → {entry.qtd}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                     <div className="text-sm text-slate-600 mt-2">Motivo: {ajuste.motivo}</div>
                   </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>
@@ -5290,8 +5550,66 @@ const salvarVendasManuais = async () => {
           )}
         </div>
       </section>
+
+      {zerarEstModalOpen && (
+        <div className="fixed inset-0 z-[65] flex items-center justify-center bg-slate-950/50 p-4">
+          <div className="w-full max-w-md rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6">
+            <div className="text-lg font-bold text-red-900">Zerar costura pronta</div>
+            <p className="text-sm text-slate-600 mt-2 leading-relaxed">
+              Esta ação coloca <span className="font-semibold">EST = 0</span> em todo o estoque ({totalCosturaProntaAtual.toLocaleString("pt-BR")} par(es) serão removidos). Não altera PA, P nem M.
+            </p>
+            <div className="mt-4 space-y-3">
+              <label className="text-sm font-medium text-slate-700 block">
+                Senha
+                <input
+                  type="password"
+                  value={zerarEstSenha}
+                  onChange={(e) => setZerarEstSenha(e.target.value)}
+                  className="mt-1.5 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+                  autoComplete="off"
+                />
+              </label>
+              <label className="text-sm font-medium text-slate-700 block">
+                Confirmação — digite <span className="font-bold">ZERAR</span>
+                <input
+                  type="text"
+                  value={zerarEstConfirmacao}
+                  onChange={(e) => setZerarEstConfirmacao(e.target.value)}
+                  className="mt-1.5 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm uppercase"
+                  placeholder="ZERAR"
+                  autoComplete="off"
+                />
+              </label>
+            </div>
+            {zerarEstErro ? (
+              <div className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+                {zerarEstErro}
+              </div>
+            ) : null}
+            <div className="mt-6 flex gap-3 justify-end">
+              <button
+                type="button"
+                onClick={fecharModalZerarEst}
+                disabled={zerarEstBusy}
+                className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold bg-white disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={executarZerarTodoEstoqueCosturaPronta}
+                disabled={zerarEstBusy}
+                className="rounded-2xl bg-red-700 text-white px-4 py-3 text-sm font-semibold hover:bg-red-800 disabled:opacity-50"
+              >
+                {zerarEstBusy ? "Salvando…" : "Confirmar zeragem"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </PageShell>
-  );
+    );
+  };
 
   const renderConfig = () => {
   const updateLocal = (ref, cor, size, key, value) => {
