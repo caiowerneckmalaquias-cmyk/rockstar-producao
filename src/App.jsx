@@ -8010,41 +8010,91 @@ const salvarVendasManuais = async () => {
         </div>
       )}
 
-      {previewFicha && (
+      {previewFicha && (() => {
+        const rowEstoque = rowsNormalized.find(
+          (item) => item.ref === previewFicha.ref && item.cor === previewFicha.cor
+        );
+        const totalFicha = Number(previewFicha.total) || sizes.reduce(
+          (acc, size) => acc + (Number(previewFicha.sizes?.[size]) || 0),
+          0
+        );
+        const totalPA = sizes.reduce((acc, size) => acc + (Number(rowEstoque?.data?.[size]?.pa) || 0), 0);
+        const totalEst = sizes.reduce((acc, size) => acc + (Number(rowEstoque?.data?.[size]?.est) || 0), 0);
+        const totalP = sizes.reduce((acc, size) => acc + (Number(rowEstoque?.data?.[size]?.p) || 0), 0);
+        const totalM = sizes.reduce((acc, size) => acc + (Number(rowEstoque?.data?.[size]?.m) || 0), 0);
+        const linhasEstoque = [
+          { key: "ficha", label: "Ficha (prog.)", valores: Object.fromEntries(sizes.map((s) => [s, Number(previewFicha.sizes?.[s]) || 0])), total: totalFicha, destaque: true },
+          { key: "pa", label: "PA", valores: Object.fromEntries(sizes.map((s) => [s, Number(rowEstoque?.data?.[s]?.pa) || 0])), total: totalPA },
+          { key: "est", label: "EST", valores: Object.fromEntries(sizes.map((s) => [s, Number(rowEstoque?.data?.[s]?.est) || 0])), total: totalEst },
+          { key: "p", label: "P", valores: Object.fromEntries(sizes.map((s) => [s, Number(rowEstoque?.data?.[s]?.p) || 0])), total: totalP },
+          { key: "m", label: "M", valores: Object.fromEntries(sizes.map((s) => [s, Number(rowEstoque?.data?.[s]?.m) || 0])), total: totalM },
+        ];
+
+        return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 overflow-auto max-[1023px]:landscape:items-start max-[1023px]:landscape:py-4">
-          <div className="w-full max-w-3xl rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6 max-h-[min(92dvh,900px)] overflow-y-auto">
+          <div className="w-full max-w-4xl rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6 max-h-[min(92dvh,900px)] overflow-y-auto">
             <div className="flex items-center justify-between gap-4">
               <div>
                 <div className="text-lg font-bold">Pré-visualização da ficha</div>
                 <div className="text-sm text-slate-500 mt-1">{previewFicha.nome}</div>
                 <div className="text-sm text-slate-500">{previewFicha.ref} • {previewFicha.cor}</div>
               </div>
-              <button onClick={() => setPreviewFicha(null)} className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold">Fechar</button>
+              <button onClick={() => setPreviewFicha(null)} className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold shrink-0">Fechar</button>
             </div>
 
-            <div className="mt-6 overflow-auto">
-              <table className="w-full border-collapse text-sm">
+            <div className="mt-5 grid grid-cols-2 lg:grid-cols-4 gap-3">
+              {[
+                { sigla: "PA", legenda: "Pronto acabado", total: totalPA },
+                { sigla: "EST", legenda: "Costura pronta", total: totalEst },
+                { sigla: "P", legenda: "Pesponto", total: totalP },
+                { sigla: "M", legenda: "Montagem", total: totalM },
+              ].map((item) => (
+                <div key={item.sigla} className="flex items-center justify-between rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
+                  <div>
+                    <div className="text-xl font-black text-[#8B1E2D] tracking-tight">{item.sigla}</div>
+                    <div className="text-[11px] text-slate-500 mt-0.5">{item.legenda}</div>
+                  </div>
+                  <span className="text-2xl font-bold text-slate-900 tabular-nums">{item.total}</span>
+                </div>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-slate-500">Totais do estoque atual desta ref/cor (atualizado em tempo real).</p>
+
+            <div className="mt-5 overflow-auto">
+              <table className="w-full min-w-[720px] border-collapse text-sm">
                 <thead>
-                  <tr className="bg-slate-50">
+                  <tr className="bg-slate-50 text-slate-600">
+                    <th className="border border-slate-200 px-3 py-2.5 text-left font-semibold sticky left-0 bg-slate-50 z-[1]">Tipo</th>
                     {sizes.map((size) => (
-                      <th key={size} className="border border-slate-200 px-4 py-3 text-center">{size}</th>
+                      <th key={size} className="border border-slate-200 px-2 py-2.5 text-center font-semibold min-w-[2.5rem]">{size}</th>
                     ))}
-                    <th className="border border-slate-200 px-4 py-3 text-center">Total</th>
+                    <th className="border border-slate-200 px-3 py-2.5 text-center font-semibold">Total</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr>
-                    {sizes.map((size) => (
-                      <td key={size} className="border border-slate-200 px-4 py-3 text-center">{previewFicha.sizes[size] || 0}</td>
-                    ))}
-                    <td className="border border-slate-200 px-4 py-3 text-center font-bold">{previewFicha.total}</td>
-                  </tr>
+                  {linhasEstoque.map((linha) => (
+                    <tr
+                      key={linha.key}
+                      className={linha.destaque ? "bg-amber-50/80" : "bg-white"}
+                    >
+                      <td className={`border border-slate-200 px-3 py-2.5 font-bold text-[#8B1E2D] sticky left-0 z-[1] ${linha.destaque ? "bg-amber-50/80" : "bg-white"}`}>
+                        {linha.label}
+                      </td>
+                      {sizes.map((size) => (
+                        <td key={`${linha.key}-${size}`} className="border border-slate-200 px-2 py-2.5 text-center tabular-nums">
+                          {linha.valores[size] ?? 0}
+                        </td>
+                      ))}
+                      <td className="border border-slate-200 px-3 py-2.5 text-center font-bold tabular-nums">{linha.total}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {confirmImport && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 max-[1023px]:landscape:items-start max-[1023px]:landscape:py-4">
