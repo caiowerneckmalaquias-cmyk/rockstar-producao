@@ -283,6 +283,78 @@ const normalizeProductData = (rawData) =>
     })
   );
 
+const APP_DATA_CACHE_STORAGE_KEY = "rockstar-producao-app-cache-v1";
+
+const isPlainObject = (value) =>
+  value != null && typeof value === "object" && !Array.isArray(value);
+
+const normalizeRowsForState = (rowsData) => {
+  if (!Array.isArray(rowsData)) return [];
+  return rowsData
+    .filter((row) => String(row?.ref || "").trim() && String(row?.cor || "").trim())
+    .map((row) => ({
+      ref: String(row.ref).trim(),
+      cor: String(row.cor).trim(),
+      data: normalizeProductData(row.data),
+    }));
+};
+
+const readAppDataCacheFromStorage = () => {
+  try {
+    if (typeof localStorage === "undefined") return {};
+    const raw = localStorage.getItem(APP_DATA_CACHE_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return isPlainObject(parsed) ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+};
+
+const writeAppDataCacheToStorage = (patch) => {
+  try {
+    if (typeof localStorage === "undefined" || !isPlainObject(patch)) return;
+    const current = readAppDataCacheFromStorage();
+    localStorage.setItem(
+      APP_DATA_CACHE_STORAGE_KEY,
+      JSON.stringify({
+        ...current,
+        ...patch,
+        updatedAt: new Date().toISOString(),
+      })
+    );
+  } catch (_) {
+    /* Cache local é apenas proteção contra falhas temporárias do banco. */
+  }
+};
+
+const hasObjectData = (value) => isPlainObject(value) && Object.keys(value).length > 0;
+
+const readRowsFromCacheOrInitial = () => {
+  const cachedRows = normalizeRowsForState(readAppDataCacheFromStorage().rows);
+  return cachedRows.length ? cachedRows : normalizeRowsForState(initialRows);
+};
+
+const readObjectFromCacheOrInitial = (key, fallback) => {
+  const cached = readAppDataCacheFromStorage()[key];
+  return deepClonePlain(hasObjectData(cached) ? cached : fallback);
+};
+
+const readMinimosFromCacheOrInitial = () =>
+  readObjectFromCacheOrInitial("minimos", initialMinimos);
+
+const readVendasFromCacheOrInitial = () =>
+  readObjectFromCacheOrInitial("vendas", initialVendas);
+
+const readMovimentacoesFromCache = () => {
+  const cached = readAppDataCacheFromStorage().movimentacoes;
+  return {
+    pesponto: Array.isArray(cached?.pesponto) ? deepClonePlain(cached.pesponto) : [],
+    montagem: Array.isArray(cached?.montagem) ? deepClonePlain(cached.montagem) : [],
+    ajustesEst: Array.isArray(cached?.ajustesEst) ? deepClonePlain(cached.ajustesEst) : [],
+  };
+};
+
 const calcTotal = (item) => item.pa + item.est + item.m + item.p;
 const round12 = (n) => (n <= 0 ? 0 : Math.ceil(n / 12) * 12);
 const normalizeKey = (value) =>
@@ -1687,9 +1759,10 @@ function PageShell({ children, title, subtitle, action }) {
 
 export default function ModuloProducaoPreviewRecuperado() {
   const [active, setActive] = useState("Dashboard");
-const [rows, setRows] = useState([]);
-const [minimos, setMinimos] = useState({});
-const [vendas, setVendas] = useState({});
+const [rows, setRows] = useState(readRowsFromCacheOrInitial);
+const [minimos, setMinimos] = useState(readMinimosFromCacheOrInitial);
+const [vendas, setVendas] = useState(readVendasFromCacheOrInitial);
+const [dadosCarregamentoAviso, setDadosCarregamentoAviso] = useState("");
 const [importText, setImportText] = useState("");
 const [importFileName, setImportFileName] = useState("");
 const [importFeedback, setImportFeedback] = useState("");
@@ -1698,7 +1771,7 @@ const [ultimaImportacaoGcm, setUltimaImportacaoGcm] = useState(null);
 const [salesImportFileName, setSalesImportFileName] = useState("");
 const [salesImportFeedback, setSalesImportFeedback] = useState("");
 const [salesImportPreview, setSalesImportPreview] = useState([]);
-const [vendasDraft, setVendasDraft] = useState({});
+const [vendasDraft, setVendasDraft] = useState(readVendasFromCacheOrInitial);
 const [vendasDirty, setVendasDirty] = useState(false);
 const [historicoVendasManuais, setHistoricoVendasManuais] = useState([]);
 const [pespontoForm, setPespontoForm] = useState({
@@ -1713,8 +1786,8 @@ const [montagemForm, setMontagemForm] = useState({
   grid: makeEmptyGrid(),
   programacao: "Programação A",
 });
-const [pespontoLancamentos, setPespontoLancamentos] = useState([]);
-const [montagemLancamentos, setMontagemLancamentos] = useState([]);
+const [pespontoLancamentos, setPespontoLancamentos] = useState(() => readMovimentacoesFromCache().pesponto);
+const [montagemLancamentos, setMontagemLancamentos] = useState(() => readMovimentacoesFromCache().montagem);
 const [previewFicha, setPreviewFicha] = useState(null);
 const [confirmImport, setConfirmImport] = useState(false);
 const [importMode, setImportMode] = useState("replace");
@@ -1731,14 +1804,14 @@ const [ajusteEstForm, setAjusteEstForm] = useState({
   grid: makeEmptyGrid(),
   motivo: "",
 });
-const [ajustesEst, setAjustesEst] = useState([]);
+const [ajustesEst, setAjustesEst] = useState(() => readMovimentacoesFromCache().ajustesEst);
 const [ajusteEstErro, setAjusteEstErro] = useState("");
 const [zerarEstModalOpen, setZerarEstModalOpen] = useState(false);
 const [zerarEstSenha, setZerarEstSenha] = useState("");
 const [zerarEstConfirmacao, setZerarEstConfirmacao] = useState("");
 const [zerarEstErro, setZerarEstErro] = useState("");
 const [zerarEstBusy, setZerarEstBusy] = useState(false);
-const [draftMinimos, setDraftMinimos] = useState({});
+const [draftMinimos, setDraftMinimos] = useState(readMinimosFromCacheOrInitial);
 const [dirtyMinimos, setDirtyMinimos] = useState(false);
 const [capacidadePespontoDia, setCapacidadePespontoDia] = useState(396);
 const [capacidadeMontagemDia, setCapacidadeMontagemDia] = useState(396);
@@ -2232,6 +2305,36 @@ const programacaoMontagem = useMemo(
     setVendasDraft(vendas);
   }, [vendas]);
 
+  useEffect(() => {
+    if (!rows.length) return;
+    writeAppDataCacheToStorage({ rows: normalizeRowsForState(rows) });
+  }, [rows]);
+
+  useEffect(() => {
+    if (!hasObjectData(minimos)) return;
+    writeAppDataCacheToStorage({ minimos: deepClonePlain(minimos) });
+  }, [minimos]);
+
+  useEffect(() => {
+    if (!hasObjectData(vendas)) return;
+    writeAppDataCacheToStorage({ vendas: deepClonePlain(vendas) });
+  }, [vendas]);
+
+  useEffect(() => {
+    const temMovimentacoes =
+      pespontoLancamentos.length > 0 ||
+      montagemLancamentos.length > 0 ||
+      ajustesEst.length > 0;
+    if (!temMovimentacoes) return;
+    writeAppDataCacheToStorage({
+      movimentacoes: {
+        pesponto: deepClonePlain(pespontoLancamentos),
+        montagem: deepClonePlain(montagemLancamentos),
+        ajustesEst: deepClonePlain(ajustesEst),
+      },
+    });
+  }, [pespontoLancamentos, montagemLancamentos, ajustesEst]);
+
 useEffect(() => {
   const carregarDadosIniciais = async () => {
     const estoqueBanco = await carregarEstoqueDoBanco();
@@ -2239,25 +2342,48 @@ useEffect(() => {
     const vendasBanco = await carregarVendasDoBanco();
     const movimentacoesBanco = await carregarMovimentacoesDoBanco();
     const configProducao = await carregarConfiguracoesProducaoDoBanco();
+    const fallbackLabels = [];
 
-    if (estoqueBanco) {
-      setRows(estoqueBanco);
+    if (Array.isArray(estoqueBanco) && estoqueBanco.length) {
+      const estoqueNormalizado = normalizeRowsForState(estoqueBanco);
+      setRows(estoqueNormalizado);
+      writeAppDataCacheToStorage({ rows: estoqueNormalizado });
+    } else {
+      fallbackLabels.push("estoque");
     }
 
-    if (minimosBanco) {
+    if (hasObjectData(minimosBanco)) {
       setMinimos(minimosBanco);
       setDraftMinimos(minimosBanco);
+      writeAppDataCacheToStorage({ minimos: deepClonePlain(minimosBanco) });
+    } else {
+      fallbackLabels.push("mínimos");
     }
 
-    if (vendasBanco) {
+    if (hasObjectData(vendasBanco)) {
       setVendas(vendasBanco);
       setVendasDraft(vendasBanco);
+      writeAppDataCacheToStorage({ vendas: deepClonePlain(vendasBanco) });
+    } else {
+      fallbackLabels.push("vendas");
     }
 
-    if (movimentacoesBanco) {
+    const temMovimentacoesBanco =
+      (movimentacoesBanco?.pesponto || []).length ||
+      (movimentacoesBanco?.montagem || []).length ||
+      (movimentacoesBanco?.ajustesEst || []).length;
+
+    if (temMovimentacoesBanco) {
       setPespontoLancamentos(movimentacoesBanco.pesponto || []);
       setMontagemLancamentos(movimentacoesBanco.montagem || []);
       setAjustesEst(movimentacoesBanco.ajustesEst || []);
+      writeAppDataCacheToStorage({
+        movimentacoes: {
+          pesponto: deepClonePlain(movimentacoesBanco.pesponto || []),
+          montagem: deepClonePlain(movimentacoesBanco.montagem || []),
+          ajustesEst: deepClonePlain(movimentacoesBanco.ajustesEst || []),
+        },
+      });
     }
 
     if (configProducao) {
@@ -2298,6 +2424,14 @@ useEffect(() => {
           romulo: String(configProducao.valor_par_romulo ?? ""),
         }));
       }
+    }
+
+    if (fallbackLabels.length) {
+      setDadosCarregamentoAviso(
+        `O banco não retornou ${fallbackLabels.join(", ")}. Mantive os dados salvos neste navegador para não deixar o app vazio.`
+      );
+    } else {
+      setDadosCarregamentoAviso("");
     }
   };
 
@@ -7892,6 +8026,12 @@ const salvarVendasManuais = async () => {
                 ))}
               </div>
             </div>
+
+            {dadosCarregamentoAviso ? (
+              <div className="max-w-[1720px] rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900 shadow-sm">
+                {dadosCarregamentoAviso}
+              </div>
+            ) : null}
 
             <div className="max-w-[1720px]">{renderActivePage()}</div>
           </div>
