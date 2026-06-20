@@ -1763,6 +1763,9 @@ const [rows, setRows] = useState(readRowsFromCacheOrInitial);
 const [minimos, setMinimos] = useState(readMinimosFromCacheOrInitial);
 const [vendas, setVendas] = useState(readVendasFromCacheOrInitial);
 const [dadosCarregamentoAviso, setDadosCarregamentoAviso] = useState("");
+const [backupFeedback, setBackupFeedback] = useState("");
+const [backupBusy, setBackupBusy] = useState(false);
+const backupFileInputRef = useRef(null);
 const [importText, setImportText] = useState("");
 const [importFileName, setImportFileName] = useState("");
 const [importFeedback, setImportFeedback] = useState("");
@@ -3407,6 +3410,251 @@ const salvarVendasNoBanco = async (vendasData) => {
   } catch (err) {
     console.log("ERRO GERAL VENDAS:", err);
     return { data: null, error: err };
+  }
+};
+
+const montarBackupDados = () => ({
+  app: "rockstar-producao",
+  version: 1,
+  exportedAt: new Date().toISOString(),
+  data: {
+    rows: normalizeRowsForState(rows),
+    minimos: deepClonePlain(minimos),
+    vendas: deepClonePlain(vendas),
+    movimentacoes: {
+      pesponto: deepClonePlain(pespontoLancamentos),
+      montagem: deepClonePlain(montagemLancamentos),
+      ajustesEst: deepClonePlain(ajustesEst),
+    },
+    configuracoes: {
+      capacidadePespontoDia,
+      capacidadeMontagemDia,
+      tempoProducao: deepClonePlain(tempoProducao),
+      programacaoDias,
+      programacaoReservaTopPct,
+      programacaoTopN,
+      programacaoTopModo,
+      programacaoTopManualKeys: deepClonePlain(programacaoTopManualKeys),
+      programacaoValoresTerceiros: deepClonePlain(programacaoValoresTerceiros),
+      fichasProgramacaoLancadas: deepClonePlain(fichasProgramacaoLancadas),
+      feriadosTexto,
+      programacaoObsImpressao,
+      programacaoLogoImpressao,
+      programacaoCopiasPorPagina,
+      programacaoEtiquetaFicha,
+      programacaoNomeLoteImpressao,
+      programacaoCabecalhoFolha,
+      programacaoTipoFolha,
+    },
+  },
+});
+
+const baixarBackupDados = () => {
+  try {
+    const payload = montarBackupDados();
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json;charset=utf-8",
+    });
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `backup-rockstar-producao-${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    setBackupFeedback("Backup baixado no seu computador. Guarde esse arquivo em uma pasta segura.");
+  } catch (err) {
+    console.log("ERRO AO GERAR BACKUP:", err);
+    setBackupFeedback("Não consegui gerar o backup. Tente novamente.");
+  }
+};
+
+const lerDadosDoBackup = (payload) => {
+  const base = isPlainObject(payload?.data) ? payload.data : payload;
+  if (!isPlainObject(base)) {
+    throw new Error("Arquivo de backup inválido.");
+  }
+
+  const nextRows = normalizeRowsForState(base.rows);
+  if (!nextRows.length) {
+    throw new Error("O backup não possui estoque válido para restaurar.");
+  }
+
+  const movs = isPlainObject(base.movimentacoes) ? base.movimentacoes : {};
+  const configuracoes = isPlainObject(base.configuracoes) ? base.configuracoes : {};
+
+  return {
+    rows: nextRows,
+    minimos: hasObjectData(base.minimos) ? deepClonePlain(base.minimos) : {},
+    vendas: hasObjectData(base.vendas) ? deepClonePlain(base.vendas) : {},
+    movimentacoes: {
+      pesponto: Array.isArray(movs.pesponto) ? deepClonePlain(movs.pesponto) : [],
+      montagem: Array.isArray(movs.montagem) ? deepClonePlain(movs.montagem) : [],
+      ajustesEst: Array.isArray(movs.ajustesEst) ? deepClonePlain(movs.ajustesEst) : [],
+    },
+    configuracoes,
+  };
+};
+
+const aplicarConfiguracoesBackup = (configuracoes) => {
+  if (!isPlainObject(configuracoes)) return;
+
+  const capP = Number(configuracoes.capacidadePespontoDia);
+  const capM = Number(configuracoes.capacidadeMontagemDia);
+  if (Number.isFinite(capP) && capP > 0) setCapacidadePespontoDia(capP);
+  if (Number.isFinite(capM) && capM > 0) setCapacidadeMontagemDia(capM);
+
+  if (isPlainObject(configuracoes.tempoProducao)) {
+    const tempo = {
+      pesponto: Number(configuracoes.tempoProducao.pesponto) || 3,
+      montagem: Number(configuracoes.tempoProducao.montagem) || 2,
+    };
+    setTempoProducao(tempo);
+    setTempoProducaoDraft(tempo);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(configuracoes, "programacaoDias")) {
+    setProgramacaoDias(Math.max(1, Math.min(30, Math.round(Number(configuracoes.programacaoDias) || 7))));
+  }
+  if (Object.prototype.hasOwnProperty.call(configuracoes, "programacaoReservaTopPct")) {
+    setProgramacaoReservaTopPct(Math.min(100, Math.max(0, Number(configuracoes.programacaoReservaTopPct) || 0)));
+  }
+  if (Object.prototype.hasOwnProperty.call(configuracoes, "programacaoTopN")) {
+    setProgramacaoTopN(Math.min(200, Math.max(1, Math.round(Number(configuracoes.programacaoTopN) || 10))));
+  }
+  if (Object.prototype.hasOwnProperty.call(configuracoes, "programacaoTopModo")) {
+    setProgramacaoTopModo(String(configuracoes.programacaoTopModo).trim().toLowerCase() === "manual" ? "manual" : "auto");
+  }
+  if (Array.isArray(configuracoes.programacaoTopManualKeys)) {
+    setProgramacaoTopManualKeys(parseTopManualKeysFromDb(configuracoes.programacaoTopManualKeys));
+  }
+  if (isPlainObject(configuracoes.programacaoValoresTerceiros)) {
+    setProgramacaoValoresTerceiros({
+      weverton: String(configuracoes.programacaoValoresTerceiros.weverton ?? ""),
+      romulo: String(configuracoes.programacaoValoresTerceiros.romulo ?? ""),
+    });
+  }
+  if (Array.isArray(configuracoes.fichasProgramacaoLancadas)) {
+    const keys = configuracoes.fichasProgramacaoLancadas.filter((x) => typeof x === "string");
+    setFichasProgramacaoLancadas(keys);
+    try {
+      localStorage.setItem(PROG_FICHAS_LANCADAS_STORAGE_KEY, JSON.stringify(keys));
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(configuracoes, "feriadosTexto")) {
+    setFeriadosTexto(String(configuracoes.feriadosTexto ?? ""));
+  }
+  if (Object.prototype.hasOwnProperty.call(configuracoes, "programacaoObsImpressao")) {
+    setProgramacaoObsImpressao(String(configuracoes.programacaoObsImpressao ?? ""));
+  }
+  if (Object.prototype.hasOwnProperty.call(configuracoes, "programacaoLogoImpressao")) {
+    setProgramacaoLogoImpressao(String(configuracoes.programacaoLogoImpressao || "/logo-rockstar-bandeira.png"));
+  }
+  if (Object.prototype.hasOwnProperty.call(configuracoes, "programacaoCopiasPorPagina")) {
+    setProgramacaoCopiasPorPagina(Math.max(1, Math.min(4, Math.round(Number(configuracoes.programacaoCopiasPorPagina) || 1))));
+  }
+  if (Object.prototype.hasOwnProperty.call(configuracoes, "programacaoEtiquetaFicha")) {
+    setProgramacaoEtiquetaFicha(String(configuracoes.programacaoEtiquetaFicha ?? ""));
+  }
+  if (Object.prototype.hasOwnProperty.call(configuracoes, "programacaoNomeLoteImpressao")) {
+    setProgramacaoNomeLoteImpressao(String(configuracoes.programacaoNomeLoteImpressao ?? ""));
+  }
+  if (Object.prototype.hasOwnProperty.call(configuracoes, "programacaoCabecalhoFolha")) {
+    setProgramacaoCabecalhoFolha(String(configuracoes.programacaoCabecalhoFolha || "completo"));
+  }
+  if (Object.prototype.hasOwnProperty.call(configuracoes, "programacaoTipoFolha")) {
+    setProgramacaoTipoFolha(String(configuracoes.programacaoTipoFolha || "folha1"));
+  }
+};
+
+const salvarBackupRestauradoNoBanco = async (dados) => {
+  const erros = [];
+
+  const estoqueResult = await salvarEstoqueNoBanco(mapRowsToEstoquePayload(dados.rows));
+  if (estoqueResult.error) erros.push("estoque");
+
+  if (hasObjectData(dados.minimos)) {
+    const minimosResult = await salvarMinimosNoBanco(dados.minimos);
+    if (minimosResult.error) erros.push("mínimos");
+  }
+
+  if (hasObjectData(dados.vendas)) {
+    const vendasResult = await salvarVendasNoBanco(dados.vendas);
+    if (vendasResult.error) erros.push("vendas");
+  }
+
+  const cfg = dados.configuracoes || {};
+  const tempo = isPlainObject(cfg.tempoProducao) ? cfg.tempoProducao : tempoProducao;
+  const valoresTerceiros = isPlainObject(cfg.programacaoValoresTerceiros)
+    ? cfg.programacaoValoresTerceiros
+    : programacaoValoresTerceiros;
+  const configResult = await salvarConfiguracoesProducaoNoBanco({
+    capacidadePespontoDia: Number(cfg.capacidadePespontoDia) || capacidadePespontoDia,
+    capacidadeMontagemDia: Number(cfg.capacidadeMontagemDia) || capacidadeMontagemDia,
+    diasPesponto: Number(tempo.pesponto) || 3,
+    diasMontagem: Number(tempo.montagem) || 2,
+    reservaTopPct: Number(cfg.programacaoReservaTopPct) || programacaoReservaTopPct,
+    topN: Number(cfg.programacaoTopN) || programacaoTopN,
+    topMode: cfg.programacaoTopModo || programacaoTopModo,
+    topManualKeys: Array.isArray(cfg.programacaoTopManualKeys)
+      ? cfg.programacaoTopManualKeys
+      : programacaoTopManualKeys,
+    valorParWeverton: valoresTerceiros.weverton,
+    valorParRomulo: valoresTerceiros.romulo,
+  });
+  if (configResult.error) erros.push("configurações");
+
+  return erros;
+};
+
+const restaurarBackupDados = async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  setBackupBusy(true);
+  setBackupFeedback("Restaurando backup...");
+
+  try {
+    const text = await file.text();
+    const payload = JSON.parse(text);
+    const dados = lerDadosDoBackup(payload);
+
+    setRows(dados.rows);
+    setMinimos(dados.minimos);
+    setDraftMinimos(dados.minimos);
+    setVendas(dados.vendas);
+    setVendasDraft(dados.vendas);
+    setVendasDirty(false);
+    setPespontoLancamentos(dados.movimentacoes.pesponto);
+    setMontagemLancamentos(dados.movimentacoes.montagem);
+    setAjustesEst(dados.movimentacoes.ajustesEst);
+    aplicarConfiguracoesBackup(dados.configuracoes);
+    writeAppDataCacheToStorage({
+      rows: dados.rows,
+      minimos: dados.minimos,
+      vendas: dados.vendas,
+      movimentacoes: dados.movimentacoes,
+    });
+
+    const errosBanco = await salvarBackupRestauradoNoBanco(dados);
+    if (errosBanco.length) {
+      setBackupFeedback(
+        `Backup restaurado na tela e salvo neste navegador. Não consegui enviar ao banco: ${errosBanco.join(", ")}.`
+      );
+    } else {
+      setBackupFeedback("Backup restaurado e dados principais enviados ao banco com sucesso.");
+    }
+    setDadosCarregamentoAviso("");
+  } catch (err) {
+    console.log("ERRO AO RESTAURAR BACKUP:", err);
+    setBackupFeedback(`Não consegui restaurar esse arquivo. ${err?.message || "Verifique se é um backup válido."}`);
+  } finally {
+    setBackupBusy(false);
+    event.target.value = "";
   }
 };
 
@@ -8025,6 +8273,47 @@ const salvarVendasManuais = async () => {
                   </button>
                 ))}
               </div>
+            </div>
+
+            <div className="max-w-[1720px] rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="text-sm font-bold text-slate-900">Backup dos dados</div>
+                  <div className="text-xs text-slate-500">
+                    Baixe um arquivo no seu PC e use ele para restaurar o app se algo sumir.
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={baixarBackupDados}
+                    disabled={backupBusy}
+                    className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Baixar backup
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => backupFileInputRef.current?.click()}
+                    disabled={backupBusy}
+                    className="rounded-2xl bg-[#8B1E2D] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#6F1421] disabled:opacity-50"
+                  >
+                    {backupBusy ? "Restaurando..." : "Restaurar backup"}
+                  </button>
+                  <input
+                    ref={backupFileInputRef}
+                    type="file"
+                    accept="application/json,.json"
+                    onChange={restaurarBackupDados}
+                    className="hidden"
+                  />
+                </div>
+              </div>
+              {backupFeedback ? (
+                <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700">
+                  {backupFeedback}
+                </div>
+              ) : null}
             </div>
 
             {dadosCarregamentoAviso ? (
