@@ -2560,6 +2560,43 @@ const startPrintWithTarget = useCallback((target) => {
     });
   };
 
+  const applyDeleteLancamentoToRows = (rowsData, tipo, lancamento) => {
+    const status = String(lancamento.status || "").trim();
+    if (status !== "Finalizado") {
+      return applyLancamentoDeltaToRows(rowsData, tipo, lancamento, "revert");
+    }
+
+    const items = normalizeLancamentoItems(lancamento);
+    if (!items.length) return rowsData;
+
+    return rowsData.map((row) => {
+      if (row.ref !== lancamento.ref || row.cor !== lancamento.cor) return row;
+      const nextData = { ...row.data };
+      items.forEach((item) => {
+        const atual = nextData[item.size] || { pa: 0, est: 0, m: 0, p: 0 };
+        if (tipo === "Pesponto") {
+          nextData[item.size] = {
+            ...atual,
+            est: Math.max(0, (atual.est || 0) - item.qtd),
+          };
+        } else {
+          nextData[item.size] = {
+            ...atual,
+            est: (atual.est || 0) + item.qtd,
+            pa: Math.max(0, (atual.pa || 0) - item.qtd),
+          };
+        }
+      });
+      return { ...row, data: nextData };
+    });
+  };
+
+  const applyDeleteAllLancamentosToRows = (rowsData, tipo, lancamentos) =>
+    lancamentos.reduce(
+      (acc, lancamento) => applyDeleteLancamentoToRows(acc, tipo, lancamento),
+      rowsData
+    );
+
   const executeMov = async (tipo, form, force = false, progFichaStorageKey) => {
     console.log("EXECUTE MOV FOI CHAMADO", { tipo, form });
     const items = sizes
@@ -2763,6 +2800,25 @@ const persistLaunch = await persistRowsToSupabase(nextRows);
     }
   };
 
+  const excluirTodasMovimentacoesNoBanco = async (tipo, { suppressAlert = false } = {}) => {
+    try {
+      const { error } = await supabase.from("movimentacoes").delete().eq("tipo", tipo);
+
+      if (error) {
+        console.log("ERRO AO EXCLUIR TODAS MOVIMENTACOES:", error);
+        if (!suppressAlert) alert("Erro ao excluir movimentações no banco.");
+        return false;
+      }
+
+      console.log("TODAS MOVIMENTACOES EXCLUIDAS DO BANCO", tipo);
+      return true;
+    } catch (err) {
+      console.log("ERRO GERAL AO EXCLUIR TODAS MOVIMENTACOES:", err);
+      if (!suppressAlert) alert("Erro geral ao excluir movimentações.");
+      return false;
+    }
+  };
+
   const deleteLancamento = (tipo, lancamentoId) => {
     const source = tipo === "Pesponto" ? pespontoLancamentos : montagemLancamentos;
     const alvo = source.find((item) => item.id === lancamentoId);
@@ -2879,6 +2935,104 @@ const persistLaunch = await persistRowsToSupabase(nextRows);
       setMontagemLancamentos((curr) => curr.filter((item) => item.id !== lancamentoId));
     }
 
+    setConfirmAction(null);
+  };
+
+  const deleteAllLancamentos = (tipo) => {
+    const source = tipo === "Pesponto" ? pespontoLancamentos : montagemLancamentos;
+    if (!source.length) return;
+
+    const emAberto = source.filter((item) => String(item.status || "").trim() !== "Finalizado").length;
+    const finalizados = source.length - emAberto;
+
+    setConfirmAction({
+      kind: "deleteAll",
+      tipo,
+      titulo: `Excluir todas as fichas em ${tipo}`,
+      mensagem: `Deseja realmente excluir todos os ${source.length} lançamento(s) de ${tipo}? Inclui ${emAberto} em aberto e ${finalizados} finalizado(s). O estoque (PA, EST, P e M) será ajustado e essa ação não pode ser desfeita.`,
+    });
+  };
+
+  const confirmDeleteAllLancamentos = async ({ tipo }) => {
+    const source = tipo === "Pesponto" ? pespontoLancamentos : montagemLancamentos;
+
+    if (!source.length) {
+      alert("Não há lançamentos para excluir.");
+      setConfirmAction(null);
+      return;
+    }
+
+    const nextRows = applyDeleteAllLancamentosToRows(rows, tipo, source);
+    const persist = await persistRowsToSupabase(nextRows);
+    if (!persist.ok) {
+      alert(
+        `Não foi possível atualizar o estoque ao excluir. Nada foi removido.\n\n${persist.error?.message || persist.error || ""}`
+      );
+      return;
+    }
+
+    const ok = await excluirTodasMovimentacoesNoBanco(tipo);
+    if (!ok) {
+      await persistRowsToSupabase(rows);
+      return;
+    }
+
+    setRows(nextRows);
+
+    if (tipo === "Pesponto") {
+      setPespontoLancamentos([]);
+    } else {
+      setMontagemLancamentos([]);
+    }
+
+    setMovImpressaoSelecao((prev) => ({ ...prev, [tipo]: {} }));
+    setMovListPage((prev) => ({ ...prev, [tipo]: 1 }));
+    setEditingMov((curr) => (curr?.tipo === tipo ? null : curr));
+    setConfirmAction(null);
+  };
+
+  const calcularTotalMontagemEstoque = (rowsData) =>
+    rowsData.reduce(
+      (acc, row) =>
+        acc + sizes.reduce((sum, size) => sum + (Number(row.data?.[size]?.m) || 0), 0),
+      0
+    );
+
+  const zerarMontagemEstoque = () => {
+    const totalMontagem = calcularTotalMontagemEstoque(rows);
+
+    if (!totalMontagem) {
+      alert("Não há pares em montagem para zerar.");
+      return;
+    }
+
+    setConfirmAction({
+      kind: "zerarMontagem",
+      titulo: "Zerar montagem (M)",
+      mensagem: `Deseja realmente zerar ${totalMontagem} par(es) da coluna M no Controle Geral? Esses pares serão descartados e essa ação não pode ser desfeita.`,
+    });
+  };
+
+  const confirmZerarMontagemEstoque = async () => {
+    const nextRows = rows.map((row) => ({
+      ...row,
+      data: Object.fromEntries(
+        sizes.map((size) => {
+          const atual = row.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 };
+          return [size, { ...atual, m: 0 }];
+        })
+      ),
+    }));
+
+    const persist = await persistRowsToSupabase(nextRows);
+    if (!persist.ok) {
+      alert(
+        `Não foi possível salvar o estoque ao zerar a montagem.\n\n${persist.error?.message || persist.error || ""}`
+      );
+      return;
+    }
+
+    setRows(nextRows);
     setConfirmAction(null);
   };
 
@@ -4857,12 +5011,31 @@ const salvarVendasManuais = async () => {
                   <h2 className="font-bold text-lg">Lançamentos enviados</h2>
                   <p className="text-sm text-slate-500 mt-1">Finalize para atualizar o estoque.</p>
                 </div>
-                <div className="text-sm text-slate-500 text-left sm:text-right shrink-0">
-                  <div>{lancamentos.length} lançamento(s) no total</div>
-                  {lancamentos.length > 0 && (
-                    <div className="text-xs text-slate-400 mt-0.5">
-                      Mostrando {startIdx + 1}–{Math.min(startIdx + lancamentosPagina.length, lancamentos.length)} · {MOV_PAGE_SIZE} por página
-                    </div>
+                <div className="flex flex-col items-start sm:items-end gap-2 shrink-0">
+                  <div className="text-sm text-slate-500 text-left sm:text-right">
+                    <div>{lancamentos.length} lançamento(s) no total</div>
+                    {lancamentos.length > 0 && (
+                      <div className="text-xs text-slate-400 mt-0.5">
+                        Mostrando {startIdx + 1}–{Math.min(startIdx + lancamentosPagina.length, lancamentos.length)} · {MOV_PAGE_SIZE} por página
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={lancamentos.length === 0}
+                    onClick={() => deleteAllLancamentos(title)}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-red-100 text-red-700 border border-red-200 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-red-200"
+                  >
+                    Excluir todas
+                  </button>
+                  {title === "Montagem" && (
+                    <button
+                      type="button"
+                      onClick={zerarMontagemEstoque}
+                      className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-amber-100 text-amber-800 border border-amber-200 hover:bg-amber-200"
+                    >
+                      Zerar montagem (M)
+                    </button>
                   )}
                 </div>
               </div>
@@ -8160,6 +8333,10 @@ const salvarVendasManuais = async () => {
                 onClick={() => {
                   if (confirmAction.kind === "delete") {
                     confirmDeleteLancamento(confirmAction);
+                  } else if (confirmAction.kind === "deleteAll") {
+                    confirmDeleteAllLancamentos(confirmAction);
+                  } else if (confirmAction.kind === "zerarMontagem") {
+                    confirmZerarMontagemEstoque();
                   } else if (confirmAction.kind === "finalizar") {
                     confirmFinalizarProgramacao(confirmAction);
                   }
