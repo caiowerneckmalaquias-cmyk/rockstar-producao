@@ -1783,6 +1783,7 @@ const [fichasProgramacaoLancadas, setFichasProgramacaoLancadas] = useState(readP
 /** Plano congelado na Programação do Dia (não muda com estoque até Recalcular ou mudança período/capacidade). */
 const [programacaoPlanoCongelado, setProgramacaoPlanoCongelado] = useState(null);
 const [movListPage, setMovListPage] = useState({ Pesponto: 1, Montagem: 1 });
+const [movBusca, setMovBusca] = useState({ Pesponto: "", Montagem: "" });
 const [feriadosTexto, setFeriadosTexto] = useState("");
 const [dashboardFeriadosAberto, setDashboardFeriadosAberto] = useState(false);
 const [dashboardMaisKpisAberto, setDashboardMaisKpisAberto] = useState(false);
@@ -4734,10 +4735,18 @@ const salvarVendasManuais = async () => {
       programacaoTipoFolha,
       programacaoCopiasPorPagina,
     });
-    const totalPages = Math.max(1, Math.ceil(lancamentos.length / MOV_PAGE_SIZE));
+    const termoBusca = (movBusca[title] || "").trim().toLowerCase();
+    const lancamentosFiltrados = termoBusca
+      ? lancamentos.filter((item) =>
+          `${item.programacao || ""} ${item.ref || ""} ${item.cor || ""}`
+            .toLowerCase()
+            .includes(termoBusca)
+        )
+      : lancamentos;
+    const totalPages = Math.max(1, Math.ceil(lancamentosFiltrados.length / MOV_PAGE_SIZE));
     const currentPage = Math.min(movListPage[title] || 1, totalPages);
     const startIdx = (currentPage - 1) * MOV_PAGE_SIZE;
-    const lancamentosPagina = lancamentos.slice(startIdx, startIdx + MOV_PAGE_SIZE);
+    const lancamentosPagina = lancamentosFiltrados.slice(startIdx, startIdx + MOV_PAGE_SIZE);
     const agrupados = lancamentosPagina.reduce((acc, item) => {
       if (!acc[item.programacao]) acc[item.programacao] = [];
       acc[item.programacao].push(item);
@@ -5013,10 +5022,14 @@ const salvarVendasManuais = async () => {
                 </div>
                 <div className="flex flex-col items-start sm:items-end gap-2 shrink-0">
                   <div className="text-sm text-slate-500 text-left sm:text-right">
-                    <div>{lancamentos.length} lançamento(s) no total</div>
-                    {lancamentos.length > 0 && (
+                    <div>
+                      {termoBusca
+                        ? `${lancamentosFiltrados.length} de ${lancamentos.length} lançamento(s)`
+                        : `${lancamentos.length} lançamento(s) no total`}
+                    </div>
+                    {lancamentosFiltrados.length > 0 && (
                       <div className="text-xs text-slate-400 mt-0.5">
-                        Mostrando {startIdx + 1}–{Math.min(startIdx + lancamentosPagina.length, lancamentos.length)} · {MOV_PAGE_SIZE} por página
+                        Mostrando {startIdx + 1}–{Math.min(startIdx + lancamentosPagina.length, lancamentosFiltrados.length)} · {MOV_PAGE_SIZE} por página
                       </div>
                     )}
                   </div>
@@ -5038,6 +5051,29 @@ const salvarVendasManuais = async () => {
                     </button>
                   )}
                 </div>
+              </div>
+              <div className="mb-4 relative">
+                <input
+                  type="text"
+                  value={movBusca[title] || ""}
+                  onChange={(e) => {
+                    const valor = e.target.value;
+                    setMovBusca((prev) => ({ ...prev, [title]: valor }));
+                    setMovListPage((prev) => ({ ...prev, [title]: 1 }));
+                  }}
+                  placeholder="Pesquisar programação, referência ou cor..."
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-[#8B1E2D]/30"
+                />
+                {(movBusca[title] || "") && (
+                  <button
+                    type="button"
+                    onClick={() => setMovBusca((prev) => ({ ...prev, [title]: "" }))}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 text-lg leading-none"
+                    aria-label="Limpar busca"
+                  >
+                    ×
+                  </button>
+                )}
               </div>
               {isPespontoPage && (
                 <div className="mb-4 flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
@@ -5073,7 +5109,7 @@ const salvarVendasManuais = async () => {
 
               {!Object.keys(agrupados).length ? (
                 <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">
-                  Nenhum lançamento ainda.
+                  {termoBusca ? `Nenhum lançamento encontrado para "${movBusca[title]}".` : "Nenhum lançamento ainda."}
                 </div>
               ) : (
                 <div className="space-y-5">
@@ -5171,7 +5207,7 @@ const salvarVendasManuais = async () => {
                 </div>
               )}
 
-              {lancamentos.length > MOV_PAGE_SIZE && (
+              {lancamentosFiltrados.length > MOV_PAGE_SIZE && (
                 <div className="mt-6 flex flex-col items-stretch gap-4 sm:flex-row sm:items-center sm:justify-between pt-4 border-t border-slate-200">
                   <div className="text-sm text-slate-600 text-center sm:text-left">
                     Página <span className="font-semibold text-slate-900">{currentPage}</span> de{" "}
