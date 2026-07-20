@@ -11,7 +11,8 @@ import {
   initialMinimos,
   initialVendas,
   initialTempoProducao,
-  LIMITE_PROGRAMACAO_DIA
+  LIMITE_PROGRAMACAO_DIA,
+  LIMITE_PARES_POR_NUMERACAO,
 } from "./constants/production";
 
 const makeEmptyGrid = () => Object.fromEntries(sizes.map((s) => [s, 0]));
@@ -847,8 +848,9 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
   return { montagem, pesponto };
 }
 
-function splitIntoFichas(sizesObj, maxPorFicha = 396) {
+function splitIntoFichas(sizesObj, maxPorFicha = 396, maxPorNumeracao = LIMITE_PARES_POR_NUMERACAO) {
   const limite = Math.max(1, Number(maxPorFicha) || 396);
+  const limiteNumeracao = Math.max(1, Number(maxPorNumeracao) || LIMITE_PARES_POR_NUMERACAO);
   const fichas = [];
 
   const tamanhos = Object.entries(sizesObj)
@@ -872,11 +874,13 @@ function splitIntoFichas(sizesObj, maxPorFicha = 396) {
       const item = restante[i];
       if (item.qtd <= 0) continue;
 
-      const podeAdicionar = Math.min(item.qtd, limite - total);
+      const jaNaFicha = Number(ficha[item.size]) || 0;
+      const restanteNumeracao = Math.max(0, limiteNumeracao - jaNaFicha);
+      const podeAdicionar = Math.min(item.qtd, limite - total, restanteNumeracao);
 
-      if (podeAdicionar <= 0) break;
+      if (podeAdicionar <= 0) continue;
 
-      ficha[item.size] = podeAdicionar;
+      ficha[item.size] = jaNaFicha + podeAdicionar;
       item.qtd -= podeAdicionar;
       total += podeAdicionar;
 
@@ -2635,6 +2639,20 @@ const startPrintWithTarget = useCallback((target) => {
       return;
     }
 
+    const excedemNumeracao =
+      tipo === "Pesponto" || tipo === "Montagem"
+        ? items.filter((item) => item.qtd > LIMITE_PARES_POR_NUMERACAO)
+        : [];
+
+    if (excedemNumeracao.length) {
+      const lista = excedemNumeracao.map((item) => `${item.size} (${item.qtd})`).join(", ");
+      setMovError((curr) => ({
+        ...curr,
+        [tipo]: `Cada numeração pode ter no máximo ${LIMITE_PARES_POR_NUMERACAO} pares. Acima do limite: ${lista}.`,
+      }));
+      return;
+    }
+
     const invalidos =
       tipo === "Pesponto" || tipo === "Montagem"
         ? items.filter((item) => item.qtd % 12 !== 0)
@@ -2746,9 +2764,11 @@ const persistLaunch = await persistRowsToSupabase(nextRows);
         )
       : false;
 
-    const invalidos = sizes
+    const gradeItems = sizes
       .map((size) => ({ size, qtd: Number(form.grid[size]) || 0 }))
-      .filter((item) => item.qtd > 0 && item.qtd % 12 !== 0);
+      .filter((item) => item.qtd > 0);
+    const invalidos = gradeItems.filter((item) => item.qtd % 12 !== 0);
+    const excedemNumeracao = gradeItems.filter((item) => item.qtd > LIMITE_PARES_POR_NUMERACAO);
 
     const totalLancamento = sizes.reduce((acc, size) => acc + (Number(form.grid[size]) || 0), 0);
     const mensagens = [];
@@ -2759,6 +2779,13 @@ const persistLaunch = await persistRowsToSupabase(nextRows);
 
     if (programacaoDuplicada) {
       mensagens.push(`já existe uma programação com esse nome para esta ref e cor em ${tipo}`);
+    }
+
+    if (excedemNumeracao.length) {
+      const lista = excedemNumeracao.map((item) => `${item.size} (${item.qtd})`).join(", ");
+      mensagens.push(
+        `cada numeração pode ter no máximo ${LIMITE_PARES_POR_NUMERACAO} pares. Acima do limite: ${lista}`
+      );
     }
 
     if (invalidos.length) {
@@ -8319,12 +8346,21 @@ const salvarVendasManuais = async () => {
       )}
 
       {confirmMov && (() => {
-        const invalidos = sizes
+        const gradeItems = sizes
           .map((size) => ({ size, qtd: Number(confirmMov.form.grid[size]) || 0 }))
-          .filter((item) => item.qtd > 0 && item.qtd % 12 !== 0);
+          .filter((item) => item.qtd > 0);
+        const excedemNumeracao = gradeItems.filter((item) => item.qtd > LIMITE_PARES_POR_NUMERACAO);
+        const invalidos = gradeItems.filter((item) => item.qtd % 12 !== 0);
         const lista = invalidos.map((item) => `${item.size} (${item.qtd})`).join(", ");
+        const listaNumeracao = excedemNumeracao.map((item) => `${item.size} (${item.qtd})`).join(", ");
         const totalLancamento = sizes.reduce((acc, size) => acc + (Number(confirmMov.form.grid[size]) || 0), 0);
         const mensagens = [];
+
+        if (excedemNumeracao.length) {
+          mensagens.push(
+            `Cada numeração pode ter no máximo ${LIMITE_PARES_POR_NUMERACAO} pares. Acima do limite: ${listaNumeracao}.`
+          );
+        }
 
         if (invalidos.length) {
           mensagens.push(`No ${confirmMov.tipo}, o padrão é trabalhar em múltiplos de 12. Fora da regra em: ${lista}.`);
@@ -8334,24 +8370,38 @@ const salvarVendasManuais = async () => {
           mensagens.push(`O total informado é ${totalLancamento} pares e não pode passar de 396.`);
         }
 
+        const bloqueadoPorNumeracao = excedemNumeracao.length > 0;
+
         return (
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4 max-[1023px]:landscape:items-start max-[1023px]:landscape:py-4">
             <div className="w-full max-w-lg max-h-[min(88dvh,800px)] overflow-y-auto rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6">
-              <div className="text-lg font-bold">Lançamento fora da regra</div>
+              <div className="text-lg font-bold">
+                {bloqueadoPorNumeracao ? "Lançamento bloqueado" : "Lançamento fora da regra"}
+              </div>
               <p className="text-sm text-slate-600 mt-3 leading-relaxed">
                 {mensagens.join(" ")}
               </p>
-              <p className="text-sm text-slate-600 mt-3 leading-relaxed">Deseja realmente continuar com esse lançamento?</p>
+              {bloqueadoPorNumeracao ? (
+                <p className="text-sm text-slate-600 mt-3 leading-relaxed">
+                  Ajuste a grade para no máximo {LIMITE_PARES_POR_NUMERACAO} pares por numeração e tente novamente.
+                </p>
+              ) : (
+                <p className="text-sm text-slate-600 mt-3 leading-relaxed">Deseja realmente continuar com esse lançamento?</p>
+              )}
               <div className="mt-6 flex gap-3 justify-end">
-                <button onClick={() => setConfirmMov(null)} className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold bg-white">Cancelar</button>
-                <button
-                  onClick={() =>
-                    executeMov(confirmMov.tipo, confirmMov.form, true, confirmMov.progFichaStorageKey || undefined)
-                  }
-                  className="rounded-2xl bg-slate-950 text-white px-4 py-3 text-sm font-semibold"
-                >
-                  Lançar mesmo assim
+                <button onClick={() => setConfirmMov(null)} className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold bg-white">
+                  {bloqueadoPorNumeracao ? "Fechar" : "Cancelar"}
                 </button>
+                {!bloqueadoPorNumeracao ? (
+                  <button
+                    onClick={() =>
+                      executeMov(confirmMov.tipo, confirmMov.form, true, confirmMov.progFichaStorageKey || undefined)
+                    }
+                    className="rounded-2xl bg-slate-950 text-white px-4 py-3 text-sm font-semibold"
+                  >
+                    Lançar mesmo assim
+                  </button>
+                ) : null}
               </div>
             </div>
           </div>

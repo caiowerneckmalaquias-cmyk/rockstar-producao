@@ -93,3 +93,5 @@ export const initialTempoProducao = {
 };
 
 export const LIMITE_PROGRAMACAO_DIA = 396;
+/** Máximo de pares por numeração (tamanho) em fichas/lançamentos de Pesponto e Montagem. */
+export const LIMITE_PARES_POR_NUMERACAO = 36;
