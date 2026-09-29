@@ -14,6 +14,7 @@ import {
   LIMITE_PROGRAMACAO_DIA,
   LIMITE_PARES_POR_NUMERACAO,
   REF_MIGRACAO,
+  REF_MIGRACAO_NOVA_PARA_ANTIGA,
   ehRefMigracaoAntiga,
   refAntigaDe,
 } from "./constants/production";
@@ -302,17 +303,32 @@ const normalizeKey = (value) =>
 
 /**
  * Extrai só a cor do cabeçalho GCM.
- * Ex.: "BTCV010 - CANO ALTO ADULTO AZUL BB" → "AZUL BB"
+ * - RCCA010: após "CANO ALTO" (Rock Star cano alto)
+ * - RCCB010: após "ROCK STAR" (Rock Star cano curto)
+ * - demais: após ADULTO/COURINO/INFANTIL (padrão antigo)
  */
-function extrairCorGcm(texto) {
+function extrairCorGcm(texto, refHint) {
   const raw = String(texto || "").trim();
   if (!raw) return "";
   const upper = raw.toUpperCase();
+  const refFromText = upper.includes("-") ? upper.split("-")[0].trim() : "";
+  const codigo = String(refHint || refFromText || "").trim().toUpperCase();
   const descricao = upper.includes("-")
     ? upper.split("-").slice(1).join("-").trim()
     : upper;
+
+  if (codigo === "RCCA010") {
+    const marker = "CANO ALTO";
+    const at = descricao.indexOf(marker);
+    if (at !== -1) return descricao.slice(at + marker.length).trim();
+  }
+  if (codigo === "RCCB010") {
+    const marker = "ROCK STAR";
+    const at = descricao.indexOf(marker);
+    if (at !== -1) return descricao.slice(at + marker.length).trim();
+  }
+
   const palavras = descricao.split(/\s+/).filter(Boolean);
-  // Último marcador (ex.: "COURINO ADULTO MARROM" → MARROM)
   let idx = -1;
   palavras.forEach((p, i) => {
     if (["ADULTO", "COURINO", "INFANTIL"].includes(p)) idx = i;
@@ -336,24 +352,38 @@ function coresGcmCompativeis(corGcm, corCadastro) {
 
 /**
  * Casa item do GCM com uma linha já cadastrada (ref+cor normalizados).
- * Se o GCM trouxer a ref antiga do mapa e existir a nova com a mesma cor, prioriza a nova.
+ * Usa o mapa antiga↔nova nos dois sentidos e prioriza a ref nova quando existir.
  */
 function encontrarLinhaCadastradaParaGcm(item, rowsList) {
   const lista = Array.isArray(rowsList) ? rowsList : [];
   const codigo = String(item?.ref || "").trim().toUpperCase();
-  const nova = REF_MIGRACAO[codigo];
+  const refNova =
+    REF_MIGRACAO[codigo] ||
+    (REF_MIGRACAO_NOVA_PARA_ANTIGA[codigo] ? codigo : null);
+  const refAntiga =
+    REF_MIGRACAO_NOVA_PARA_ANTIGA[codigo] ||
+    (REF_MIGRACAO[codigo] ? codigo : null);
+
   const corBruta = String(item?.cor || "").trim();
-  const corExtraida = extrairCorGcm(`${item?.ref || ""} - ${corBruta}`) || corBruta;
+  const corExtraida =
+    extrairCorGcm(`${item?.ref || ""} - ${corBruta}`, item?.ref) || corBruta;
   const coresCandidatas = [...new Set([corExtraida, corBruta].filter(Boolean))];
 
   const corBate = (row) =>
     coresCandidatas.some((cor) => coresGcmCompativeis(cor, row.cor));
 
-  if (nova) {
+  if (refNova) {
     const rowNova = lista.find(
-      (r) => normalizeKey(r.ref) === normalizeKey(nova) && corBate(r)
+      (r) => normalizeKey(r.ref) === normalizeKey(refNova) && corBate(r)
     );
     if (rowNova) return rowNova;
+  }
+
+  if (refAntiga) {
+    const rowAntiga = lista.find(
+      (r) => normalizeKey(r.ref) === normalizeKey(refAntiga) && corBate(r)
+    );
+    if (rowAntiga) return rowAntiga;
   }
 
   return (
@@ -478,16 +508,22 @@ function parseGcmRawText(rawText) {
   lines.forEach((line) => {
     const texto = line.toUpperCase();
 
-    // cabeçalho produto
+    // cabeçalho produto (padrão antigo ADULTO/COURINO ou Rock Star)
     if (
       texto.includes("-") &&
-      (texto.includes("ADULTO") || texto.includes("COURINO") || texto.includes("INFANTIL"))
+      (texto.includes("ADULTO") ||
+        texto.includes("COURINO") ||
+        texto.includes("INFANTIL") ||
+        texto.includes("ROCK STAR") ||
+        texto.includes("CANO ALTO") ||
+        texto.includes("CANO CURTO"))
     ) {
       finalizar();
 
+      const refLinha = texto.split("-")[0].trim();
       atual = {
-        ref: texto.split("-")[0].trim(),
-        cor: extrairCorGcm(texto),
+        ref: refLinha,
+        cor: extrairCorGcm(texto, refLinha),
         data: Object.fromEntries(sizes.map((s) => [s, 0])),
         dataEst: Object.fromEntries(sizes.map((s) => [s, 0])),
         total: 0,
@@ -3343,8 +3379,10 @@ function parseGcmSheet(sheet) {
     if (partes.length < 2) continue;
 
     const ref = toText(partes[0]).toUpperCase();
-    // Só o nome da cor (ex.: AZUL BB), não "CANO ALTO ADULTO AZUL BB"
-    const cor = extrairCorGcm(linha1[0]) || toText(partes.slice(1).join("-")).toUpperCase();
+    // Só o nome da cor (ex.: AZUL BB), conforme padrão da ref
+    const cor =
+      extrairCorGcm(linha1[0], ref) ||
+      toText(partes.slice(1).join("-")).toUpperCase();
 
     // tamanhos ficam na mesma linha a partir da coluna 2
     const tamanhos = linha1
@@ -3393,14 +3431,31 @@ function parseGcmSheet(sheet) {
   try {
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: "array" });
-    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rawText = XLSX.utils.sheet_to_txt(firstSheet);
-    const parsed = parseGcmSheet(firstSheet);
+    const sheetNames = workbook.SheetNames || [];
+    const parsed = [];
+    const textParts = [];
 
-    setImportText(rawText);
+    sheetNames.forEach((name) => {
+      const sheet = workbook.Sheets[name];
+      if (!sheet) return;
+      textParts.push(`=== ${name} ===\n${XLSX.utils.sheet_to_txt(sheet)}`);
+      parsed.push(...parseGcmSheet(sheet));
+    });
+
+    // Se a mesma ref/cor aparecer em abas diferentes, fica a última.
+    const dedup = new Map();
+    parsed.forEach((item) => {
+      const key = `${normalizeKey(item.ref)}__${normalizeKey(item.cor)}`;
+      dedup.set(key, item);
+    });
+    const parsedFinal = [...dedup.values()];
+
+    setImportText(textParts.join("\n\n"));
     setImportFileName(file.name);
-    setImportPreview(parsed);
-    setImportFeedback(`Arquivo carregado com ${parsed.length} bloco(s) do GCM.`);
+    setImportPreview(parsedFinal);
+    setImportFeedback(
+      `Arquivo carregado com ${parsedFinal.length} bloco(s) do GCM em ${sheetNames.length} aba(s).`
+    );
   } catch (err) {
     console.log("ERRO AO LER GCM:", err);
     setImportFeedback("Não consegui ler esse arquivo.");
