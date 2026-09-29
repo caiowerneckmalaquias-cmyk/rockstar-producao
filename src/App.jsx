@@ -5071,8 +5071,8 @@ const salvarVendasManuais = async () => {
                 <span>
                   <span className="font-semibold">Só cores cadastradas</span>
                   <span className="block text-slate-500 mt-0.5">
-                    Atualiza apenas ref/cor já cadastradas (Nova referência). Cores novas do arquivo são ignoradas.
-                    Refs antigas do mapa (ex.: BTCV010) atualizam a nova correspondente (RCCA010) se estiver cadastrada.
+                    Só aplica se a cor existir no cadastro (na ref do arquivo ou na par do mapa de migração).
+                    Grava sempre na ref do arquivo: BTCV010 atualiza BTCV010; RCCA010 atualiza ou cria RCCA010.
                   </span>
                 </span>
               </label>
