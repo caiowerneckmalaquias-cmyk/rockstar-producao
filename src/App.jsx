@@ -394,6 +394,111 @@ function encontrarLinhaCadastradaParaGcm(item, rowsList) {
   );
 }
 
+/**
+ * Destino da aplicação GCM: sempre a ref do arquivo.
+ * Com filtro, a cor precisa existir na família (nova ou antiga); se só a antiga
+ * estiver cadastrada, cria a linha da ref do arquivo com essa cor.
+ */
+function resolverDestinoImportacaoGcm(item, rowsList, soCadastradas) {
+  const lista = Array.isArray(rowsList) ? rowsList : [];
+  const refDestino = String(item?.ref || "").trim();
+  const corArquivo = String(item?.cor || "").trim();
+
+  if (!soCadastradas) {
+    const exata = lista.find(
+      (r) =>
+        normalizeKey(r.ref) === normalizeKey(refDestino) &&
+        normalizeKey(r.cor) === normalizeKey(corArquivo)
+    );
+    if (exata) {
+      return {
+        podeAplicar: true,
+        cria: false,
+        rowExistente: exata,
+        refDestino: exata.ref,
+        corDestino: exata.cor,
+        matchFamilia: null,
+      };
+    }
+    const candidatos = lista.filter(
+      (r) => normalizeKey(r.ref) === normalizeKey(refDestino)
+    );
+    const porCor =
+      candidatos.length === 1
+        ? candidatos[0]
+        : candidatos.find(
+            (r) =>
+              normalizeKey(r.cor).includes(normalizeKey(corArquivo)) ||
+              normalizeKey(corArquivo).includes(normalizeKey(r.cor))
+          );
+    if (porCor) {
+      return {
+        podeAplicar: true,
+        cria: false,
+        rowExistente: porCor,
+        refDestino: porCor.ref,
+        corDestino: porCor.cor,
+        matchFamilia: null,
+      };
+    }
+    return {
+      podeAplicar: true,
+      cria: true,
+      rowExistente: null,
+      refDestino,
+      corDestino: corArquivo,
+      matchFamilia: null,
+    };
+  }
+
+  const matchFamilia = encontrarLinhaCadastradaParaGcm(item, lista);
+  if (!matchFamilia) {
+    return {
+      podeAplicar: false,
+      cria: false,
+      rowExistente: null,
+      refDestino,
+      corDestino: corArquivo,
+      matchFamilia: null,
+    };
+  }
+
+  const corDestino = String(matchFamilia.cor || corArquivo).trim();
+  const rowNaRefArquivo = lista.find(
+    (r) =>
+      normalizeKey(r.ref) === normalizeKey(refDestino) &&
+      coresGcmCompativeis(corDestino, r.cor)
+  );
+
+  if (rowNaRefArquivo) {
+    return {
+      podeAplicar: true,
+      cria: false,
+      rowExistente: rowNaRefArquivo,
+      refDestino: rowNaRefArquivo.ref,
+      corDestino: rowNaRefArquivo.cor,
+      matchFamilia,
+    };
+  }
+
+  return {
+    podeAplicar: true,
+    cria: true,
+    rowExistente: null,
+    refDestino,
+    corDestino,
+    matchFamilia,
+  };
+}
+
+/** OVERLOQUE presente no bloco — só então o apply altera EST. */
+function itemGcmTemOverloque(item) {
+  if (item?.temOverloque === true) return true;
+  if (item?.temOverloque === false) return false;
+  if (item?.dataEst == null) return false;
+  return sizes.some((s) => (Number(item.dataEst?.[s]) || 0) > 0);
+}
+
 function statusFor(item, minimo) {
   const prod = item.est + item.m + item.p;
   if (item.pa < minimo.pa && prod < minimo.prod) return "CRÍTICO";
@@ -528,6 +633,7 @@ function parseGcmRawText(rawText) {
         dataEst: Object.fromEntries(sizes.map((s) => [s, 0])),
         total: 0,
         totalEst: 0,
+        temOverloque: false,
       };
 
       return;
@@ -538,6 +644,7 @@ function parseGcmRawText(rawText) {
     // linha OVERLOQUE = Costura Pronta (EST)
     if (texto.includes("OVERLOQUE")) {
       const numeros = extrairNumeros(texto);
+      atual.temOverloque = true;
       tamanhos.forEach((size, idx) => {
         atual.dataEst[size] = Math.max(0, Number(numeros[idx]) || 0);
       });
@@ -4009,22 +4116,22 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
 
     const soCadastradas = !!importSoCoresCadastradas;
 
-    /** Pares GCM → linha cadastrada (quando filtro ligado); dedupe por row. */
-    const matchesCadastrados = new Map();
-    if (soCadastradas) {
-      parsed.forEach((item) => {
-        const row = encontrarLinhaCadastradaParaGcm(item, rows);
-        if (!row) return;
-        const key = `${normalizeKey(row.ref)}__${normalizeKey(row.cor)}`;
-        matchesCadastrados.set(key, { item, row });
-      });
-    }
+    /** Destinos por ref+cor do arquivo (dedupe: último bloco ganha). */
+    const destinosPorKey = new Map();
+    parsed.forEach((item) => {
+      const destino = resolverDestinoImportacaoGcm(item, rows, soCadastradas);
+      if (!destino.podeAplicar) return;
+      const key = `${normalizeKey(destino.refDestino)}__${normalizeKey(destino.corDestino)}`;
+      destinosPorKey.set(key, { item, destino });
+    });
 
     const ignoradosCount = soCadastradas
-      ? parsed.filter((item) => !encontrarLinhaCadastradaParaGcm(item, rows)).length
+      ? parsed.filter(
+          (item) => !resolverDestinoImportacaoGcm(item, rows, true).podeAplicar
+        ).length
       : 0;
 
-    if (soCadastradas && matchesCadastrados.size === 0) {
+    if (soCadastradas && destinosPorKey.size === 0) {
       setImportFeedback(
         `Nenhuma cor do arquivo bate com as cores cadastradas. ${parsed.length} item(ns) ignorado(s). Cadastre as cores em Nova referência.`
       );
@@ -4032,53 +4139,17 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
       return;
     }
 
-    const parsedByKey = new Map(
-      parsed.map((item) => [
-        `${normalizeKey(item.ref)}__${normalizeKey(item.cor)}`,
-        item,
-      ])
-    );
-
-    const parsedByRef = parsed.reduce((acc, item) => {
-      const key = normalizeKey(item.ref);
-      if (!acc[key]) acc[key] = [];
-      acc[key].push(item);
-      return acc;
-    }, {});
-
-    const encontrarLinhaEstoqueAtual = (item) => {
-      if (soCadastradas) {
-        return encontrarLinhaCadastradaParaGcm(item, rows);
-      }
-      const exata = rows.find(
-        (r) =>
-          normalizeKey(r.ref) === normalizeKey(item.ref) &&
-          normalizeKey(r.cor) === normalizeKey(item.cor)
-      );
-      if (exata) return exata;
-      const candidatos = rows.filter((r) => normalizeKey(r.ref) === normalizeKey(item.ref));
-      if (candidatos.length === 1) return candidatos[0];
-      return candidatos.find(
-        (r) =>
-          normalizeKey(r.cor).includes(normalizeKey(item.cor)) ||
-          normalizeKey(item.cor).includes(normalizeKey(r.cor))
-      );
-    };
-
-    /** GCM altera PA (ESTOQUE) e EST (OVERLOQUE); M e P mantêm-se. */
+    /** GCM altera PA (ESTOQUE) e EST (OVERLOQUE); M e P mantêm-se. Destino = ref do arquivo. */
     const estoqueParaSalvar = [];
-    const itensParaAplicar = soCadastradas
-      ? [...matchesCadastrados.values()].map(({ item, row }) => ({ item, row }))
-      : parsed.map((item) => ({ item, row: encontrarLinhaEstoqueAtual(item) }));
+    const itensParaAplicar = [...destinosPorKey.values()];
 
-    itensParaAplicar.forEach(({ item, row }) => {
-      const refDestino = row?.ref || item.ref;
-      const corDestino = row?.cor || item.cor;
-      const temOverloque = item.dataEst != null;
+    itensParaAplicar.forEach(({ item, destino }) => {
+      const { refDestino, corDestino, rowExistente } = destino;
+      const temOverloque = itemGcmTemOverloque(item);
       sizes.forEach((numero) => {
         const qtdPa = Math.max(0, Number(item.data?.[numero]) || 0);
         const qtdEst = Math.max(0, Number(item.dataEst?.[numero]) || 0);
-        const cell = row?.data?.[numero] || { pa: 0, est: 0, m: 0, p: 0 };
+        const cell = rowExistente?.data?.[numero] || { pa: 0, est: 0, m: 0, p: 0 };
         const novoPa =
           importMode === "sum"
             ? (Number(cell.pa) || 0) + qtdPa
@@ -4110,54 +4181,35 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
       });
     });
 
-    const produtosParaSalvar = soCadastradas
-      ? [...matchesCadastrados.values()].map(({ row }) => ({
-          ref: row.ref,
-          cor: row.cor,
-        }))
-      : parsed.map((item) => ({
-          ref: item.ref,
-          cor: item.cor,
-        }));
+    const produtosParaSalvar = itensParaAplicar.map(({ destino }) => ({
+      ref: destino.refDestino,
+      cor: destino.corDestino,
+    }));
 
     let atualizados = 0;
-    const usados = new Set();
+    const usadosDestino = new Set();
 
     setRows((current) => {
+      const itemPorDestino = new Map(
+        itensParaAplicar.map(({ item, destino }) => [
+          `${normalizeKey(destino.refDestino)}__${normalizeKey(destino.corDestino)}`,
+          { item, destino },
+        ])
+      );
+
       const nextRows = current.map((row) => {
-        let found = null;
-
-        if (soCadastradas) {
-          const key = `${normalizeKey(row.ref)}__${normalizeKey(row.cor)}`;
-          found = matchesCadastrados.get(key)?.item || null;
-        } else {
-          const exactKey = `${normalizeKey(row.ref)}__${normalizeKey(row.cor)}`;
-          found = parsedByKey.get(exactKey);
-
-          if (!found) {
-            const candidates = parsedByRef[normalizeKey(row.ref)] || [];
-            if (candidates.length === 1) {
-              found = candidates[0];
-            } else {
-              found = candidates.find(
-                (item) =>
-                  normalizeKey(item.cor).includes(normalizeKey(row.cor)) ||
-                  normalizeKey(row.cor).includes(normalizeKey(item.cor))
-              );
-            }
-          }
-        }
-
+        const key = `${normalizeKey(row.ref)}__${normalizeKey(row.cor)}`;
+        const found = itemPorDestino.get(key);
         if (!found) return row;
 
-        usados.add(`${normalizeKey(found.ref)}__${normalizeKey(found.cor)}`);
+        usadosDestino.add(key);
         atualizados += 1;
 
-        const temOverloque = found.dataEst != null;
+        const temOverloque = itemGcmTemOverloque(found.item);
         const nextData = { ...row.data };
         sizes.forEach((size) => {
-          const qtdPa = Math.max(0, Number(found.data?.[size]) || 0);
-          const qtdEst = Math.max(0, Number(found.dataEst?.[size]) || 0);
+          const qtdPa = Math.max(0, Number(found.item.data?.[size]) || 0);
+          const qtdEst = Math.max(0, Number(found.item.dataEst?.[size]) || 0);
           nextData[size] = {
             ...nextData[size],
             pa:
@@ -4175,41 +4227,43 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
         return { ...row, data: nextData };
       });
 
-      if (soCadastradas) {
-        return nextRows;
-      }
-
-      const novos = parsed.filter(
-        (item) => !usados.has(`${normalizeKey(item.ref)}__${normalizeKey(item.cor)}`)
+      const novos = itensParaAplicar.filter(
+        ({ destino }) =>
+          !usadosDestino.has(
+            `${normalizeKey(destino.refDestino)}__${normalizeKey(destino.corDestino)}`
+          )
       );
 
-      const novosRows = novos.map((item) => ({
-        ref: item.ref,
-        cor: item.cor,
-        data: Object.fromEntries(
-          sizes.map((size) => [
-            size,
-            {
-              pa: Math.max(0, Number(item.data?.[size]) || 0),
-              est: Math.max(0, Number(item.dataEst?.[size]) || 0),
-              m: 0,
-              p: 0,
-            },
-          ])
-        ),
-      }));
+      const novosRows = novos.map(({ item, destino }) => {
+        const temOverloque = itemGcmTemOverloque(item);
+        return {
+          ref: destino.refDestino,
+          cor: destino.corDestino,
+          data: Object.fromEntries(
+            sizes.map((size) => [
+              size,
+              {
+                pa: Math.max(0, Number(item.data?.[size]) || 0),
+                est: temOverloque
+                  ? Math.max(0, Number(item.dataEst?.[size]) || 0)
+                  : 0,
+                m: 0,
+                p: 0,
+              },
+            ])
+          ),
+        };
+      });
 
       if (novosRows.length) atualizados += novosRows.length;
 
       return [...nextRows, ...novosRows];
     });
 
-    const alvosMinVendas = soCadastradas
-      ? [...matchesCadastrados.values()].map(({ row }) => ({
-          ref: row.ref,
-          cor: row.cor,
-        }))
-      : parsed.map((item) => ({ ref: item.ref, cor: item.cor }));
+    const alvosMinVendas = itensParaAplicar.map(({ destino }) => ({
+      ref: destino.refDestino,
+      cor: destino.corDestino,
+    }));
 
     setMinimos((curr) => {
       const next = { ...curr };
@@ -4235,9 +4289,8 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
       return next;
     });
 
-    const itensAplicadosFeedback = soCadastradas
-      ? [...matchesCadastrados.values()].map(({ item }) => item)
-      : parsed;
+    const itensAplicadosFeedback = itensParaAplicar.map(({ item }) => item);
+    const criadosCount = itensParaAplicar.filter(({ destino }) => destino.cria).length;
     const totalPaAplicado = itensAplicadosFeedback.reduce(
       (acc, item) => acc + (Number(item.total) || 0),
       0
@@ -4248,7 +4301,7 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
     );
 
     const feedback = soCadastradas
-      ? `${matchesCadastrados.size} cor(es) cadastrada(s) atualizada(s) (PA ${totalPaAplicado} · EST/Overloque ${totalEstAplicado}). ${ignoradosCount} ignorada(s).`
+      ? `${destinosPorKey.size} cor(es) na ref do arquivo (PA ${totalPaAplicado} · EST/Overloque ${totalEstAplicado})${criadosCount ? ` · ${criadosCount} criada(s)` : ""}. ${ignoradosCount} ignorada(s).`
       : `${atualizados} item(ns) atualizado(s) (PA ${totalPaAplicado} · EST/Overloque ${totalEstAplicado}).`;
 
     setImportFeedback(feedback);
@@ -4258,7 +4311,8 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
       modo: importMode,
       soCoresCadastradas: soCadastradas,
       itens: parsed.length,
-      atualizados: soCadastradas ? matchesCadastrados.size : atualizados,
+      atualizados: destinosPorKey.size,
+      criados: criadosCount,
       ignorados: ignoradosCount,
       totalPares: totalPaAplicado,
       totalEst: totalEstAplicado,
@@ -4958,12 +5012,16 @@ const salvarVendasManuais = async () => {
   };
 
   const renderImport = () => {
-    const previewAtualiza = importSoCoresCadastradas
-      ? importPreview.filter((item) => !!encontrarLinhaCadastradaParaGcm(item, rows))
-      : importPreview;
-    const previewIgnora = importSoCoresCadastradas
-      ? importPreview.filter((item) => !encontrarLinhaCadastradaParaGcm(item, rows))
-      : [];
+    const previewDestinos = importPreview.map((item) => ({
+      item,
+      destino: resolverDestinoImportacaoGcm(item, rows, !!importSoCoresCadastradas),
+    }));
+    const previewAtualiza = previewDestinos
+      .filter(({ destino }) => destino.podeAplicar)
+      .map(({ item }) => item);
+    const previewIgnora = previewDestinos
+      .filter(({ destino }) => !destino.podeAplicar)
+      .map(({ item }) => item);
 
     return (
     <PageShell
@@ -5013,8 +5071,8 @@ const salvarVendasManuais = async () => {
                 <span>
                   <span className="font-semibold">Só cores cadastradas</span>
                   <span className="block text-slate-500 mt-0.5">
-                    Atualiza apenas ref/cor já cadastradas (Nova referência). Cores novas do arquivo são ignoradas.
-                    Refs antigas do mapa (ex.: BTCV010) atualizam a nova correspondente (RCCA010) se estiver cadastrada.
+                    Só aplica se a cor existir no cadastro (na ref do arquivo ou na par do mapa de migração).
+                    Grava sempre na ref do arquivo: BTCV010 atualiza BTCV010; RCCA010 atualiza ou cria RCCA010.
                   </span>
                 </span>
               </label>
@@ -5115,11 +5173,8 @@ const salvarVendasManuais = async () => {
             </div>
           ) : (
             <div className="mt-4 space-y-4 max-h-[640px] overflow-auto pr-1">
-              {importPreview.map((item, idx) => {
-                const rowCadastro = importSoCoresCadastradas
-                  ? encontrarLinhaCadastradaParaGcm(item, rows)
-                  : null;
-                const ignorada = importSoCoresCadastradas && !rowCadastro;
+              {previewDestinos.map(({ item, destino }, idx) => {
+                const ignorada = !destino.podeAplicar;
                 return (
                 <div
                   key={`${item.ref}-${item.cor}-${idx}`}
@@ -5133,17 +5188,18 @@ const salvarVendasManuais = async () => {
                     <div>
                       <div className="font-semibold text-slate-900">{item.ref}</div>
                       <div className="text-sm text-slate-500 mt-1">{item.cor}</div>
-                      {importSoCoresCadastradas ? (
-                        <div className={`text-xs font-semibold mt-1 ${ignorada ? "text-amber-800" : "text-emerald-700"}`}>
-                          {ignorada
-                            ? "Ignorada — cor não cadastrada"
-                            : rowCadastro &&
-                              (normalizeKey(rowCadastro.ref) !== normalizeKey(item.ref) ||
-                                normalizeKey(rowCadastro.cor) !== normalizeKey(item.cor))
-                              ? `Atualiza cadastro: ${rowCadastro.ref} • ${rowCadastro.cor}`
-                              : "Atualiza cor cadastrada"}
-                        </div>
-                      ) : null}
+                      <div className={`text-xs font-semibold mt-1 ${ignorada ? "text-amber-800" : destino.cria ? "text-sky-700" : "text-emerald-700"}`}>
+                        {ignorada
+                          ? "Ignorada — cor não cadastrada"
+                          : destino.cria
+                            ? `Cria na Costura Pronta: ${destino.refDestino} • ${destino.corDestino}${
+                                destino.matchFamilia &&
+                                normalizeKey(destino.matchFamilia.ref) !== normalizeKey(destino.refDestino)
+                                  ? ` (cor de ${destino.matchFamilia.ref})`
+                                  : ""
+                              }`
+                            : `Atualiza: ${destino.refDestino} • ${destino.corDestino}`}
+                      </div>
                     </div>
                     <div className="text-right space-y-1">
                       <div className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-xs font-semibold">
