@@ -1742,6 +1742,10 @@ const [zerarEstSenha, setZerarEstSenha] = useState("");
 const [zerarEstConfirmacao, setZerarEstConfirmacao] = useState("");
 const [zerarEstErro, setZerarEstErro] = useState("");
 const [zerarEstBusy, setZerarEstBusy] = useState(false);
+const [novaRefModalOpen, setNovaRefModalOpen] = useState(false);
+const [novaRefForm, setNovaRefForm] = useState({ ref: "", cores: "", aplicarMinimos: true });
+const [novaRefErro, setNovaRefErro] = useState("");
+const [novaRefBusy, setNovaRefBusy] = useState(false);
 const [draftMinimos, setDraftMinimos] = useState({});
 const [dirtyMinimos, setDirtyMinimos] = useState(false);
 const [capacidadePespontoDia, setCapacidadePespontoDia] = useState(396);
@@ -4453,7 +4457,19 @@ const salvarVendasManuais = async () => {
       .slice(0, 6);
 
     return (
-    <PageShell title="Controle Geral" subtitle="Visão consolidada por referência, cor e numeração com foco em decisão rápida.">
+    <PageShell
+      title="Controle Geral"
+      subtitle="Visão consolidada por referência, cor e numeração com foco em decisão rápida."
+      action={
+        <button
+          type="button"
+          onClick={abrirModalNovaReferencia}
+          className="rounded-2xl bg-[#8B1E2D] text-white px-4 py-3 text-sm font-semibold shadow-sm hover:bg-[#6F1421]"
+        >
+          Nova referência
+        </button>
+      }
+    >
       <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
         <SummaryCard title="Itens críticos" value={metrics.criticos} subtitle="Ação imediata" />
         <SummaryCard title="Atenção PA" value={metrics.atencaoPA} subtitle="PA abaixo do mínimo" />
@@ -4602,9 +4618,18 @@ const salvarVendasManuais = async () => {
       title="Importar GCM"
       subtitle="Importe o arquivo do GCM para atualizar o Produto Acabado (PA)."
       action={
-        <button onClick={applyImport} className="rounded-2xl bg-slate-950 text-white px-4 py-3 text-sm font-semibold shadow-sm">
-          Aplicar importação
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={abrirModalNovaReferencia}
+            className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold shadow-sm hover:bg-slate-50"
+          >
+            Nova referência
+          </button>
+          <button onClick={applyImport} className="rounded-2xl bg-slate-950 text-white px-4 py-3 text-sm font-semibold shadow-sm">
+            Aplicar importação
+          </button>
+        </div>
       }
     >
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_340px] gap-6">
@@ -5441,6 +5466,201 @@ const salvarVendasManuais = async () => {
     ]);
     fecharModalZerarEst();
     alert(`Costura pronta zerada. ${totalAntes.toLocaleString("pt-BR")} par(es) removidos do EST. PA, Pesponto e Montagem não foram alterados.`);
+  };
+
+  const abrirModalNovaReferencia = () => {
+    setNovaRefForm({ ref: "", cores: "", aplicarMinimos: true });
+    setNovaRefErro("");
+    setNovaRefBusy(false);
+    setNovaRefModalOpen(true);
+  };
+
+  const fecharModalNovaReferencia = () => {
+    if (novaRefBusy) return;
+    setNovaRefModalOpen(false);
+    setNovaRefForm({ ref: "", cores: "", aplicarMinimos: true });
+    setNovaRefErro("");
+    setNovaRefBusy(false);
+  };
+
+  const parseCoresNovaReferencia = (texto) => {
+    const seen = new Set();
+    const cores = [];
+    String(texto || "")
+      .split(/\r?\n/)
+      .forEach((linha) => {
+        const cor = String(linha || "").trim().toUpperCase();
+        if (!cor) return;
+        const key = normalizeKey(cor);
+        if (seen.has(key)) return;
+        seen.add(key);
+        cores.push(cor);
+      });
+    return cores;
+  };
+
+  const criarNovaReferencia = async () => {
+    if (novaRefBusy) return;
+
+    const ref = String(novaRefForm.ref || "").trim().toUpperCase();
+    const cores = parseCoresNovaReferencia(novaRefForm.cores);
+
+    if (!ref) {
+      setNovaRefErro("Informe a referência.");
+      return;
+    }
+    if (!cores.length) {
+      setNovaRefErro("Informe ao menos uma cor (uma por linha).");
+      return;
+    }
+
+    const existentes = [];
+    const novasCores = [];
+    cores.forEach((cor) => {
+      const jaExiste = rows.some(
+        (row) =>
+          normalizeKey(row.ref) === normalizeKey(ref) &&
+          normalizeKey(row.cor) === normalizeKey(cor)
+      );
+      if (jaExiste) existentes.push(cor);
+      else novasCores.push(cor);
+    });
+
+    if (!novasCores.length) {
+      setNovaRefErro(
+        `Todas as cores já existem para ${ref}: ${existentes.join(", ")}.`
+      );
+      return;
+    }
+
+    setNovaRefErro(
+      existentes.length
+        ? `Já existem (serão puladas): ${existentes.join(", ")}. Criando as demais…`
+        : ""
+    );
+    setNovaRefBusy(true);
+
+    const novosRows = novasCores.map((cor) => ({
+      ref,
+      cor,
+      data: Object.fromEntries(
+        sizes.map((size) => [size, { pa: 0, est: 0, m: 0, p: 0 }])
+      ),
+    }));
+
+    const produtos = novasCores.map((cor) => ({ ref, cor }));
+    const estoque = novosRows.flatMap((row) =>
+      sizes.map((numero) => ({
+        ref: row.ref,
+        cor: row.cor,
+        numero,
+        pa: 0,
+        est: 0,
+        m: 0,
+        p: 0,
+      }))
+    );
+
+    const minimosNovos = {};
+    if (novaRefForm.aplicarMinimos) {
+      minimosNovos[ref] = {};
+      novasCores.forEach((cor) => {
+        minimosNovos[ref][cor] = Object.fromEntries(
+          sizes.map((size) => [size, { pa: size <= 39 ? 12 : 8, prod: 24 }])
+        );
+      });
+    }
+
+    const vendasNovas = { [ref]: {} };
+    novasCores.forEach((cor) => {
+      vendasNovas[ref][cor] = Object.fromEntries(sizes.map((size) => [size, 0]));
+    });
+
+    const { error: erroProdutos } = await salvarProdutosNoBanco(produtos);
+    if (erroProdutos) {
+      setNovaRefErro(
+        `Erro ao salvar produtos: ${erroProdutos.message || erroProdutos}.`
+      );
+      setNovaRefBusy(false);
+      return;
+    }
+
+    const { error: erroEstoque } = await salvarEstoqueNoBanco(estoque);
+    if (erroEstoque) {
+      setNovaRefErro(
+        `Erro ao salvar estoque: ${erroEstoque.message || erroEstoque}.`
+      );
+      setNovaRefBusy(false);
+      return;
+    }
+
+    if (novaRefForm.aplicarMinimos) {
+      const { error: erroMinimos } = await salvarMinimosNoBanco(minimosNovos);
+      if (erroMinimos) {
+        setNovaRefErro(
+          `Erro ao salvar mínimos: ${erroMinimos.message || erroMinimos}.`
+        );
+        setNovaRefBusy(false);
+        return;
+      }
+    }
+
+    const { error: erroVendas } = await salvarVendasNoBanco(vendasNovas);
+    if (erroVendas) {
+      setNovaRefErro(
+        `Erro ao salvar vendas: ${erroVendas.message || erroVendas}.`
+      );
+      setNovaRefBusy(false);
+      return;
+    }
+
+    setRows((curr) => [...curr, ...novosRows]);
+    if (novaRefForm.aplicarMinimos) {
+      setMinimos((curr) => {
+        const next = { ...curr };
+        if (!next[ref]) next[ref] = {};
+        novasCores.forEach((cor) => {
+          next[ref][cor] = minimosNovos[ref][cor];
+        });
+        return next;
+      });
+      setDraftMinimos((curr) => {
+        const next = { ...curr };
+        if (!next[ref]) next[ref] = {};
+        novasCores.forEach((cor) => {
+          if (!next[ref][cor]) next[ref][cor] = minimosNovos[ref][cor];
+        });
+        return next;
+      });
+    }
+    setVendas((curr) => {
+      const next = { ...curr };
+      if (!next[ref]) next[ref] = {};
+      novasCores.forEach((cor) => {
+        next[ref][cor] = vendasNovas[ref][cor];
+      });
+      return next;
+    });
+    setVendasDraft((curr) => {
+      const next = { ...curr };
+      if (!next[ref]) next[ref] = {};
+      novasCores.forEach((cor) => {
+        if (!next[ref][cor]) next[ref][cor] = vendasNovas[ref][cor];
+      });
+      return next;
+    });
+
+    setNovaRefBusy(false);
+    setNovaRefModalOpen(false);
+    setNovaRefForm({ ref: "", cores: "", aplicarMinimos: true });
+    setNovaRefErro("");
+
+    const puladasMsg = existentes.length
+      ? ` (${existentes.length} cor(es) já existentes puladas)`
+      : "";
+    alert(
+      `Referência ${ref} cadastrada com ${novasCores.length} cor(es)${puladasMsg}. Estoque zerado nas numerações 34–44.`
+    );
   };
 
   const renderCosturaPronta = () => {
@@ -8344,6 +8564,114 @@ const salvarVendasManuais = async () => {
           </div>
         </div>
       )}
+
+      {novaRefModalOpen && (() => {
+        const refPreview = String(novaRefForm.ref || "").trim().toUpperCase();
+        const coresPreview = parseCoresNovaReferencia(novaRefForm.cores);
+        const existentesPreview = coresPreview.filter((cor) =>
+          rows.some(
+            (row) =>
+              normalizeKey(row.ref) === normalizeKey(refPreview) &&
+              normalizeKey(row.cor) === normalizeKey(cor)
+          )
+        );
+        const novasPreview = coresPreview.filter(
+          (cor) => !existentesPreview.includes(cor)
+        );
+
+        return (
+          <div className="fixed inset-0 z-[65] flex items-center justify-center bg-slate-950/50 p-4">
+            <div className="w-full max-w-lg max-h-[min(92dvh,900px)] overflow-y-auto rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6">
+              <div className="text-lg font-bold text-slate-900">Nova referência</div>
+              <p className="text-sm text-slate-600 mt-2 leading-relaxed">
+                Cadastre uma referência com uma ou mais cores. O estoque (PA, EST, M, P) fica zerado em todas as numerações 34–44.
+              </p>
+
+              <div className="mt-4 space-y-3">
+                <label className="text-sm font-medium text-slate-700 block">
+                  Referência
+                  <input
+                    type="text"
+                    value={novaRefForm.ref}
+                    onChange={(e) =>
+                      setNovaRefForm((curr) => ({ ...curr, ref: e.target.value }))
+                    }
+                    className="mt-1.5 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm uppercase"
+                    placeholder="Ex.: 1234"
+                    autoComplete="off"
+                    disabled={novaRefBusy}
+                  />
+                </label>
+
+                <label className="text-sm font-medium text-slate-700 block">
+                  Cores (uma por linha)
+                  <textarea
+                    value={novaRefForm.cores}
+                    onChange={(e) =>
+                      setNovaRefForm((curr) => ({ ...curr, cores: e.target.value }))
+                    }
+                    className="mt-1.5 w-full h-36 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm uppercase outline-none"
+                    placeholder={"PRETO\nBRANCO\nMARROM"}
+                    disabled={novaRefBusy}
+                  />
+                </label>
+
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={novaRefForm.aplicarMinimos}
+                    onChange={(e) =>
+                      setNovaRefForm((curr) => ({
+                        ...curr,
+                        aplicarMinimos: e.target.checked,
+                      }))
+                    }
+                    disabled={novaRefBusy}
+                  />
+                  Aplicar mínimos padrão (PA 12 até 39 / PA 8 do 40+; produção 24)
+                </label>
+              </div>
+
+              {refPreview && coresPreview.length > 0 ? (
+                <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                  Serão criadas{" "}
+                  <span className="font-semibold">{novasPreview.length}</span> combinação(ões)
+                  ref/cor com todas as numerações 34 a 44 zeradas
+                  {existentesPreview.length > 0
+                    ? ` (${existentesPreview.length} já existente(s) serão puladas: ${existentesPreview.join(", ")})`
+                    : ""}
+                  .
+                </div>
+              ) : null}
+
+              {novaRefErro ? (
+                <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
+                  {novaRefErro}
+                </div>
+              ) : null}
+
+              <div className="mt-6 flex gap-3 justify-end">
+                <button
+                  type="button"
+                  onClick={fecharModalNovaReferencia}
+                  disabled={novaRefBusy}
+                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold bg-white disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={criarNovaReferencia}
+                  disabled={novaRefBusy}
+                  className="rounded-2xl bg-[#8B1E2D] text-white px-4 py-3 text-sm font-semibold hover:bg-[#6F1421] disabled:opacity-50"
+                >
+                  {novaRefBusy ? "Salvando…" : "Cadastrar"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {confirmMov && (() => {
         const gradeItems = sizes
