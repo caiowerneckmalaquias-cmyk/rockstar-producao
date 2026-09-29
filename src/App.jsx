@@ -342,12 +342,21 @@ function coresGcmCompativeis(corGcm, corCadastro) {
   const b = normalizeKey(corCadastro);
   if (!a || !b) return false;
   if (a === b) return true;
-  // "CANO ALTO ADULTO AZUL BB" vs "AZUL BB"
-  if (a.endsWith(` ${b}`) || b.endsWith(` ${a}`) || a.endsWith(b) || b.endsWith(a)) {
-    return true;
-  }
-  if (a.includes(b) || b.includes(a)) return true;
+  // Sufixo só com cabeçalho descritivo (ADULTO/CANO ALTO…), nunca "borboleta bege"↔"bege"
+  // nem "xadrez verde/preto"↔"preto".
+  const temDescricaoProduto = (s) =>
+    /\b(adulto|courino|infantil|cano alto|rock star|tenis)\b/.test(s);
+  if (a.endsWith(` ${b}`) && temDescricaoProduto(a)) return true;
+  if (b.endsWith(` ${a}`) && temDescricaoProduto(b)) return true;
   return false;
+}
+
+/** Cor do bloco GCM já normalizada (extração Rock Star / padrão antigo). */
+function corArquivoDoItemGcm(item) {
+  const corBruta = String(item?.cor || "").trim();
+  return (
+    extrairCorGcm(`${item?.ref || ""} - ${corBruta}`, item?.ref) || corBruta
+  );
 }
 
 /**
@@ -402,7 +411,7 @@ function encontrarLinhaCadastradaParaGcm(item, rowsList) {
 function resolverDestinoImportacaoGcm(item, rowsList, soCadastradas) {
   const lista = Array.isArray(rowsList) ? rowsList : [];
   const refDestino = String(item?.ref || "").trim();
-  const corArquivo = String(item?.cor || "").trim();
+  const corArquivo = corArquivoDoItemGcm(item);
 
   if (!soCadastradas) {
     const exata = lista.find(
@@ -426,11 +435,7 @@ function resolverDestinoImportacaoGcm(item, rowsList, soCadastradas) {
     const porCor =
       candidatos.length === 1
         ? candidatos[0]
-        : candidatos.find(
-            (r) =>
-              normalizeKey(r.cor).includes(normalizeKey(corArquivo)) ||
-              normalizeKey(corArquivo).includes(normalizeKey(r.cor))
-          );
+        : candidatos.find((r) => coresGcmCompativeis(corArquivo, r.cor));
     if (porCor) {
       return {
         podeAplicar: true,
@@ -451,6 +456,7 @@ function resolverDestinoImportacaoGcm(item, rowsList, soCadastradas) {
     };
   }
 
+  // Filtro: cor precisa existir na família; destino = ref do arquivo + cor do bloco.
   const matchFamilia = encontrarLinhaCadastradaParaGcm(item, lista);
   if (!matchFamilia) {
     return {
@@ -463,11 +469,10 @@ function resolverDestinoImportacaoGcm(item, rowsList, soCadastradas) {
     };
   }
 
-  const corDestino = String(matchFamilia.cor || corArquivo).trim();
   const rowNaRefArquivo = lista.find(
     (r) =>
       normalizeKey(r.ref) === normalizeKey(refDestino) &&
-      coresGcmCompativeis(corDestino, r.cor)
+      coresGcmCompativeis(corArquivo, r.cor)
   );
 
   if (rowNaRefArquivo) {
@@ -481,12 +486,13 @@ function resolverDestinoImportacaoGcm(item, rowsList, soCadastradas) {
     };
   }
 
+  // Cria na ref do arquivo com a cor do GCM (não reutiliza nome de outra cor da família).
   return {
     podeAplicar: true,
     cria: true,
     rowExistente: null,
     refDestino,
-    corDestino,
+    corDestino: corArquivo,
     matchFamilia,
   };
 }
