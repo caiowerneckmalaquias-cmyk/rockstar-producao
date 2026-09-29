@@ -3462,14 +3462,19 @@ function parseGcmSheet(sheet) {
   const toText = (v) => String(v ?? "").trim();
   const upper = (v) => toText(v).toUpperCase();
 
-  const lerQuantidadesPorTamanho = (linhaVals, tamanhosLinha) => {
-    const quantidades = linhaVals
-      .slice(1)
-      .map((v) => Number(v))
-      .map((n) => (Number.isFinite(n) ? Math.max(0, n) : 0));
+  /**
+   * Quantidades na mesma coluna do tamanho no cabeçalho.
+   * COURINO deixa colunas vazias entre numeracoes — nao indexar em sequencia filtrada.
+   */
+  const lerQuantidadesPorColuna = (linhaCabecalho, linhaQtd) => {
     const data = Object.fromEntries(sizes.map((s) => [s, 0]));
-    tamanhosLinha.forEach((size, idx) => {
-      data[size] = Math.max(0, Number(quantidades[idx]) || 0);
+    const cab = (linhaCabecalho || []).slice(1);
+    const qtd = (linhaQtd || []).slice(1);
+    cab.forEach((cell, idx) => {
+      const size = Number(cell);
+      if (!sizes.includes(size)) return;
+      const n = Number(qtd[idx]);
+      data[size] = Number.isFinite(n) ? Math.max(0, n) : 0;
     });
     return data;
   };
@@ -3497,13 +3502,12 @@ function parseGcmSheet(sheet) {
       extrairCorGcm(linha1[0], ref) ||
       toText(partes.slice(1).join("-")).toUpperCase();
 
-    // tamanhos ficam na mesma linha a partir da coluna 2
-    const tamanhos = linha1
+    // tamanhos na mesma linha a partir da coluna 2 (podem haver colunas vazias)
+    const temTamanho = linha1
       .slice(1)
-      .map((v) => Number(v))
-      .filter((n) => sizes.includes(n));
+      .some((v) => sizes.includes(Number(v)));
 
-    if (!tamanhos.length) continue;
+    if (!temTamanho) continue;
 
     // próxima linha tem que começar com ESTOQUE
     const prox = Array.isArray(rowsSheet[i + 1]) ? rowsSheet[i + 1] : [];
@@ -3511,14 +3515,14 @@ function parseGcmSheet(sheet) {
 
     if (!upper(linha2[0]).startsWith("ESTOQUE")) continue;
 
-    const data = lerQuantidadesPorTamanho(linha2, tamanhos);
+    const data = lerQuantidadesPorColuna(linha1, linha2);
 
     // linha seguinte (se houver) OVERLOQUE = Costura Pronta (EST)
     const prox2 = Array.isArray(rowsSheet[i + 2]) ? rowsSheet[i + 2] : [];
     const linha3 = prox2.map(toText);
     const temOverloque = upper(linha3[0]).startsWith("OVERLOQUE");
     const dataEst = temOverloque
-      ? lerQuantidadesPorTamanho(linha3, tamanhos)
+      ? lerQuantidadesPorColuna(linha1, linha3)
       : Object.fromEntries(sizes.map((s) => [s, 0]));
 
     const total = sizes.reduce((acc, s) => acc + (data[s] || 0), 0);
