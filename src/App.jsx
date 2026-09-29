@@ -484,7 +484,7 @@ function parseGcmRawText(rawText) {
     if (texto.includes("OVERLOQUE")) {
       const numeros = extrairNumeros(texto);
       tamanhos.forEach((size, idx) => {
-        atual.dataEst[size] = numeros[idx] || 0;
+        atual.dataEst[size] = Math.max(0, Number(numeros[idx]) || 0);
       });
       return;
     }
@@ -500,7 +500,7 @@ function parseGcmRawText(rawText) {
       const numeros = extrairNumeros(texto);
 
       tamanhos.forEach((size, idx) => {
-        atual.data[size] = numeros[idx] || 0;
+        atual.data[size] = Math.max(0, Number(numeros[idx]) || 0);
       });
 
       return;
@@ -3298,10 +3298,10 @@ function parseGcmSheet(sheet) {
     const quantidades = linhaVals
       .slice(1)
       .map((v) => Number(v))
-      .map((n) => (Number.isFinite(n) ? n : 0));
+      .map((n) => (Number.isFinite(n) ? Math.max(0, n) : 0));
     const data = Object.fromEntries(sizes.map((s) => [s, 0]));
     tamanhosLinha.forEach((size, idx) => {
-      data[size] = quantidades[idx] || 0;
+      data[size] = Math.max(0, Number(quantidades[idx]) || 0);
     });
     return data;
   };
@@ -4001,8 +4001,8 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
       const corDestino = row?.cor || item.cor;
       const temOverloque = item.dataEst != null;
       sizes.forEach((numero) => {
-        const qtdPa = Number(item.data?.[numero] || 0);
-        const qtdEst = Number(item.dataEst?.[numero] || 0);
+        const qtdPa = Math.max(0, Number(item.data?.[numero]) || 0);
+        const qtdEst = Math.max(0, Number(item.dataEst?.[numero]) || 0);
         const cell = row?.data?.[numero] || { pa: 0, est: 0, m: 0, p: 0 };
         const novoPa =
           importMode === "sum"
@@ -4081,8 +4081,8 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
         const temOverloque = found.dataEst != null;
         const nextData = { ...row.data };
         sizes.forEach((size) => {
-          const qtdPa = Number(found.data?.[size] || 0);
-          const qtdEst = Number(found.dataEst?.[size] || 0);
+          const qtdPa = Math.max(0, Number(found.data?.[size]) || 0);
+          const qtdEst = Math.max(0, Number(found.dataEst?.[size]) || 0);
           nextData[size] = {
             ...nextData[size],
             pa:
@@ -4115,8 +4115,8 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
           sizes.map((size) => [
             size,
             {
-              pa: Number(item.data?.[size] || 0),
-              est: Number(item.dataEst?.[size] || 0),
+              pa: Math.max(0, Number(item.data?.[size]) || 0),
+              est: Math.max(0, Number(item.dataEst?.[size]) || 0),
               m: 0,
               p: 0,
             },
