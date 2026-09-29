@@ -300,6 +300,32 @@ const normalizeKey = (value) =>
     .trim()
     .toUpperCase();
 
+/**
+ * Casa item do GCM com uma linha já cadastrada (ref+cor normalizados).
+ * Se o GCM trouxer a ref antiga do mapa e existir a nova com a mesma cor, prioriza a nova.
+ */
+function encontrarLinhaCadastradaParaGcm(item, rowsList) {
+  const lista = Array.isArray(rowsList) ? rowsList : [];
+  const itemCor = normalizeKey(item?.cor);
+  const codigo = String(item?.ref || "").trim().toUpperCase();
+  const nova = REF_MIGRACAO[codigo];
+
+  if (nova) {
+    const rowNova = lista.find(
+      (r) => normalizeKey(r.ref) === normalizeKey(nova) && normalizeKey(r.cor) === itemCor
+    );
+    if (rowNova) return rowNova;
+  }
+
+  return (
+    lista.find(
+      (r) =>
+        normalizeKey(r.ref) === normalizeKey(item?.ref) &&
+        normalizeKey(r.cor) === itemCor
+    ) || null
+  );
+}
+
 function statusFor(item, minimo) {
   const prod = item.est + item.m + item.p;
   if (item.pa < minimo.pa && prod < minimo.prod) return "CRÍTICO";
@@ -1839,6 +1865,7 @@ const [montagemLancamentos, setMontagemLancamentos] = useState([]);
 const [previewFicha, setPreviewFicha] = useState(null);
 const [confirmImport, setConfirmImport] = useState(false);
 const [importMode, setImportMode] = useState("replace");
+const [importSoCoresCadastradas, setImportSoCoresCadastradas] = useState(true);
 const [movError, setMovError] = useState({ Pesponto: "", Montagem: "" });
 const [confirmMov, setConfirmMov] = useState(null);
 const [editingMov, setEditingMov] = useState(null);
@@ -3879,10 +3906,30 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
       return;
     }
 
-    const produtosParaSalvar = parsed.map((item) => ({
-      ref: item.ref,
-      cor: item.cor,
-    }));
+    const soCadastradas = !!importSoCoresCadastradas;
+
+    /** Pares GCM → linha cadastrada (quando filtro ligado); dedupe por row. */
+    const matchesCadastrados = new Map();
+    if (soCadastradas) {
+      parsed.forEach((item) => {
+        const row = encontrarLinhaCadastradaParaGcm(item, rows);
+        if (!row) return;
+        const key = `${normalizeKey(row.ref)}__${normalizeKey(row.cor)}`;
+        matchesCadastrados.set(key, { item, row });
+      });
+    }
+
+    const ignoradosCount = soCadastradas
+      ? parsed.filter((item) => !encontrarLinhaCadastradaParaGcm(item, rows)).length
+      : 0;
+
+    if (soCadastradas && matchesCadastrados.size === 0) {
+      setImportFeedback(
+        `Nenhuma cor do arquivo bate com as cores cadastradas. ${parsed.length} item(ns) ignorado(s). Cadastre as cores em Nova referência.`
+      );
+      setConfirmImport(false);
+      return;
+    }
 
     const parsedByKey = new Map(
       parsed.map((item) => [
@@ -3899,6 +3946,9 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
     }, {});
 
     const encontrarLinhaEstoqueAtual = (item) => {
+      if (soCadastradas) {
+        return encontrarLinhaCadastradaParaGcm(item, rows);
+      }
       const exata = rows.find(
         (r) =>
           normalizeKey(r.ref) === normalizeKey(item.ref) &&
@@ -3916,19 +3966,24 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
 
     /** GCM só altera PA; costura pronta (est) e fluxo (m, p) mantêm-se do estoque atual. */
     const estoqueParaSalvar = [];
-    parsed.forEach((item) => {
-      const linhaAtual = encontrarLinhaEstoqueAtual(item);
+    const itensParaAplicar = soCadastradas
+      ? [...matchesCadastrados.values()].map(({ item, row }) => ({ item, row }))
+      : parsed.map((item) => ({ item, row: encontrarLinhaEstoqueAtual(item) }));
+
+    itensParaAplicar.forEach(({ item, row }) => {
+      const refDestino = row?.ref || item.ref;
+      const corDestino = row?.cor || item.cor;
       sizes.forEach((numero) => {
         const quantidade = Number(item.data?.[numero] || 0);
         if (quantidade <= 0) return;
-        const cell = linhaAtual?.data?.[numero] || { pa: 0, est: 0, m: 0, p: 0 };
+        const cell = row?.data?.[numero] || { pa: 0, est: 0, m: 0, p: 0 };
         const novoPa =
           importMode === "sum"
             ? (Number(cell.pa) || 0) + quantidade
             : Number(item.data?.[numero] || 0);
         estoqueParaSalvar.push({
-          ref: item.ref,
-          cor: item.cor,
+          ref: refDestino,
+          cor: corDestino,
           numero,
           pa: novoPa,
           est: Number(cell.est) || 0,
@@ -3938,24 +3993,41 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
       });
     });
 
+    const produtosParaSalvar = soCadastradas
+      ? [...matchesCadastrados.values()].map(({ row }) => ({
+          ref: row.ref,
+          cor: row.cor,
+        }))
+      : parsed.map((item) => ({
+          ref: item.ref,
+          cor: item.cor,
+        }));
+
     let atualizados = 0;
     const usados = new Set();
 
     setRows((current) => {
       const nextRows = current.map((row) => {
-        const exactKey = `${normalizeKey(row.ref)}__${normalizeKey(row.cor)}`;
-        let found = parsedByKey.get(exactKey);
+        let found = null;
 
-        if (!found) {
-          const candidates = parsedByRef[normalizeKey(row.ref)] || [];
-          if (candidates.length === 1) {
-            found = candidates[0];
-          } else {
-            found = candidates.find(
-              (item) =>
-                normalizeKey(item.cor).includes(normalizeKey(row.cor)) ||
-                normalizeKey(row.cor).includes(normalizeKey(item.cor))
-            );
+        if (soCadastradas) {
+          const key = `${normalizeKey(row.ref)}__${normalizeKey(row.cor)}`;
+          found = matchesCadastrados.get(key)?.item || null;
+        } else {
+          const exactKey = `${normalizeKey(row.ref)}__${normalizeKey(row.cor)}`;
+          found = parsedByKey.get(exactKey);
+
+          if (!found) {
+            const candidates = parsedByRef[normalizeKey(row.ref)] || [];
+            if (candidates.length === 1) {
+              found = candidates[0];
+            } else {
+              found = candidates.find(
+                (item) =>
+                  normalizeKey(item.cor).includes(normalizeKey(row.cor)) ||
+                  normalizeKey(row.cor).includes(normalizeKey(item.cor))
+              );
+            }
           }
         }
 
@@ -3977,6 +4049,10 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
 
         return { ...row, data: nextData };
       });
+
+      if (soCadastradas) {
+        return nextRows;
+      }
 
       const novos = parsed.filter(
         (item) => !usados.has(`${normalizeKey(item.ref)}__${normalizeKey(item.cor)}`)
@@ -4003,9 +4079,16 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
       return [...nextRows, ...novosRows];
     });
 
+    const alvosMinVendas = soCadastradas
+      ? [...matchesCadastrados.values()].map(({ row }) => ({
+          ref: row.ref,
+          cor: row.cor,
+        }))
+      : parsed.map((item) => ({ ref: item.ref, cor: item.cor }));
+
     setMinimos((curr) => {
       const next = { ...curr };
-      parsed.forEach((item) => {
+      alvosMinVendas.forEach((item) => {
         if (!next[item.ref]) next[item.ref] = {};
         if (!next[item.ref][item.cor]) {
           next[item.ref][item.cor] = Object.fromEntries(
@@ -4018,7 +4101,7 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
 
     setVendas((curr) => {
       const next = { ...curr };
-      parsed.forEach((item) => {
+      alvosMinVendas.forEach((item) => {
         if (!next[item.ref]) next[item.ref] = {};
         if (!next[item.ref][item.cor]) {
           next[item.ref][item.cor] = Object.fromEntries(sizes.map((size) => [size, 0]));
@@ -4027,14 +4110,23 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
       return next;
     });
 
-    setImportFeedback(`${atualizados} item(ns) atualizado(s) no Produto Acabado.`);
+    const feedback = soCadastradas
+      ? `${matchesCadastrados.size} cor(es) cadastrada(s) atualizada(s). ${ignoradosCount} ignorada(s) (não cadastradas).`
+      : `${atualizados} item(ns) atualizado(s) no Produto Acabado.`;
+
+    setImportFeedback(feedback);
     setUltimaImportacaoGcm({
       arquivo: importFileName || "Importação manual",
       dataHora: new Date().toLocaleString("pt-BR"),
       modo: importMode,
+      soCoresCadastradas: soCadastradas,
       itens: parsed.length,
-      atualizados,
-      totalPares: parsed.reduce((acc, item) => acc + (item.total || 0), 0),
+      atualizados: soCadastradas ? matchesCadastrados.size : atualizados,
+      ignorados: ignoradosCount,
+      totalPares: (soCadastradas
+        ? [...matchesCadastrados.values()].map(({ item }) => item)
+        : parsed
+      ).reduce((acc, item) => acc + (item.total || 0), 0),
       preview: parsed.slice(0, 8),
     });
 
@@ -4730,7 +4822,15 @@ const salvarVendasManuais = async () => {
     );
   };
 
-  const renderImport = () => (
+  const renderImport = () => {
+    const previewAtualiza = importSoCoresCadastradas
+      ? importPreview.filter((item) => !!encontrarLinhaCadastradaParaGcm(item, rows))
+      : importPreview;
+    const previewIgnora = importSoCoresCadastradas
+      ? importPreview.filter((item) => !encontrarLinhaCadastradaParaGcm(item, rows))
+      : [];
+
+    return (
     <PageShell
       title="Importar GCM"
       subtitle="Importe o arquivo do GCM para atualizar o Produto Acabado (PA)."
@@ -4768,6 +4868,21 @@ const salvarVendasManuais = async () => {
                   Zerar e importar
                 </label>
               </div>
+              <label className="mt-4 flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={importSoCoresCadastradas}
+                  onChange={(e) => setImportSoCoresCadastradas(e.target.checked)}
+                />
+                <span>
+                  <span className="font-semibold">Só cores cadastradas</span>
+                  <span className="block text-slate-500 mt-0.5">
+                    Atualiza apenas ref/cor já cadastradas (Nova referência). Cores novas do arquivo são ignoradas.
+                    Refs antigas do mapa (ex.: BTCV010) atualizam a nova correspondente (RCCA010) se estiver cadastrada.
+                  </span>
+                </span>
+              </label>
             </div>
 
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -4831,12 +4946,21 @@ const salvarVendasManuais = async () => {
           <div className="flex items-center justify-between gap-4">
             <div>
               <div className="font-semibold">Preview da importação</div>
-              <div className="text-sm text-slate-500 mt-1">{importPreview.length} item(ns) reconhecido(s)</div>
+              <div className="text-sm text-slate-500 mt-1">
+                {importPreview.length} item(ns) no arquivo
+                {importSoCoresCadastradas && importPreview.length > 0
+                  ? ` · atualiza ${previewAtualiza.length} · ignora ${previewIgnora.length}`
+                  : ""}
+              </div>
             </div>
             {importPreview.length > 0 && (
               <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-right">
-                <div className="text-xs text-slate-500">Total PA lido</div>
-                <div className="text-2xl font-bold text-slate-900">{importPreview.reduce((acc, item) => acc + (item.total || 0), 0)}</div>
+                <div className="text-xs text-slate-500">
+                  {importSoCoresCadastradas ? "PA que será aplicado" : "Total PA lido"}
+                </div>
+                <div className="text-2xl font-bold text-slate-900">
+                  {previewAtualiza.reduce((acc, item) => acc + (item.total || 0), 0)}
+                </div>
               </div>
             )}
           </div>
@@ -4847,12 +4971,35 @@ const salvarVendasManuais = async () => {
             </div>
           ) : (
             <div className="mt-4 space-y-4 max-h-[640px] overflow-auto pr-1">
-              {importPreview.map((item, idx) => (
-                <div key={`${item.ref}-${item.cor}-${idx}`} className="rounded-2xl border border-slate-200 overflow-hidden">
-                  <div className="bg-slate-50 border-b border-slate-200 px-4 py-3 flex items-center justify-between gap-4">
+              {importPreview.map((item, idx) => {
+                const rowCadastro = importSoCoresCadastradas
+                  ? encontrarLinhaCadastradaParaGcm(item, rows)
+                  : null;
+                const ignorada = importSoCoresCadastradas && !rowCadastro;
+                return (
+                <div
+                  key={`${item.ref}-${item.cor}-${idx}`}
+                  className={`rounded-2xl border overflow-hidden ${
+                    ignorada ? "border-amber-200 opacity-70" : "border-slate-200"
+                  }`}
+                >
+                  <div className={`border-b px-4 py-3 flex items-center justify-between gap-4 ${
+                    ignorada ? "bg-amber-50 border-amber-200" : "bg-slate-50 border-slate-200"
+                  }`}>
                     <div>
                       <div className="font-semibold text-slate-900">{item.ref}</div>
                       <div className="text-sm text-slate-500 mt-1">{item.cor}</div>
+                      {importSoCoresCadastradas ? (
+                        <div className={`text-xs font-semibold mt-1 ${ignorada ? "text-amber-800" : "text-emerald-700"}`}>
+                          {ignorada
+                            ? "Ignorada — cor não cadastrada"
+                            : rowCadastro &&
+                              (normalizeKey(rowCadastro.ref) !== normalizeKey(item.ref) ||
+                                normalizeKey(rowCadastro.cor) !== normalizeKey(item.cor))
+                              ? `Atualiza cadastro: ${rowCadastro.ref} • ${rowCadastro.cor}`
+                              : "Atualiza cor cadastrada"}
+                        </div>
+                      ) : null}
                     </div>
                     <div className="px-3 py-2 rounded-xl bg-white border border-slate-200 text-sm font-semibold">{item.total || 0} pares</div>
                   </div>
@@ -4867,13 +5014,15 @@ const salvarVendasManuais = async () => {
                     </div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
       </div>
     </PageShell>
-  );
+    );
+  };
 
   const renderMovPage = (title, form, setForm, subtitle) => {
     const MOV_PAGE_SIZE = 15;
@@ -8673,7 +8822,12 @@ const salvarVendasManuais = async () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 max-[1023px]:landscape:items-start max-[1023px]:landscape:py-4">
           <div className="w-full max-w-md max-h-[min(88dvh,800px)] overflow-y-auto rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6">
             <div className="text-lg font-bold">Confirmar importação do GCM</div>
-            <p className="text-sm text-slate-600 mt-3 leading-relaxed">Essa ação vai atualizar o Produto Acabado (PA) com base no arquivo carregado.</p>
+            <p className="text-sm text-slate-600 mt-3 leading-relaxed">
+              Essa ação vai atualizar o Produto Acabado (PA) com base no arquivo carregado.
+              {importSoCoresCadastradas
+                ? " Com “Só cores cadastradas”, cores que não existem no cadastro serão ignoradas."
+                : ""}
+            </p>
             <div className="mt-6 flex gap-3 justify-end">
               <button onClick={() => setConfirmImport(false)} className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold bg-white">Cancelar</button>
               <button onClick={executeImport} className="rounded-2xl bg-slate-950 text-white px-4 py-3 text-sm font-semibold">Confirmar importação</button>
