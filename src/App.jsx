@@ -301,18 +301,57 @@ const normalizeKey = (value) =>
     .toUpperCase();
 
 /**
+ * Extrai só a cor do cabeçalho GCM.
+ * Ex.: "BTCV010 - CANO ALTO ADULTO AZUL BB" → "AZUL BB"
+ */
+function extrairCorGcm(texto) {
+  const raw = String(texto || "").trim();
+  if (!raw) return "";
+  const upper = raw.toUpperCase();
+  const descricao = upper.includes("-")
+    ? upper.split("-").slice(1).join("-").trim()
+    : upper;
+  const palavras = descricao.split(/\s+/).filter(Boolean);
+  // Último marcador (ex.: "COURINO ADULTO MARROM" → MARROM)
+  let idx = -1;
+  palavras.forEach((p, i) => {
+    if (["ADULTO", "COURINO", "INFANTIL"].includes(p)) idx = i;
+  });
+  if (idx === -1) return descricao.trim();
+  return palavras.slice(idx + 1).join(" ").trim();
+}
+
+function coresGcmCompativeis(corGcm, corCadastro) {
+  const a = normalizeKey(corGcm);
+  const b = normalizeKey(corCadastro);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  // "CANO ALTO ADULTO AZUL BB" vs "AZUL BB"
+  if (a.endsWith(` ${b}`) || b.endsWith(` ${a}`) || a.endsWith(b) || b.endsWith(a)) {
+    return true;
+  }
+  if (a.includes(b) || b.includes(a)) return true;
+  return false;
+}
+
+/**
  * Casa item do GCM com uma linha já cadastrada (ref+cor normalizados).
  * Se o GCM trouxer a ref antiga do mapa e existir a nova com a mesma cor, prioriza a nova.
  */
 function encontrarLinhaCadastradaParaGcm(item, rowsList) {
   const lista = Array.isArray(rowsList) ? rowsList : [];
-  const itemCor = normalizeKey(item?.cor);
   const codigo = String(item?.ref || "").trim().toUpperCase();
   const nova = REF_MIGRACAO[codigo];
+  const corBruta = String(item?.cor || "").trim();
+  const corExtraida = extrairCorGcm(`${item?.ref || ""} - ${corBruta}`) || corBruta;
+  const coresCandidatas = [...new Set([corExtraida, corBruta].filter(Boolean))];
+
+  const corBate = (row) =>
+    coresCandidatas.some((cor) => coresGcmCompativeis(cor, row.cor));
 
   if (nova) {
     const rowNova = lista.find(
-      (r) => normalizeKey(r.ref) === normalizeKey(nova) && normalizeKey(r.cor) === itemCor
+      (r) => normalizeKey(r.ref) === normalizeKey(nova) && corBate(r)
     );
     if (rowNova) return rowNova;
   }
@@ -320,8 +359,7 @@ function encontrarLinhaCadastradaParaGcm(item, rowsList) {
   return (
     lista.find(
       (r) =>
-        normalizeKey(r.ref) === normalizeKey(item?.ref) &&
-        normalizeKey(r.cor) === itemCor
+        normalizeKey(r.ref) === normalizeKey(item?.ref) && corBate(r)
     ) || null
   );
 }
@@ -430,25 +468,6 @@ function parseGcmRawText(rawText) {
   const extrairNumeros = (texto) =>
     (texto.match(/\d+/g) || []).map(Number);
 
-  const extrairCor = (texto) => {
-  const partes = texto.split("-");
-
-  // pega a parte principal (onde tem ADULTO / COURINO / INFANTIL)
-  const descricao = partes[1] || "";
-
-  const palavras = descricao.trim().split(" ");
-
-  // encontra onde começa a cor
-  const idx = palavras.findIndex((p) =>
-    ["ADULTO", "COURINO", "INFANTIL"].includes(p)
-  );
-
-  if (idx === -1) return "";
-
-  // tudo depois disso é cor
-  return palavras.slice(idx + 1).join(" ").trim();
-};
-
   const finalizar = () => {
     if (!atual) return;
     atual.total = sizes.reduce((acc, s) => acc + (atual.data[s] || 0), 0);
@@ -468,7 +487,7 @@ function parseGcmRawText(rawText) {
 
       atual = {
         ref: texto.split("-")[0].trim(),
-        cor: extrairCor(texto),
+        cor: extrairCorGcm(texto),
         data: Object.fromEntries(sizes.map((s) => [s, 0])),
         dataEst: Object.fromEntries(sizes.map((s) => [s, 0])),
         total: 0,
@@ -3324,7 +3343,8 @@ function parseGcmSheet(sheet) {
     if (partes.length < 2) continue;
 
     const ref = toText(partes[0]).toUpperCase();
-    const cor = toText(partes.slice(1).join("-")).toUpperCase();
+    // Só o nome da cor (ex.: AZUL BB), não "CANO ALTO ADULTO AZUL BB"
+    const cor = extrairCorGcm(linha1[0]) || toText(partes.slice(1).join("-")).toUpperCase();
 
     // tamanhos ficam na mesma linha a partir da coluna 2
     const tamanhos = linha1
