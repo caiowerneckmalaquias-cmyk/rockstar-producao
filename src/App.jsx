@@ -452,14 +452,12 @@ function parseGcmRawText(rawText) {
   const finalizar = () => {
     if (!atual) return;
     atual.total = sizes.reduce((acc, s) => acc + (atual.data[s] || 0), 0);
+    atual.totalEst = sizes.reduce((acc, s) => acc + (atual.dataEst?.[s] || 0), 0);
     resultado.push(atual);
   };
 
   lines.forEach((line) => {
     const texto = line.toUpperCase();
-
-    // ignora overloque
-    if (texto.includes("OVERLOQUE")) return;
 
     // cabeçalho produto
     if (
@@ -472,7 +470,9 @@ function parseGcmRawText(rawText) {
         ref: texto.split("-")[0].trim(),
         cor: extrairCor(texto),
         data: Object.fromEntries(sizes.map((s) => [s, 0])),
+        dataEst: Object.fromEntries(sizes.map((s) => [s, 0])),
         total: 0,
+        totalEst: 0,
       };
 
       return;
@@ -480,13 +480,22 @@ function parseGcmRawText(rawText) {
 
     if (!atual) return;
 
+    // linha OVERLOQUE = Costura Pronta (EST)
+    if (texto.includes("OVERLOQUE")) {
+      const numeros = extrairNumeros(texto);
+      tamanhos.forEach((size, idx) => {
+        atual.dataEst[size] = numeros[idx] || 0;
+      });
+      return;
+    }
+
     // linha de tamanhos
     if (texto.includes("QTDE")) {
       tamanhos = extrairNumeros(texto).filter((n) => sizes.includes(n));
       return;
     }
 
-    // linha de estoque
+    // linha de estoque = PA
     if (texto.includes("ESTOQUE")) {
       const numeros = extrairNumeros(texto);
 
@@ -3285,6 +3294,18 @@ function parseGcmSheet(sheet) {
   const toText = (v) => String(v ?? "").trim();
   const upper = (v) => toText(v).toUpperCase();
 
+  const lerQuantidadesPorTamanho = (linhaVals, tamanhosLinha) => {
+    const quantidades = linhaVals
+      .slice(1)
+      .map((v) => Number(v))
+      .map((n) => (Number.isFinite(n) ? n : 0));
+    const data = Object.fromEntries(sizes.map((s) => [s, 0]));
+    tamanhosLinha.forEach((size, idx) => {
+      data[size] = quantidades[idx] || 0;
+    });
+    return data;
+  };
+
   for (let i = 0; i < rowsSheet.length; i += 1) {
     const row = Array.isArray(rowsSheet[i]) ? rowsSheet[i] : [];
     const linha1 = row.map(toText);
@@ -3296,7 +3317,8 @@ function parseGcmSheet(sheet) {
     // precisa ser algo tipo "BTCV010 - AZUL BB"
     if (!cabecalho.includes("-")) continue;
     if (cabecalho.startsWith("ESTOQUE")) continue;
-    if (cabecalho.includes("QTDE")) continue;
+    if (cabecalho.startsWith("OVERLOQUE")) continue;
+    if (cabecalho.includes("QTDE") && !cabecalho.includes("-")) continue;
 
     const partes = linha1[0].split("-");
     if (partes.length < 2) continue;
@@ -3318,24 +3340,27 @@ function parseGcmSheet(sheet) {
 
     if (!upper(linha2[0]).startsWith("ESTOQUE")) continue;
 
-    const quantidades = linha2
-      .slice(1)
-      .map((v) => Number(v))
-      .filter((n) => !Number.isNaN(n));
+    const data = lerQuantidadesPorTamanho(linha2, tamanhos);
 
-    const data = Object.fromEntries(sizes.map((s) => [s, 0]));
-
-    tamanhos.forEach((size, idx) => {
-      data[size] = quantidades[idx] || 0;
-    });
+    // linha seguinte (se houver) OVERLOQUE = Costura Pronta (EST)
+    const prox2 = Array.isArray(rowsSheet[i + 2]) ? rowsSheet[i + 2] : [];
+    const linha3 = prox2.map(toText);
+    const temOverloque = upper(linha3[0]).startsWith("OVERLOQUE");
+    const dataEst = temOverloque
+      ? lerQuantidadesPorTamanho(linha3, tamanhos)
+      : Object.fromEntries(sizes.map((s) => [s, 0]));
 
     const total = sizes.reduce((acc, s) => acc + (data[s] || 0), 0);
+    const totalEst = sizes.reduce((acc, s) => acc + (dataEst[s] || 0), 0);
 
     resultado.push({
       ref,
       cor,
       data,
+      dataEst,
       total,
+      totalEst,
+      temOverloque,
     });
   }
 
@@ -3890,6 +3915,7 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
               {
                 ...row.data[size],
                 pa: 0,
+                est: 0,
               },
             ])
           ),
@@ -3964,7 +3990,7 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
       );
     };
 
-    /** GCM só altera PA; costura pronta (est) e fluxo (m, p) mantêm-se do estoque atual. */
+    /** GCM altera PA (ESTOQUE) e EST (OVERLOQUE); M e P mantêm-se. */
     const estoqueParaSalvar = [];
     const itensParaAplicar = soCadastradas
       ? [...matchesCadastrados.values()].map(({ item, row }) => ({ item, row }))
@@ -3973,20 +3999,36 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
     itensParaAplicar.forEach(({ item, row }) => {
       const refDestino = row?.ref || item.ref;
       const corDestino = row?.cor || item.cor;
+      const temOverloque = item.dataEst != null;
       sizes.forEach((numero) => {
-        const quantidade = Number(item.data?.[numero] || 0);
-        if (quantidade <= 0) return;
+        const qtdPa = Number(item.data?.[numero] || 0);
+        const qtdEst = Number(item.dataEst?.[numero] || 0);
         const cell = row?.data?.[numero] || { pa: 0, est: 0, m: 0, p: 0 };
         const novoPa =
           importMode === "sum"
-            ? (Number(cell.pa) || 0) + quantidade
-            : Number(item.data?.[numero] || 0);
+            ? (Number(cell.pa) || 0) + qtdPa
+            : qtdPa;
+        const novoEst = temOverloque
+          ? importMode === "sum"
+            ? (Number(cell.est) || 0) + qtdEst
+            : qtdEst
+          : Number(cell.est) || 0;
+
+        // Persiste tamanhos com PA/EST do arquivo (inclui zeros no replace) ou alteração no sum.
+        if (
+          importMode === "sum" &&
+          qtdPa <= 0 &&
+          (!temOverloque || qtdEst <= 0)
+        ) {
+          return;
+        }
+
         estoqueParaSalvar.push({
           ref: refDestino,
           cor: corDestino,
           numero,
           pa: novoPa,
-          est: Number(cell.est) || 0,
+          est: novoEst,
           m: Number(cell.m) || 0,
           p: Number(cell.p) || 0,
         });
@@ -4036,14 +4078,22 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
         usados.add(`${normalizeKey(found.ref)}__${normalizeKey(found.cor)}`);
         atualizados += 1;
 
+        const temOverloque = found.dataEst != null;
         const nextData = { ...row.data };
         sizes.forEach((size) => {
+          const qtdPa = Number(found.data?.[size] || 0);
+          const qtdEst = Number(found.dataEst?.[size] || 0);
           nextData[size] = {
             ...nextData[size],
             pa:
               importMode === "sum"
-                ? (nextData[size]?.pa || 0) + Number(found.data[size] || 0)
-                : Number(found.data[size] || 0),
+                ? (nextData[size]?.pa || 0) + qtdPa
+                : qtdPa,
+            est: temOverloque
+              ? importMode === "sum"
+                ? (nextData[size]?.est || 0) + qtdEst
+                : qtdEst
+              : Number(nextData[size]?.est) || 0,
           };
         });
 
@@ -4065,8 +4115,8 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
           sizes.map((size) => [
             size,
             {
-              pa: Number(item.data[size] || 0),
-              est: 0,
+              pa: Number(item.data?.[size] || 0),
+              est: Number(item.dataEst?.[size] || 0),
               m: 0,
               p: 0,
             },
@@ -4110,9 +4160,21 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
       return next;
     });
 
+    const itensAplicadosFeedback = soCadastradas
+      ? [...matchesCadastrados.values()].map(({ item }) => item)
+      : parsed;
+    const totalPaAplicado = itensAplicadosFeedback.reduce(
+      (acc, item) => acc + (Number(item.total) || 0),
+      0
+    );
+    const totalEstAplicado = itensAplicadosFeedback.reduce(
+      (acc, item) => acc + (Number(item.totalEst) || 0),
+      0
+    );
+
     const feedback = soCadastradas
-      ? `${matchesCadastrados.size} cor(es) cadastrada(s) atualizada(s). ${ignoradosCount} ignorada(s) (não cadastradas).`
-      : `${atualizados} item(ns) atualizado(s) no Produto Acabado.`;
+      ? `${matchesCadastrados.size} cor(es) cadastrada(s) atualizada(s) (PA ${totalPaAplicado} · EST/Overloque ${totalEstAplicado}). ${ignoradosCount} ignorada(s).`
+      : `${atualizados} item(ns) atualizado(s) (PA ${totalPaAplicado} · EST/Overloque ${totalEstAplicado}).`;
 
     setImportFeedback(feedback);
     setUltimaImportacaoGcm({
@@ -4123,10 +4185,8 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
       itens: parsed.length,
       atualizados: soCadastradas ? matchesCadastrados.size : atualizados,
       ignorados: ignoradosCount,
-      totalPares: (soCadastradas
-        ? [...matchesCadastrados.values()].map(({ item }) => item)
-        : parsed
-      ).reduce((acc, item) => acc + (item.total || 0), 0),
+      totalPares: totalPaAplicado,
+      totalEst: totalEstAplicado,
       preview: parsed.slice(0, 8),
     });
 
@@ -4935,7 +4995,10 @@ const salvarVendasManuais = async () => {
                 </div>
                 <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
                   <div className="text-slate-500">Itens / pares</div>
-                  <div className="font-semibold text-slate-900 mt-1">{ultimaImportacaoGcm.itens} item(ns) • {ultimaImportacaoGcm.totalPares} pares</div>
+                  <div className="font-semibold text-slate-900 mt-1">
+                    {ultimaImportacaoGcm.itens} item(ns) • PA {ultimaImportacaoGcm.totalPares}
+                    {ultimaImportacaoGcm.totalEst != null ? ` · EST ${ultimaImportacaoGcm.totalEst}` : ""}
+                  </div>
                 </div>
               </div>
             )}
@@ -4954,12 +5017,18 @@ const salvarVendasManuais = async () => {
               </div>
             </div>
             {importPreview.length > 0 && (
-              <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-right">
-                <div className="text-xs text-slate-500">
-                  {importSoCoresCadastradas ? "PA que será aplicado" : "Total PA lido"}
+              <div className="flex flex-col gap-2 items-end">
+                <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-right">
+                  <div className="text-xs text-slate-500">PA (Estoque)</div>
+                  <div className="text-2xl font-bold text-slate-900">
+                    {previewAtualiza.reduce((acc, item) => acc + (item.total || 0), 0)}
+                  </div>
                 </div>
-                <div className="text-2xl font-bold text-slate-900">
-                  {previewAtualiza.reduce((acc, item) => acc + (item.total || 0), 0)}
+                <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-right">
+                  <div className="text-xs text-slate-500">EST (Overloque)</div>
+                  <div className="text-2xl font-bold text-slate-900">
+                    {previewAtualiza.reduce((acc, item) => acc + (item.totalEst || 0), 0)}
+                  </div>
                 </div>
               </div>
             )}
@@ -5001,14 +5070,22 @@ const salvarVendasManuais = async () => {
                         </div>
                       ) : null}
                     </div>
-                    <div className="px-3 py-2 rounded-xl bg-white border border-slate-200 text-sm font-semibold">{item.total || 0} pares</div>
+                    <div className="text-right space-y-1">
+                      <div className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-xs font-semibold">
+                        PA {item.total || 0}
+                      </div>
+                      <div className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-xs font-semibold">
+                        EST {item.totalEst || 0}
+                      </div>
+                    </div>
                   </div>
                   <div className="p-4">
                     <div className="grid grid-cols-3 gap-2">
                       {sizes.map((size) => (
                         <div key={size} className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2 text-center">
                           <div className="text-xs text-slate-500">{size}</div>
-                          <div className="text-sm font-bold text-slate-900 mt-1">{item.data[size] || 0}</div>
+                          <div className="text-sm font-bold text-slate-900 mt-1">{item.data?.[size] || 0}</div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">EST {item.dataEst?.[size] || 0}</div>
                         </div>
                       ))}
                     </div>
@@ -8823,7 +8900,7 @@ const salvarVendasManuais = async () => {
           <div className="w-full max-w-md max-h-[min(88dvh,800px)] overflow-y-auto rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6">
             <div className="text-lg font-bold">Confirmar importação do GCM</div>
             <p className="text-sm text-slate-600 mt-3 leading-relaxed">
-              Essa ação vai atualizar o Produto Acabado (PA) com base no arquivo carregado.
+              Essa ação atualiza o PA (linha ESTOQUE) e a Costura Pronta / EST (linha OVERLOQUE) com base no arquivo.
               {importSoCoresCadastradas
                 ? " Com “Só cores cadastradas”, cores que não existem no cadastro serão ignoradas."
                 : ""}
