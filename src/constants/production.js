@@ -95,3 +95,39 @@ export const initialTempoProducao = {
 export const LIMITE_PROGRAMACAO_DIA = 396;
 /** Máximo de pares por numeração (tamanho) em fichas/lançamentos de Pesponto e Montagem. */
 export const LIMITE_PARES_POR_NUMERACAO = 36;
+
+/**
+ * Migração de referência: antiga → nova (mesmo produto / mesma cor).
+ * Montagem prioriza EST da antiga; Pesponto gera só na nova.
+ */
+export const REF_MIGRACAO = {
+  BTCV010: "RCCA010",
+  TNCV010: "RCCB010",
+  CRVTNCV: "RCCOUR01",
+};
+
+export const REF_MIGRACAO_NOVA_PARA_ANTIGA = Object.fromEntries(
+  Object.entries(REF_MIGRACAO).map(([antiga, nova]) => [nova, antiga])
+);
+
+const normalizeRefCodigo = (value) => String(value || "").trim().toUpperCase();
+
+export const ehRefMigracaoAntiga = (ref) =>
+  Object.prototype.hasOwnProperty.call(REF_MIGRACAO, normalizeRefCodigo(ref));
+
+export const ehRefMigracaoNova = (ref) =>
+  Object.prototype.hasOwnProperty.call(REF_MIGRACAO_NOVA_PARA_ANTIGA, normalizeRefCodigo(ref));
+
+export const refNovaDe = (ref) => {
+  const codigo = normalizeRefCodigo(ref);
+  if (REF_MIGRACAO[codigo]) return REF_MIGRACAO[codigo];
+  if (REF_MIGRACAO_NOVA_PARA_ANTIGA[codigo]) return codigo;
+  return null;
+};
+
+export const refAntigaDe = (ref) => {
+  const codigo = normalizeRefCodigo(ref);
+  if (REF_MIGRACAO[codigo]) return codigo;
+  if (REF_MIGRACAO_NOVA_PARA_ANTIGA[codigo]) return REF_MIGRACAO_NOVA_PARA_ANTIGA[codigo];
+  return null;
+};

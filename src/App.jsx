@@ -13,7 +13,13 @@ import {
   initialTempoProducao,
   LIMITE_PROGRAMACAO_DIA,
   LIMITE_PARES_POR_NUMERACAO,
+  REF_MIGRACAO,
+  ehRefMigracaoAntiga,
+  refAntigaDe,
 } from "./constants/production";
+
+/** Boost para fichas de Montagem das refs antigas (gastar EST legado primeiro). */
+const PRIORIDADE_BOOST_REF_ANTIGA = 500000;
 
 const makeEmptyGrid = () => Object.fromEntries(sizes.map((s) => [s, 0]));
 
@@ -471,6 +477,21 @@ function parseGcmRawText(rawText) {
   return resultado;
 }
 
+function lookupTreeByRefCor(tree, ref, cor) {
+  if (!tree || !ref) return null;
+  if (tree[ref]?.[cor] != null) return tree[ref][cor];
+  const rk = normalizeKey(ref);
+  const ck = normalizeKey(cor);
+  for (const r of Object.keys(tree)) {
+    if (normalizeKey(r) !== rk) continue;
+    const corMap = tree[r] || {};
+    for (const c of Object.keys(corMap)) {
+      if (normalizeKey(c) === ck) return corMap[c];
+    }
+  }
+  return null;
+}
+
 function buildSuggestions(rows, minimos, vendas, tempoProducao) {
   const montagem = [];
   const pesponto = [];
@@ -478,8 +499,8 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
   const diasPesponto = Number(tempoProducao?.pesponto) || 0;
   const diasMontagem = Number(tempoProducao?.montagem) || 0;
   const diasTotal = diasPesponto + diasMontagem;
-  
-    const LIMITE_POR_NUMERO = 84;
+
+  const LIMITE_POR_NUMERO = 84;
 
   const roundUp12 = (value) => {
     const numero = Number(value) || 0;
@@ -520,14 +541,114 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
     return estoque / vendaDia;
   };
 
-  rows.forEach((row) => {
-    const mins = minimos?.[row.ref]?.[row.cor] || {};
-    const sales = vendas?.[row.ref]?.[row.cor] || {};
+  const alocarMontPorEst = (montDesejado, estDisponivel, passoMont) => {
+    const desejado = Math.max(0, Number(montDesejado) || 0);
+    const est = Math.max(0, Number(estDisponivel) || 0);
+    if (desejado <= 0 || est <= 0) return 0;
+    if (passoMont > 0) {
+      return Math.floor(Math.min(desejado, est) / passoMont) * passoMont;
+    }
+    return Math.min(desejado, est);
+  };
 
-    const montSizes = makeEmptyGrid();
+  const pushSuggestion = (lista, tipo, row, sizesGrid, total, meta) => {
+    if (!row || total <= 0) return;
+    lista.push({
+      tipo,
+      ref: row.ref,
+      cor: row.cor,
+      sizes: sizesGrid,
+      total,
+      prioridade: meta.prioridade,
+      urgente: meta.urgente,
+      recuperacao: meta.recuperacao,
+      gradeRecuperacao: meta.gradeRecuperacao,
+      tamanhosCriticos: meta.tamanhosCriticos,
+      tamanhosPendentes: meta.tamanhosPendentes,
+      vendaTotal: meta.vendaTotal,
+    });
+  };
+
+  const usedKeys = new Set();
+  const families = [];
+
+  Object.entries(REF_MIGRACAO).forEach(([antiga, nova]) => {
+    const antigaN = normalizeKey(antiga);
+    const novaN = normalizeKey(nova);
+    const cores = new Map();
+
+    (rows || []).forEach((row) => {
+      const r = normalizeKey(row.ref);
+      if (r !== antigaN && r !== novaN) return;
+      const ck = normalizeKey(row.cor);
+      if (!cores.has(ck)) cores.set(ck, row.cor);
+    });
+
+    cores.forEach((corDisplay, corKey) => {
+      const rowAntiga = (rows || []).find(
+        (row) => normalizeKey(row.ref) === antigaN && normalizeKey(row.cor) === corKey
+      );
+      const rowNova = (rows || []).find(
+        (row) => normalizeKey(row.ref) === novaN && normalizeKey(row.cor) === corKey
+      );
+      if (!rowAntiga && !rowNova) return;
+      families.push({
+        migracao: true,
+        antiga,
+        nova,
+        cor: corDisplay,
+        rowAntiga: rowAntiga || null,
+        rowNova: rowNova || null,
+      });
+      if (rowAntiga) usedKeys.add(`${antigaN}__${corKey}`);
+      if (rowNova) usedKeys.add(`${novaN}__${corKey}`);
+    });
+  });
+
+  (rows || []).forEach((row) => {
+    const key = `${normalizeKey(row.ref)}__${normalizeKey(row.cor)}`;
+    if (usedKeys.has(key)) return;
+    families.push({
+      migracao: false,
+      antiga: null,
+      nova: null,
+      cor: row.cor,
+      rowAntiga: null,
+      rowNova: null,
+      rowSolo: row,
+    });
+  });
+
+  families.forEach((familia) => {
+    const membros = familia.migracao
+      ? [familia.rowAntiga, familia.rowNova].filter(Boolean)
+      : [familia.rowSolo].filter(Boolean);
+    if (!membros.length) return;
+
+    const cor = familia.cor;
+    const refAntiga = familia.migracao ? familia.antiga : null;
+    const refNova = familia.migracao ? familia.nova : null;
+
+    const mins =
+      (refAntiga && lookupTreeByRefCor(minimos, refAntiga, cor)) ||
+      (refNova && lookupTreeByRefCor(minimos, refNova, cor)) ||
+      lookupTreeByRefCor(minimos, membros[0].ref, membros[0].cor) ||
+      {};
+
+    const sales =
+      (refAntiga && lookupTreeByRefCor(vendas, refAntiga, cor)) ||
+      (refNova && lookupTreeByRefCor(vendas, refNova, cor)) ||
+      lookupTreeByRefCor(vendas, membros[0].ref, membros[0].cor) ||
+      {};
+
+    const montSizesAntiga = makeEmptyGrid();
+    const montSizesNova = makeEmptyGrid();
+    const montSizesSolo = makeEmptyGrid();
     const pespSizes = makeEmptyGrid();
 
-    let montTotal = 0;
+    let montTotalAntiga = 0;
+    let montTotalNova = 0;
+    let montTotalSolo = 0;
     let pespTotal = 0;
 
     let prioridadeMontagem = 0;
@@ -548,60 +669,77 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
     let vendaTotalRefCor = 0;
 
     sizes.forEach((size) => {
-      const item = row?.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 };
+      const cellAntiga = familia.rowAntiga?.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 };
+      const cellNova = familia.rowNova?.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 };
+      const cellSolo = familia.rowSolo?.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 };
+
+      const pa = familia.migracao
+        ? (Number(cellAntiga.pa) || 0) + (Number(cellNova.pa) || 0)
+        : Number(cellSolo.pa) || 0;
+      const estAntiga = familia.migracao ? Number(cellAntiga.est) || 0 : 0;
+      const estNova = familia.migracao ? Number(cellNova.est) || 0 : 0;
+      const est = familia.migracao
+        ? estAntiga + estNova
+        : Number(cellSolo.est) || 0;
+      const m = familia.migracao
+        ? (Number(cellAntiga.m) || 0) + (Number(cellNova.m) || 0)
+        : Number(cellSolo.m) || 0;
+      const p = familia.migracao
+        ? (Number(cellAntiga.p) || 0) + (Number(cellNova.p) || 0)
+        : Number(cellSolo.p) || 0;
+
       const minimo = mins?.[size] || { pa: 0, prod: 0 };
       const vendaMes = Number(sales?.[size]) || 0;
       const vendaDia = getVendaDia(vendaMes);
 
       vendaTotalRefCor += vendaMes;
 
-      const pa = Number(item?.pa) || 0;
-      const est = Number(item?.est) || 0;
-      const m = Number(item?.m) || 0;
-      const p = Number(item?.p) || 0;
-
       const minPA = Number(minimo?.pa) || 0;
       const minProd = Number(minimo?.prod) || 0;
-
       const prodAtual = est + m + p;
 
-      const itemRelevante =
-        vendaMes > 0 ||
-        minPA > 0 ||
-        minProd > 0;
+      const itemRelevante = vendaMes > 0 || minPA > 0 || minProd > 0;
 
       if (!itemRelevante) {
-        montSizes[size] = 0;
+        if (familia.migracao) {
+          montSizesAntiga[size] = 0;
+          montSizesNova[size] = 0;
+        } else {
+          montSizesSolo[size] = 0;
+        }
         pespSizes[size] = 0;
         return;
       }
 
       const temMinimo = minPA > 0 || minProd > 0;
-
       const consumoDuranteMontagem = Math.ceil(vendaDia * diasMontagem);
       const consumoDuranteCicloTotal = Math.ceil(vendaDia * diasTotal);
-
       const needPA = Math.max(0, minPA + consumoDuranteMontagem - pa);
-
       const needProd = Math.max(0, minProd + consumoDuranteCicloTotal - prodAtual);
 
       let mont = 0;
+      let montAntigaQtd = 0;
+      let montNovaQtd = 0;
       let pesp = 0;
 
       if (temMinimo) {
         const refMont = minPA > 0 ? minPA : minProd > 0 ? minProd : 0;
         const refPesp = minProd > 0 ? minProd : minPA > 0 ? minPA : 0;
-
         const montDesejado = Math.min(sugerirQtdPorMinimo(needPA, refMont), LIMITE_POR_NUMERO);
-
         const passoMont = passoLotePorMinimo(refMont);
-        mont =
-          passoMont > 0
-            ? Math.floor(Math.min(montDesejado, est) / passoMont) * passoMont
-            : Math.min(montDesejado, est);
+
+        if (familia.migracao) {
+          // Migração: consome o EST disponível da antiga e completa com a nova
+          // (sem reaplicar passo de lote na divisão — ex.: 36 com EST 20+20 → 20 e 16).
+          montAntigaQtd = Math.min(montDesejado, estAntiga);
+          const restante = Math.max(0, montDesejado - montAntigaQtd);
+          montNovaQtd = Math.min(restante, estNova);
+          mont = montAntigaQtd + montNovaQtd;
+        } else {
+          mont = alocarMontPorEst(montDesejado, est, passoMont);
+        }
 
         const faltaBrutaMontagem = Math.max(0, montDesejado - mont);
-        // Abate falta com pipeline acima do mínimo de prod; sem min prod, considera P (WIP pesponto).
         const creditoPipeline =
           minProd > 0 ? Math.max(0, prodAtual - minProd) : p;
         const faltaParaMontagem = Math.max(0, faltaBrutaMontagem - creditoPipeline);
@@ -611,15 +749,23 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
           LIMITE_POR_NUMERO
         );
 
-        montSizes[size] = mont;
-        pespSizes[size] = pesp;
-
-        montTotal += mont;
-        pespTotal += pesp;
-      } else {
-        montSizes[size] = 0;
-        pespSizes[size] = 0;
+        // Migração: Pesponto só na ref nova. Sem linha nova, não gera pesponto da antiga.
+        if (familia.migracao && !familia.rowNova) {
+          pesp = 0;
+        }
       }
+
+      if (familia.migracao) {
+        montSizesAntiga[size] = montAntigaQtd;
+        montSizesNova[size] = montNovaQtd;
+        montTotalAntiga += montAntigaQtd;
+        montTotalNova += montNovaQtd;
+      } else {
+        montSizesSolo[size] = mont;
+        montTotalSolo += mont;
+      }
+      pespSizes[size] = pesp;
+      pespTotal += pesp;
 
       const coberturaPA = getCoberturaDias(pa, vendaDia);
       const coberturaFutura = getCoberturaDias(pa + prodAtual, vendaDia);
@@ -673,93 +819,54 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
 
       if (urgenteMontagem) itemUrgenteMontagem = true;
       if (urgentePesponto) itemUrgentePesponto = true;
-
       if (recuperacaoMontagem) itemRecuperacaoMontagem = true;
       if (recuperacaoPesponto) itemRecuperacaoPesponto = true;
 
-      // recuperação por grade
       const tamanhoCriticoMontagem =
         itemRelevante &&
-        (
-          paZero ||
-          paAbaixoMinimo ||
-          coberturaCriticaPA ||
-          coberturaRuimPA
-        );
+        (paZero || paAbaixoMinimo || coberturaCriticaPA || coberturaRuimPA);
 
       const tamanhoPendenteMontagem =
-        tamanhoCriticoMontagem &&
-        (
-          mont <= 0 ||
-          (pa + est) < minPA
-        );
+        tamanhoCriticoMontagem && (mont <= 0 || pa + est < minPA);
 
       const tamanhoCriticoPesponto =
         itemRelevante &&
-        (
-          paZero ||
-          prodAbaixoMinimo ||
-          coberturaFuturaCritica ||
-          coberturaFuturaRuim
-        );
+        (paZero || prodAbaixoMinimo || coberturaFuturaCritica || coberturaFuturaRuim);
 
       const tamanhoPendentePesponto =
-        tamanhoCriticoPesponto &&
-        (
-          pesp <= 0 ||
-          (pa + prodAtual) < minPA
-        );
+        tamanhoCriticoPesponto && (pesp <= 0 || pa + prodAtual < minPA);
 
       if (tamanhoCriticoMontagem) tamanhosCriticosMontagem += 1;
       if (tamanhoPendenteMontagem) tamanhosPendentesMontagem += 1;
-
       if (tamanhoCriticoPesponto) tamanhosCriticosPesponto += 1;
       if (tamanhoPendentePesponto) tamanhosPendentesPesponto += 1;
 
       let scoreMontagem = 0;
       let scorePesponto = 0;
 
-      // 1. Estado crítico
       if (paZero) {
         scoreMontagem += 100000;
         scorePesponto += 100000;
       }
-
       if (coberturaCriticaPA) {
         scoreMontagem += 45000;
         scorePesponto += 38000;
       }
-
       if (paAbaixoMinimo) {
         scoreMontagem += 18000 + Math.max(0, minPA - pa) * 350;
       }
-
       if (coberturaFuturaCritica) {
         scorePesponto += 22000;
       }
+      if (recuperacaoMontagem) scoreMontagem += 35000;
+      if (recuperacaoPesponto) scorePesponto += 32000;
 
-      // 2. Estado de recuperação
-      if (recuperacaoMontagem) {
-        scoreMontagem += 35000;
-      }
-
-      if (recuperacaoPesponto) {
-        scorePesponto += 32000;
-      }
-
-      // 3. Peso de vendas
       scoreMontagem += vendaMes * 45;
       scorePesponto += vendaMes * 45;
-
-      // 4. Necessidade calculada
       scoreMontagem += needPA * 180;
       scorePesponto += needProd * 180;
-
-      // 5. Mínimos como ajuste fino
       scoreMontagem += Math.max(0, minPA - pa) * 100;
       scorePesponto += Math.max(0, minProd - prodAtual) * 100;
-
-      // 6. Reposição em andamento: reduz, mas pouco
       scoreMontagem -= est * 12;
       scorePesponto -= prodAtual * 10;
 
@@ -794,38 +901,46 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
       itemRecuperacaoPesponto = true;
     }
 
-    if (montTotal > 0) {
-      montagem.push({
-        tipo: "Montagem",
-        ref: row.ref,
-        cor: row.cor,
-        sizes: montSizes,
-        total: montTotal,
-        prioridade: prioridadeMontagem,
-        urgente: itemUrgenteMontagem,
-        recuperacao: itemRecuperacaoMontagem,
-        gradeRecuperacao: gradeRecuperacaoMontagem,
-        tamanhosCriticos: tamanhosCriticosMontagem,
-        tamanhosPendentes: tamanhosPendentesMontagem,
-        vendaTotal: vendaTotalRefCor,
-      });
-    }
+    const metaMontagem = {
+      prioridade: prioridadeMontagem,
+      urgente: itemUrgenteMontagem,
+      recuperacao: itemRecuperacaoMontagem,
+      gradeRecuperacao: gradeRecuperacaoMontagem,
+      tamanhosCriticos: tamanhosCriticosMontagem,
+      tamanhosPendentes: tamanhosPendentesMontagem,
+      vendaTotal: vendaTotalRefCor,
+    };
 
-    if (pespTotal > 0) {
-      pesponto.push({
-        tipo: "Pesponto",
-        ref: row.ref,
-        cor: row.cor,
-        sizes: pespSizes,
-        total: pespTotal,
-        prioridade: prioridadePesponto,
-        urgente: itemUrgentePesponto,
-        recuperacao: itemRecuperacaoPesponto,
-        gradeRecuperacao: gradeRecuperacaoPesponto,
-        tamanhosCriticos: tamanhosCriticosPesponto,
-        tamanhosPendentes: tamanhosPendentesPesponto,
-        vendaTotal: vendaTotalRefCor,
+    const metaPesponto = {
+      prioridade: prioridadePesponto,
+      urgente: itemUrgentePesponto,
+      recuperacao: itemRecuperacaoPesponto,
+      gradeRecuperacao: gradeRecuperacaoPesponto,
+      tamanhosCriticos: tamanhosCriticosPesponto,
+      tamanhosPendentes: tamanhosPendentesPesponto,
+      vendaTotal: vendaTotalRefCor,
+    };
+
+    if (familia.migracao) {
+      pushSuggestion(montagem, "Montagem", familia.rowAntiga, montSizesAntiga, montTotalAntiga, {
+        ...metaMontagem,
+        prioridade: prioridadeMontagem + PRIORIDADE_BOOST_REF_ANTIGA,
       });
+      pushSuggestion(montagem, "Montagem", familia.rowNova, montSizesNova, montTotalNova, metaMontagem);
+      // Pesponto somente na referência nova da migração.
+      pushSuggestion(pesponto, "Pesponto", familia.rowNova, pespSizes, pespTotal, metaPesponto);
+    } else {
+      // Refs fora do mapa: comportamento padrão (montagem + pesponto na mesma ref).
+      // Refs antigas sem par novo já entram como família de migração acima.
+      pushSuggestion(montagem, "Montagem", familia.rowSolo, montSizesSolo, montTotalSolo, {
+        ...metaMontagem,
+        prioridade: ehRefMigracaoAntiga(familia.rowSolo?.ref)
+          ? prioridadeMontagem + PRIORIDADE_BOOST_REF_ANTIGA
+          : prioridadeMontagem,
+      });
+      if (!ehRefMigracaoAntiga(familia.rowSolo?.ref)) {
+        pushSuggestion(pesponto, "Pesponto", familia.rowSolo, pespSizes, pespTotal, metaPesponto);
+      }
     }
   });
 
@@ -1385,15 +1500,17 @@ function ProgramacaoDiaFolhaImpressao({
   ];
   const getValorGuPorReferencia = (ref) => {
     const codigo = String(ref || "").trim().toUpperCase();
-    if (codigo === "BTCV010" || codigo === "TNCV010") return 0.4;
-    if (codigo === "CRVTNCV") return 0.3;
+    const legado = refAntigaDe(codigo) || codigo;
+    if (legado === "BTCV010" || legado === "TNCV010") return 0.4;
+    if (legado === "CRVTNCV") return 0.3;
     return Number.NaN;
   };
   const getNomeReferencia = (ref) => {
     const codigo = String(ref || "").trim().toUpperCase();
-    if (codigo === "TNCV010") return "CANO BAIXO";
-    if (codigo === "BTCV010") return "CANO ALTO";
-    if (codigo === "CRVTNCV") return "COURINO";
+    const legado = refAntigaDe(codigo) || codigo;
+    if (legado === "TNCV010") return "CANO BAIXO";
+    if (legado === "BTCV010") return "CANO ALTO";
+    if (legado === "CRVTNCV") return "COURINO";
     return "";
   };
   const formatarMoedaBr = (valor) => {
@@ -1523,7 +1640,7 @@ function ProgramacaoDiaFolhaImpressao({
           const valorParBaseNumero = parseDecimalInput(destinatario ? valoresParTerceiros?.[destinatario.chaveValor] : "");
           const valorParTexto =
             destinatario?.chaveValor === "guPorReferencia"
-              ? "BTCV010/TNCV010: R$ 0,40 · CRVTNCV: R$ 0,30"
+              ? "BTCV/RCCA e TNCV/RCCB: R$ 0,40 · CRVTNCV/RCCOUR01: R$ 0,30"
               : formatarMoedaBr(valorParBaseNumero);
           const totalFichaValor =
             destinatario?.chaveValor === "guPorReferencia"
@@ -7486,7 +7603,7 @@ const salvarVendasManuais = async () => {
               <div className={`lg:col-span-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-3 ${programacaoTipoFolha === "folha2" ? "opacity-60" : ""}`}>
                 <div className="text-sm font-semibold text-slate-800">Valor por par (Folha 1 · Terceirizados)</div>
                 <p className="mt-0.5 text-[11px] text-slate-500">
-                  Weverton e Romulo usam valor fixo. Gu segue regra fixa por referencia: BTCV010/TNCV010 = R$ 0,40 e CRVTNCV = R$ 0,30.
+                  Weverton e Romulo usam valor fixo. Gu segue regra fixa por referencia: BTCV010/RCCA010 e TNCV010/RCCB010 = R$ 0,40; CRVTNCV/RCCOUR01 = R$ 0,30.
                 </p>
                 <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <label className="text-xs font-medium text-slate-700">
