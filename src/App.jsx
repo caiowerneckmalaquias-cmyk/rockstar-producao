@@ -2106,6 +2106,9 @@ const [programacaoFichaSelecao, setProgramacaoFichaSelecao] = useState({});
 const [programacaoPdfBusy, setProgramacaoPdfBusy] = useState(false);
 const programacaoPrintSheetRef = useRef(null);
 const [lancarFichaDaProgramacao, setLancarFichaDaProgramacao] = useState(null);
+/** Modal para lançar várias fichas de um dia com o mesmo nome de programação. */
+const [lancarDiaModal, setLancarDiaModal] = useState(null);
+const [lancarDiaBusy, setLancarDiaBusy] = useState(false);
 /** Chaves de fichas já lançadas (persistido em localStorage). */
 const [fichasProgramacaoLancadas, setFichasProgramacaoLancadas] = useState(readProgFichasLancadasFromStorage);
 /** Plano congelado na Programação do Dia (não muda com estoque até Recalcular ou mudança período/capacidade). */
@@ -2122,6 +2125,23 @@ const addLaunchedProgFichaKey = useCallback((key) => {
   setFichasProgramacaoLancadas((prev) => {
     if (prev.includes(key)) return prev;
     const next = [...prev, key];
+    try {
+      localStorage.setItem(PROG_FICHAS_LANCADAS_STORAGE_KEY, JSON.stringify(next));
+    } catch (_) {
+      /* ignore */
+    }
+    return next;
+  });
+}, []);
+
+const addLaunchedProgFichaKeys = useCallback((keys) => {
+  const lista = (keys || []).filter(Boolean);
+  if (!lista.length) return;
+  setFichasProgramacaoLancadas((prev) => {
+    const next = [...prev];
+    lista.forEach((key) => {
+      if (!next.includes(key)) next.push(key);
+    });
     try {
       localStorage.setItem(PROG_FICHAS_LANCADAS_STORAGE_KEY, JSON.stringify(next));
     } catch (_) {
@@ -3098,6 +3118,179 @@ const persistLaunch = await persistRowsToSupabase(nextRows);
     setLancarFichaDaProgramacao(null);
   };
 
+  /** Lança várias fichas de um dia com o mesmo nome de programação (um único update de estoque). */
+  const executeLancarDiaLote = async (force = false) => {
+    const modal = lancarDiaModal;
+    if (!modal) return;
+
+    const tipo = modal.tipo;
+    const programacaoNome = String(modal.nome || "").trim();
+    const fichasEntrada = Array.isArray(modal.fichas) ? modal.fichas : [];
+
+    if (!programacaoNome) {
+      alert("Informe o nome da programação (ex.: Ficha 210).");
+      return;
+    }
+    if (!fichasEntrada.length) {
+      alert("Nenhuma ficha para lançar neste dia.");
+      return;
+    }
+
+    const source = tipo === "Pesponto" ? pespontoLancamentos : montagemLancamentos;
+    const entradas = [];
+    const avisos = [];
+
+    for (const entry of fichasEntrada) {
+      const ficha = entry?.ficha;
+      const key = entry?.key;
+      if (!ficha) continue;
+      const ref = String(ficha.ref || "").trim();
+      const cor = String(ficha.cor || "").trim();
+      const items = sizes
+        .map((size) => ({ size, qtd: Number(ficha.sizes?.[size]) || 0 }))
+        .filter((x) => x.qtd > 0);
+      if (!items.length) continue;
+
+      const duplicada = source.some(
+        (item) =>
+          String(item.programacao || "").trim().toUpperCase() === programacaoNome.toUpperCase() &&
+          String(item.ref || "").trim() === ref &&
+          String(item.cor || "").trim() === cor
+      );
+      if (duplicada) {
+        alert(
+          `Já existe "${programacaoNome}" para ${ref} • ${cor} em ${tipo}. Use outro nome ou finalize/exclua o lançamento anterior.`
+        );
+        return;
+      }
+
+      const excedemNumeracao = items.filter((item) => item.qtd > LIMITE_PARES_POR_NUMERACAO);
+      const invalidos = items.filter((item) => item.qtd % 12 !== 0);
+      const totalLancamento = items.reduce((acc, item) => acc + item.qtd, 0);
+      if (excedemNumeracao.length) {
+        avisos.push(
+          `${ref} • ${cor}: acima de ${LIMITE_PARES_POR_NUMERACAO}/num. (${excedemNumeracao
+            .map((i) => `${i.size}:${i.qtd}`)
+            .join(", ")})`
+        );
+      }
+      if (invalidos.length) {
+        avisos.push(
+          `${ref} • ${cor}: fora de múltiplo de 12 (${invalidos.map((i) => `${i.size}:${i.qtd}`).join(", ")})`
+        );
+      }
+      if (totalLancamento > 396) {
+        avisos.push(`${ref} • ${cor}: total ${totalLancamento} > 396`);
+      }
+
+      entradas.push({ ficha, key, ref, cor, items, total: totalLancamento });
+    }
+
+    if (!entradas.length) {
+      alert("Nenhuma ficha com grade válida para lançar.");
+      return;
+    }
+
+    if (avisos.length && !force) {
+      setLancarDiaModal((curr) =>
+        curr
+          ? {
+              ...curr,
+              avisos,
+              aguardandoConfirmacao: true,
+            }
+          : curr
+      );
+      return;
+    }
+
+    setLancarDiaBusy(true);
+    try {
+      let nextRows = rows.map((row) => ({
+        ...row,
+        data: cloneRowDataDeep(row),
+      }));
+
+      for (const entrada of entradas) {
+        const rowIdx = nextRows.findIndex(
+          (r) =>
+            String(r.ref || "").trim() === entrada.ref &&
+            String(r.cor || "").trim() === entrada.cor
+        );
+        if (rowIdx < 0) {
+          alert(`Produto não encontrado no estoque: ${entrada.ref} • ${entrada.cor}.`);
+          return;
+        }
+        const row = nextRows[rowIdx];
+        const nextData = { ...row.data };
+        entrada.items.forEach((item) => {
+          const atual = nextData[item.size] || { pa: 0, est: 0, m: 0, p: 0 };
+          if (tipo === "Pesponto") {
+            nextData[item.size] = {
+              ...atual,
+              p: (atual.p || 0) + item.qtd,
+            };
+          } else {
+            nextData[item.size] = {
+              ...atual,
+              est: Math.max(0, (atual.est || 0) - item.qtd),
+              m: (atual.m || 0) + item.qtd,
+            };
+          }
+        });
+        nextRows[rowIdx] = { ...row, data: nextData };
+      }
+
+      const persistLaunch = await persistRowsToSupabase(nextRows);
+      if (!persistLaunch.ok) {
+        alert(
+          `Erro ao salvar estoque no Supabase: ${persistLaunch.error?.message || "tente novamente"}.`
+        );
+        return;
+      }
+
+      setRows(nextRows);
+
+      const ts = Date.now();
+      const payloads = entradas.map((entrada, idx) => ({
+        id: `${tipo}-dia-${ts}-${idx}-${Math.random().toString(36).slice(2, 7)}`,
+        programacao: programacaoNome,
+        ref: entrada.ref,
+        cor: entrada.cor,
+        items: entrada.items,
+        total: entrada.total,
+        status: "Em aberto",
+        dataLancamento: new Date().toLocaleDateString("pt-BR"),
+      }));
+
+      const movsParaSalvar = entradas.flatMap((entrada) =>
+        entrada.items.map((item) => ({
+          tipo,
+          ref: entrada.ref,
+          cor: entrada.cor,
+          numero: item.size,
+          quantidade: item.qtd,
+          programacao: programacaoNome,
+          status: "Em aberto",
+        }))
+      );
+
+      if (tipo === "Pesponto") {
+        setPespontoLancamentos((c) => [...payloads, ...c]);
+      } else {
+        setMontagemLancamentos((c) => [...payloads, ...c]);
+      }
+
+      const movSave = await salvarMovimentacao(movsParaSalvar);
+      if (!movSave?.error) {
+        addLaunchedProgFichaKeys(entradas.map((e) => e.key));
+      }
+      setLancarDiaModal(null);
+    } finally {
+      setLancarDiaBusy(false);
+    }
+  };
+
   const getMovErrorMessage = (tipo, form) => {
     if (tipo !== "Pesponto" && tipo !== "Montagem") return "";
 
@@ -3278,6 +3471,17 @@ const persistLaunch = await persistRowsToSupabase(nextRows);
       programacao,
       titulo: `Finalizar programação em ${tipo}`,
       mensagem: `Deseja realmente finalizar a programação "${programacao}"? Ao confirmar, o estoque será atualizado.`,
+    });
+  };
+
+  const finalizarLancamento = (tipo, lancamento) => {
+    if (!lancamento || String(lancamento.status || "").trim() === "Finalizado") return;
+    setConfirmAction({
+      kind: "finalizarLancamento",
+      tipo,
+      lancamento,
+      titulo: `Finalizar ${lancamento.ref} • ${lancamento.cor}`,
+      mensagem: `Finalizar só esta cor da programação "${lancamento.programacao}"? As outras cores com o mesmo nome continuam em aberto.`,
     });
   };
 
@@ -3479,6 +3683,66 @@ const persistLaunch = await persistRowsToSupabase(nextRows);
     setConfirmAction(null);
   };
 
+  const confirmFinalizarLancamento = async ({ tipo, lancamento }) => {
+    if (!lancamento || String(lancamento.status || "").trim() === "Finalizado") {
+      setConfirmAction(null);
+      return;
+    }
+
+    const computed = computeFinalizacaoNextRows(rows, tipo, [lancamento]);
+    if (computed.error) {
+      alert(computed.error);
+      return;
+    }
+
+    const { nextRows } = computed;
+    const persist = await persistRowsToSupabase(nextRows);
+    if (!persist.ok) {
+      alert(
+        `Não foi possível salvar o estoque no Supabase. A Costura Pronta / PA não será atualizada até o salvamento funcionar.\n\n${persist.error?.message || persist.error || "Erro desconhecido"}`
+      );
+      return;
+    }
+
+    const { error: statusError } = await atualizarStatusMovimentacoesNoBanco(
+      tipo,
+      lancamento.programacao,
+      { ref: lancamento.ref, cor: lancamento.cor }
+    );
+    if (statusError) {
+      const rollback = await persistRowsToSupabase(rows);
+      if (!rollback.ok) {
+        alert(
+          `Estoque pode estar inconsistente: o status não foi atualizado e a reversão falhou. Verifique o Supabase.\n\n${rollback.error?.message || rollback.error}`
+        );
+      } else {
+        alert(
+          `Não foi possível marcar o lançamento como finalizado no banco. O estoque foi mantido como antes.\n\n${statusError.message || statusError}`
+        );
+      }
+      return;
+    }
+
+    const dataFinalizacao = new Date().toLocaleDateString("pt-BR");
+    setRows(nextRows);
+
+    if (tipo === "Pesponto") {
+      setPespontoLancamentos((curr) =>
+        curr.map((l) =>
+          l.id === lancamento.id ? { ...l, status: "Finalizado", dataFinalizacao } : l
+        )
+      );
+    } else {
+      setMontagemLancamentos((curr) =>
+        curr.map((l) =>
+          l.id === lancamento.id ? { ...l, status: "Finalizado", dataFinalizacao } : l
+        )
+      );
+    }
+
+    setConfirmAction(null);
+  };
+
 function parseGcmSheet(sheet) {
   const rowsSheet = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
 
@@ -3671,7 +3935,11 @@ function parseGcmSheet(sheet) {
       if (error) {
         alert("Erro ao salvar movimentação. Veja o console.");
       } else {
-        alert("Movimentação salva no banco.");
+        alert(
+          movsComData.length > 1
+            ? `${movsComData.length} movimentações salvas no banco.`
+            : "Movimentação salva no banco."
+        );
       }
 
       return { data, error };
@@ -3848,9 +4116,9 @@ const salvarVendasNoBanco = async (vendasData) => {
   }
 };
 
-const atualizarStatusMovimentacoesNoBanco = async (tipo, programacao) => {
+const atualizarStatusMovimentacoesNoBanco = async (tipo, programacao, filtros = {}) => {
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from("movimentacoes")
       .update({
         status: "Finalizado",
@@ -3858,8 +4126,12 @@ const atualizarStatusMovimentacoesNoBanco = async (tipo, programacao) => {
       })
       .eq("tipo", tipo)
       .eq("programacao", programacao)
-      .eq("status", "Em aberto")
-      .select();
+      .eq("status", "Em aberto");
+
+    if (filtros?.ref) query = query.eq("ref", filtros.ref);
+    if (filtros?.cor) query = query.eq("cor", filtros.cor);
+
+    const { data, error } = await query.select();
 
     console.log("STATUS MOVIMENTACOES ATUALIZADO:", data);
     console.log("ERRO AO ATUALIZAR STATUS:", error);
@@ -5766,7 +6038,13 @@ const salvarVendasManuais = async () => {
                             </div>
 
                             {item.status !== "Finalizado" && (
-                              <div className="mt-4 flex gap-2">
+                              <div className="mt-4 flex flex-wrap gap-2">
+                                <button
+                                  onClick={() => finalizarLancamento(title, item)}
+                                  className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-emerald-100 text-emerald-700 border border-emerald-200"
+                                >
+                                  Finalizar
+                                </button>
                                 <button
                                   onClick={() => startEditLancamento(title, item)}
                                   className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-[#FCECEE] text-[#8B1E2D] border border-[#E7C7CC]"
@@ -7612,12 +7890,44 @@ const salvarVendasManuais = async () => {
               <div className="space-y-5">
                 {programacao.diasProgramados.map((dia) => (
                   <div key={`${programacao.tipo}-dia-${dia.dia}`} className="rounded-2xl border border-slate-200 overflow-hidden">
-                    <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-4">
+                    <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
                       <div>
                         <div className="font-semibold">Dia {String(dia.dia).padStart(2, "0")}</div>
                         <div className="text-sm text-slate-500 mt-1">{dia.totalProgramado} programados • {dia.restante} livres</div>
                       </div>
-                      <div className="text-sm text-slate-500">{dia.fichas.length} ficha(s)</div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="text-sm text-slate-500">{dia.fichas.length} ficha(s)</div>
+                        <button
+                          type="button"
+                          className="print:hidden px-3 py-1.5 text-xs font-semibold rounded-xl bg-[#0F172A] text-white border border-[#0F172A] hover:bg-slate-800"
+                          onClick={() => {
+                            const candidatas = dia.fichas
+                              .map((ficha, idx) => {
+                                const key = `n-${programacaoSubAba}-${dia.dia}-${idx}-${ficha.nome}`;
+                                return { ficha, key, idx };
+                              })
+                              .filter(({ key }) => !isProgFichaLancada(key));
+                            const selecionadas = candidatas.filter(({ key }) => isFichaSel(key));
+                            const lista = (selecionadas.length ? selecionadas : candidatas).map(
+                              ({ ficha, key }) => ({ ficha, key })
+                            );
+                            if (!lista.length) {
+                              alert("Não há fichas pendentes de lançamento neste dia.");
+                              return;
+                            }
+                            setLancarDiaModal({
+                              tipo: programacao.tipo,
+                              diaNumero: dia.dia,
+                              fichas: lista,
+                              nome: "",
+                              avisos: [],
+                              aguardandoConfirmacao: false,
+                            });
+                          }}
+                        >
+                          Lançar dia
+                        </button>
+                      </div>
                     </div>
 
                     <div className="p-4 space-y-3">
@@ -8964,6 +9274,85 @@ const salvarVendasManuais = async () => {
         </div>
       )}
 
+      {lancarDiaModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4 max-[1023px]:landscape:items-start max-[1023px]:landscape:py-4">
+          <div className="w-full max-w-lg max-h-[min(88dvh,800px)] overflow-y-auto rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6">
+            <div className="text-lg font-bold">
+              Lançar dia {String(lancarDiaModal.diaNumero).padStart(2, "0")} · {lancarDiaModal.tipo}
+            </div>
+            <p className="text-sm text-slate-600 mt-2 leading-relaxed">
+              Todas as fichas abaixo entram com o <span className="font-semibold">mesmo nome</span> de programação
+              (ex.: Ficha 210). Depois você finaliza o grupo inteiro ou só uma cor.
+            </p>
+            <ul className="mt-4 space-y-1.5 text-sm text-slate-700 max-h-40 overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-3">
+              {lancarDiaModal.fichas.map(({ ficha, key }) => (
+                <li key={key} className="flex justify-between gap-2">
+                  <span>
+                    {ficha.ref} • {ficha.cor}
+                  </span>
+                  <span className="font-semibold shrink-0">{ficha.total || 0} pares</span>
+                </li>
+              ))}
+            </ul>
+            <label className="block mt-4 text-sm font-medium text-slate-700">
+              Nome da programação
+              <input
+                type="text"
+                value={lancarDiaModal.nome}
+                onChange={(e) =>
+                  setLancarDiaModal((m) =>
+                    m
+                      ? {
+                          ...m,
+                          nome: e.target.value,
+                          aguardandoConfirmacao: false,
+                          avisos: [],
+                        }
+                      : null
+                  )
+                }
+                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-semibold"
+                placeholder="Ex.: Ficha 210"
+                disabled={lancarDiaBusy}
+              />
+            </label>
+            {lancarDiaModal.aguardandoConfirmacao && lancarDiaModal.avisos?.length ? (
+              <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                <div className="font-semibold">Lançamento fora da regra</div>
+                <ul className="mt-2 list-disc pl-5 space-y-1">
+                  {lancarDiaModal.avisos.map((a) => (
+                    <li key={a}>{a}</li>
+                  ))}
+                </ul>
+                <p className="mt-2">Deseja lançar mesmo assim?</p>
+              </div>
+            ) : null}
+            <div className="mt-6 flex flex-wrap gap-3 justify-end">
+              <button
+                type="button"
+                disabled={lancarDiaBusy}
+                onClick={() => setLancarDiaModal(null)}
+                className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold bg-white disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={lancarDiaBusy}
+                onClick={() => executeLancarDiaLote(!!lancarDiaModal.aguardandoConfirmacao)}
+                className="rounded-2xl bg-[#8B1E2D] text-white px-4 py-3 text-sm font-semibold hover:bg-[#6F1421] disabled:opacity-50"
+              >
+                {lancarDiaBusy
+                  ? "Lançando…"
+                  : lancarDiaModal.aguardandoConfirmacao
+                    ? "Lançar mesmo assim"
+                    : `Lançar ${lancarDiaModal.fichas.length} ficha(s)`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {previewFicha && (() => {
         const rowEstoque = rowsNormalized.find(
           (item) => item.ref === previewFicha.ref && item.cor === previewFicha.cor
@@ -9244,6 +9633,8 @@ const salvarVendasManuais = async () => {
                     confirmZerarMontagemEstoque();
                   } else if (confirmAction.kind === "finalizar") {
                     confirmFinalizarProgramacao(confirmAction);
+                  } else if (confirmAction.kind === "finalizarLancamento") {
+                    confirmFinalizarLancamento(confirmAction);
                   }
                 }}
                 className="rounded-2xl bg-slate-950 text-white px-4 py-3 text-sm font-semibold"
