@@ -1285,7 +1285,7 @@ function buildMovImpressaoPayload(
     }
     return lista;
   };
-  const itensMovFolha1 = buildItensMovComCopias(3);
+  const itensMovFolha1 = buildItensMovComCopias(2);
   const itensMovFolha2 = buildItensMovComCopias(Math.max(1, Math.min(4, Number(programacaoCopiasPorPagina) || 1)));
   const itensMovImpressao =
     programacaoTipoFolha === "folha1"
@@ -1698,14 +1698,13 @@ function ProgramacaoDiaFolhaImpressao({
   const tamanhosGrade = tamanhosFolha.length > 0 ? tamanhosFolha : (Array.isArray(sizesList) ? sizesList : []);
   const destinatariosFolha1 = [
     { nome: "WEVERTON", chaveValor: "weverton", regra: "valor fixo" },
-    { nome: "ROMULO", chaveValor: "romulo", regra: "valor fixo" },
     { nome: "GU", chaveValor: "guPorReferencia", regra: "por referencia" },
   ];
   const getValorGuPorReferencia = (ref) => {
     const codigo = String(ref || "").trim().toUpperCase();
     const legado = refAntigaDe(codigo) || codigo;
-    if (legado === "BTCV010" || legado === "TNCV010") return 0.4;
-    if (legado === "CRVTNCV") return 0.3;
+    if (legado === "BTCV010" || legado === "TNCV010") return 0.6;
+    if (legado === "CRVTNCV") return 0.5;
     return Number.NaN;
   };
   const getNomeReferencia = (ref) => {
@@ -1843,7 +1842,7 @@ function ProgramacaoDiaFolhaImpressao({
           const valorParBaseNumero = parseDecimalInput(destinatario ? valoresParTerceiros?.[destinatario.chaveValor] : "");
           const valorParTexto =
             destinatario?.chaveValor === "guPorReferencia"
-              ? "BTCV/RCCA e TNCV/RCCB: R$ 0,40 · CRVTNCV/RCCOUR01: R$ 0,30"
+              ? "BTCV/RCCA e TNCV/RCCB: R$ 0,60 · CRVTNCV/RCCOUR01: R$ 0,50"
               : formatarMoedaBr(valorParBaseNumero);
           const totalFichaValor =
             destinatario?.chaveValor === "guPorReferencia"
@@ -6618,13 +6617,8 @@ const salvarVendasManuais = async () => {
 
   const salvar = async () => {
   const valorWevertonValido = parseDecimalInput(programacaoValoresTerceiros.weverton);
-  const valorRomuloValido = parseDecimalInput(programacaoValoresTerceiros.romulo);
   if (String(programacaoValoresTerceiros.weverton ?? "").trim() && !Number.isFinite(valorWevertonValido)) {
     alert("Valor de Weverton inválido. Use número com ponto ou vírgula (ex.: 0,70).");
-    return;
-  }
-  if (String(programacaoValoresTerceiros.romulo ?? "").trim() && !Number.isFinite(valorRomuloValido)) {
-    alert("Valor de Romulo inválido. Use número com ponto ou vírgula (ex.: 0,50).");
     return;
   }
   setMinimos(draftMinimos);
@@ -6737,7 +6731,7 @@ const salvarVendasManuais = async () => {
               <div>
                 <div className="font-bold text-lg">Configuração de pagamentos</div>
                 <div className="text-sm text-slate-500 mt-1">
-                  Valores por par usados na Folha 1 (terceirizados). O GU segue regra fixa por referência.
+                  Valores por par usados na Folha 1 (terceirizados). Weverton é valor fixo; o GU segue regra por referência (BTCV/RCCA e TNCV/RCCB = R$ 0,60 · CRVTNCV/RCCOUR01 = R$ 0,50).
                 </div>
               </div>
             </div>
@@ -6750,19 +6744,6 @@ const salvarVendasManuais = async () => {
                   value={programacaoValoresTerceiros.weverton}
                   onChange={(e) => {
                     setProgramacaoValoresTerceiros((curr) => ({ ...curr, weverton: e.target.value }));
-                    setDirtyMinimos(true);
-                  }}
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
-                />
-              </label>
-              <label className="text-sm font-medium text-slate-700">
-                Romulo (valor por par)
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={programacaoValoresTerceiros.romulo}
-                  onChange={(e) => {
-                    setProgramacaoValoresTerceiros((curr) => ({ ...curr, romulo: e.target.value }));
                     setDirtyMinimos(true);
                   }}
                   className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
@@ -7487,7 +7468,7 @@ const salvarVendasManuais = async () => {
       }
       return lista;
     };
-    const itensImpressaoFolha1 = buildItensComCopias(3);
+    const itensImpressaoFolha1 = buildItensComCopias(2);
     const itensImpressaoFolha2 = buildItensComCopias(copiasPorPaginaEfetivo);
     const tituloFolhaImpressao = (String(programacaoEtiquetaFicha || "").trim() || "Programação do Dia");
     const itensImpressaoComCopias =
@@ -7498,14 +7479,14 @@ const salvarVendasManuais = async () => {
           : [...itensImpressaoFolha1, ...itensImpressaoFolha2];
     const copiasResumo =
       programacaoTipoFolha === "folha1"
-        ? "3 (Folha 1)"
+        ? "2 (Folha 1)"
         : programacaoTipoFolha === "folha2"
           ? `${copiasPorPaginaEfetivo} (Folha 2)`
-          : `3 (Folha 1) + ${copiasPorPaginaEfetivo} (Folha 2)`;
-    const blocosPorPaginaEfetivo = programacaoTipoFolha === "folha1" ? 3 : copiasPorPaginaEfetivo;
+          : `2 (Folha 1) + ${copiasPorPaginaEfetivo} (Folha 2)`;
+    const blocosPorPaginaEfetivo = programacaoTipoFolha === "folha1" ? 2 : copiasPorPaginaEfetivo;
     const paginasEstimadas =
       programacaoTipoFolha === "ambas"
-        ? ((itensImpressaoFolha1.length ? Math.ceil(itensImpressaoFolha1.length / 3) : 0) +
+        ? ((itensImpressaoFolha1.length ? Math.ceil(itensImpressaoFolha1.length / 2) : 0) +
           (itensImpressaoFolha2.length ? Math.ceil(itensImpressaoFolha2.length / copiasPorPaginaEfetivo) : 0))
         : (itensImpressaoComCopias.length
           ? Math.ceil(itensImpressaoComCopias.length / blocosPorPaginaEfetivo)
@@ -7986,7 +7967,7 @@ const salvarVendasManuais = async () => {
                   <option value={4}>4 cópias por página</option>
                 </select>
                 {programacaoTipoFolha === "folha1" ? (
-                  <p className="mt-1 text-[11px] text-slate-500">Folha 1 usa 3 cópias fixas.</p>
+                  <p className="mt-1 text-[11px] text-slate-500">Folha 1 usa 2 cópias fixas (Weverton e Gu).</p>
                 ) : null}
               </label>
               <label className="text-sm font-medium text-slate-700 block">
@@ -8017,7 +7998,7 @@ const salvarVendasManuais = async () => {
               <div className={`lg:col-span-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-3 ${programacaoTipoFolha === "folha2" ? "opacity-60" : ""}`}>
                 <div className="text-sm font-semibold text-slate-800">Valor por par (Folha 1 · Terceirizados)</div>
                 <p className="mt-0.5 text-[11px] text-slate-500">
-                  Weverton e Romulo usam valor fixo. Gu segue regra fixa por referencia: BTCV010/RCCA010 e TNCV010/RCCB010 = R$ 0,40; CRVTNCV/RCCOUR01 = R$ 0,30.
+                  Weverton usa valor fixo. Gu segue regra por referência: BTCV010/RCCA010 e TNCV010/RCCB010 = R$ 0,60; CRVTNCV/RCCOUR01 = R$ 0,50. Romulo não recebe mais ficha (serviço interno).
                 </p>
                 <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <label className="text-xs font-medium text-slate-700">
@@ -8029,20 +8010,6 @@ const salvarVendasManuais = async () => {
                       disabled={programacaoTipoFolha === "folha2"}
                       onChange={(e) =>
                         setProgramacaoValoresTerceiros((curr) => ({ ...curr, weverton: e.target.value }))
-                      }
-                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm"
-                      placeholder="0,00"
-                    />
-                  </label>
-                  <label className="text-xs font-medium text-slate-700">
-                    Romulo (fixo)
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={programacaoValoresTerceiros.romulo}
-                      disabled={programacaoTipoFolha === "folha2"}
-                      onChange={(e) =>
-                        setProgramacaoValoresTerceiros((curr) => ({ ...curr, romulo: e.target.value }))
                       }
                       className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm"
                       placeholder="0,00"
@@ -8273,7 +8240,7 @@ const salvarVendasManuais = async () => {
                   observacoes={programacaoObsImpressao}
                   itens={itensImpressaoFolha1}
                   sizesList={sizes}
-                  copiasPorPagina={3}
+                  copiasPorPagina={2}
                   etiquetaFichaCustom={programacaoEtiquetaFicha}
                   cabecalhoFolha={programacaoCabecalhoFolha}
                   valoresParTerceiros={programacaoValoresTerceiros}
@@ -8308,7 +8275,7 @@ const salvarVendasManuais = async () => {
                 observacoes={programacaoObsImpressao}
                 itens={itensImpressaoComCopias}
                 sizesList={sizes}
-                copiasPorPagina={programacaoCopiasPorPagina}
+                copiasPorPagina={programacaoTipoFolha === "folha1" ? 2 : programacaoCopiasPorPagina}
                 etiquetaFichaCustom={programacaoEtiquetaFicha}
                 cabecalhoFolha={programacaoCabecalhoFolha}
                 valoresParTerceiros={programacaoValoresTerceiros}
@@ -9366,7 +9333,7 @@ const salvarVendasManuais = async () => {
                 observacoes={programacaoObsImpressao}
                 itens={pespontoMovPrintPayload.itensMovFolha1}
                 sizesList={sizes}
-                copiasPorPagina={3}
+                copiasPorPagina={2}
                 etiquetaFichaCustom={programacaoEtiquetaFicha}
                 cabecalhoFolha={programacaoCabecalhoFolha}
                 valoresParTerceiros={programacaoValoresTerceiros}
@@ -9401,7 +9368,7 @@ const salvarVendasManuais = async () => {
               observacoes={programacaoObsImpressao}
               itens={pespontoMovPrintPayload.itensMovImpressao}
               sizesList={sizes}
-              copiasPorPagina={programacaoCopiasPorPagina}
+              copiasPorPagina={programacaoTipoFolha === "folha1" ? 2 : programacaoCopiasPorPagina}
               etiquetaFichaCustom={programacaoEtiquetaFicha}
               cabecalhoFolha={programacaoCabecalhoFolha}
               valoresParTerceiros={programacaoValoresTerceiros}
