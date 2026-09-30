@@ -3935,7 +3935,11 @@ function parseGcmSheet(sheet) {
       if (error) {
         alert("Erro ao salvar movimentação. Veja o console.");
       } else {
-        alert("Movimentação salva no banco.");
+        alert(
+          movsComData.length > 1
+            ? `${movsComData.length} movimentações salvas no banco.`
+            : "Movimentação salva no banco."
+        );
       }
 
       return { data, error };
