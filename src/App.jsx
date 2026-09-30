@@ -505,6 +505,13 @@ function itemGcmTemOverloque(item) {
   return sizes.some((s) => (Number(item.dataEst?.[s]) || 0) > 0);
 }
 
+/** Negativo do GCM vira 0 só nesta célula — não trunca o restante da linha. */
+function clampGcmQty(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return 0;
+  return Math.max(0, v);
+}
+
 function statusFor(item, minimo) {
   const prod = item.est + item.m + item.p;
   if (item.pa < minimo.pa && prod < minimo.prod) return "CRÍTICO";
@@ -606,8 +613,9 @@ function parseGcmRawText(rawText) {
   let atual = null;
   let tamanhos = [];
 
+  // Inclui sinal: "-7" vira -7 (depois clampGcmQty → 0), sem descartar o restante.
   const extrairNumeros = (texto) =>
-    (texto.match(/\d+/g) || []).map(Number);
+    (String(texto || "").match(/-?\d+/g) || []).map(Number);
 
   const finalizar = () => {
     if (!atual) return;
@@ -652,7 +660,7 @@ function parseGcmRawText(rawText) {
       const numeros = extrairNumeros(texto);
       atual.temOverloque = true;
       tamanhos.forEach((size, idx) => {
-        atual.dataEst[size] = Math.max(0, Number(numeros[idx]) || 0);
+        atual.dataEst[size] = clampGcmQty(numeros[idx]);
       });
       return;
     }
@@ -668,7 +676,7 @@ function parseGcmRawText(rawText) {
       const numeros = extrairNumeros(texto);
 
       tamanhos.forEach((size, idx) => {
-        atual.data[size] = Math.max(0, Number(numeros[idx]) || 0);
+        atual.data[size] = clampGcmQty(numeros[idx]);
       });
 
       return;
@@ -3762,8 +3770,8 @@ function parseGcmSheet(sheet) {
     cab.forEach((cell, idx) => {
       const size = Number(cell);
       if (!sizes.includes(size)) return;
-      const n = Number(qtd[idx]);
-      data[size] = Number.isFinite(n) ? Math.max(0, n) : 0;
+      // Clamp só desta célula; índice por coluna — não zera o restante da linha.
+      data[size] = clampGcmQty(qtd[idx]);
     });
     return data;
   };
@@ -4454,8 +4462,8 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
       const { refDestino, corDestino, rowExistente } = destino;
       const temOverloque = itemGcmTemOverloque(item);
       sizes.forEach((numero) => {
-        const qtdPa = Math.max(0, Number(item.data?.[numero]) || 0);
-        const qtdEst = Math.max(0, Number(item.dataEst?.[numero]) || 0);
+        const qtdPa = clampGcmQty(item.data?.[numero]);
+        const qtdEst = clampGcmQty(item.dataEst?.[numero]);
         const cell = rowExistente?.data?.[numero] || { pa: 0, est: 0, m: 0, p: 0 };
         const novoPa =
           importMode === "sum"
@@ -4515,8 +4523,8 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
         const temOverloque = itemGcmTemOverloque(found.item);
         const nextData = { ...row.data };
         sizes.forEach((size) => {
-          const qtdPa = Math.max(0, Number(found.item.data?.[size]) || 0);
-          const qtdEst = Math.max(0, Number(found.item.dataEst?.[size]) || 0);
+          const qtdPa = clampGcmQty(found.item.data?.[size]);
+          const qtdEst = clampGcmQty(found.item.dataEst?.[size]);
           nextData[size] = {
             ...nextData[size],
             pa:
@@ -4550,10 +4558,8 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
             sizes.map((size) => [
               size,
               {
-                pa: Math.max(0, Number(item.data?.[size]) || 0),
-                est: temOverloque
-                  ? Math.max(0, Number(item.dataEst?.[size]) || 0)
-                  : 0,
+                pa: clampGcmQty(item.data?.[size]),
+                est: temOverloque ? clampGcmQty(item.dataEst?.[size]) : 0,
                 m: 0,
                 p: 0,
               },
