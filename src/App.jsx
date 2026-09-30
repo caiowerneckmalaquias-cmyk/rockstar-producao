@@ -2145,6 +2145,36 @@ const refs = useMemo(() => rows.map((r) => `${r.ref}__${r.cor}`), [rows]);
 const firstRef = refs[0] ? refs[0].split("__")[0] : "";
 const firstCor = refs[0] ? refs[0].split("__")[1] : "";
 
+const refsUnicas = useMemo(() => {
+  const seen = new Set();
+  const list = [];
+  rows.forEach((r) => {
+    const ref = String(r.ref || "").trim();
+    if (!ref || seen.has(ref)) return;
+    seen.add(ref);
+    list.push(ref);
+  });
+  return list.sort((a, b) =>
+    a.localeCompare(b, "pt-BR", { numeric: true, sensitivity: "base" })
+  );
+}, [rows]);
+
+const coresPorRef = useMemo(() => {
+  const map = new Map();
+  rows.forEach((r) => {
+    const ref = String(r.ref || "").trim();
+    const cor = String(r.cor || "").trim();
+    if (!ref || !cor) return;
+    if (!map.has(ref)) map.set(ref, []);
+    const list = map.get(ref);
+    if (!list.some((c) => normalizeKey(c) === normalizeKey(cor))) list.push(cor);
+  });
+  map.forEach((list) => {
+    list.sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" }));
+  });
+  return map;
+}, [rows]);
+
   const rowsNormalized = useMemo(
     () => rows.map((row) => ({ ...row, data: normalizeProductData(row.data) })),
     [rows]
@@ -5302,23 +5332,44 @@ const salvarVendasManuais = async () => {
               />
             </label>
 
-            <label className="text-sm font-medium">
-              Referência / Cor
-              <select
-                value={`${form.ref}__${form.cor}`}
-                onChange={(e) => {
-                  const [ref, cor] = e.target.value.split("__");
-                  setForm({ ...form, ref, cor });
-                }}
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
-              >
-                {refs.map((item) => (
-                  <option key={item} value={item}>
-                    {item.replace("__", " • ")}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label className="text-sm font-medium">
+                Referência
+                <select
+                  value={form.ref || ""}
+                  onChange={(e) => {
+                    const ref = e.target.value;
+                    const cores = coresPorRef.get(ref) || [];
+                    const corAtual =
+                      cores.find((c) => normalizeKey(c) === normalizeKey(form.cor)) ||
+                      cores[0] ||
+                      "";
+                    setForm({ ...form, ref, cor: corAtual });
+                  }}
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+                >
+                  {refsUnicas.map((ref) => (
+                    <option key={ref} value={ref}>
+                      {ref}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm font-medium">
+                Cor
+                <select
+                  value={form.cor || ""}
+                  onChange={(e) => setForm({ ...form, cor: e.target.value })}
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+                >
+                  {(coresPorRef.get(form.ref) || []).map((cor) => (
+                    <option key={`${form.ref}__${cor}`} value={cor}>
+                      {cor}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
 
             <div>
               <div className="text-sm font-medium mb-2">Grade completa</div>
