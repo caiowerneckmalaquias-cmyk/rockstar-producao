@@ -2969,15 +2969,6 @@ const startPrintWithTarget = useCallback((target) => {
         ? items.filter((item) => item.qtd > LIMITE_PARES_POR_NUMERACAO)
         : [];
 
-    if (excedemNumeracao.length) {
-      const lista = excedemNumeracao.map((item) => `${item.size} (${item.qtd})`).join(", ");
-      setMovError((curr) => ({
-        ...curr,
-        [tipo]: `Cada numeração pode ter no máximo ${LIMITE_PARES_POR_NUMERACAO} pares. Acima do limite: ${lista}.`,
-      }));
-      return;
-    }
-
     const invalidos =
       tipo === "Pesponto" || tipo === "Montagem"
         ? items.filter((item) => item.qtd % 12 !== 0)
@@ -2986,7 +2977,12 @@ const startPrintWithTarget = useCallback((target) => {
     const totalLancamento = items.reduce((acc, item) => acc + item.qtd, 0);
     const excedeLimite = (tipo === "Pesponto" || tipo === "Montagem") && totalLancamento > 396;
 
-    if ((tipo === "Pesponto" || tipo === "Montagem") && (invalidos.length || excedeLimite) && !force) {
+    // Acima de 36/num., fora de múltiplo de 12 ou total > 396: pede confirmação (não bloqueia).
+    if (
+      (tipo === "Pesponto" || tipo === "Montagem") &&
+      (excedemNumeracao.length || invalidos.length || excedeLimite) &&
+      !force
+    ) {
       setConfirmMov({ tipo, form, progFichaStorageKey });
       return;
     }
@@ -3109,7 +3105,7 @@ const persistLaunch = await persistRowsToSupabase(nextRows);
     if (excedemNumeracao.length) {
       const lista = excedemNumeracao.map((item) => `${item.size} (${item.qtd})`).join(", ");
       mensagens.push(
-        `cada numeração pode ter no máximo ${LIMITE_PARES_POR_NUMERACAO} pares. Acima do limite: ${lista}`
+        `o padrão é no máximo ${LIMITE_PARES_POR_NUMERACAO} pares por numeração (será pedida confirmação). Acima do limite: ${lista}`
       );
     }
 
@@ -9175,7 +9171,7 @@ const salvarVendasManuais = async () => {
 
         if (excedemNumeracao.length) {
           mensagens.push(
-            `Cada numeração pode ter no máximo ${LIMITE_PARES_POR_NUMERACAO} pares. Acima do limite: ${listaNumeracao}.`
+            `O padrão é no máximo ${LIMITE_PARES_POR_NUMERACAO} pares por numeração. Acima do limite: ${listaNumeracao}.`
           );
         }
 
@@ -9187,38 +9183,26 @@ const salvarVendasManuais = async () => {
           mensagens.push(`O total informado é ${totalLancamento} pares e não pode passar de 396.`);
         }
 
-        const bloqueadoPorNumeracao = excedemNumeracao.length > 0;
-
         return (
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4 max-[1023px]:landscape:items-start max-[1023px]:landscape:py-4">
             <div className="w-full max-w-lg max-h-[min(88dvh,800px)] overflow-y-auto rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6">
-              <div className="text-lg font-bold">
-                {bloqueadoPorNumeracao ? "Lançamento bloqueado" : "Lançamento fora da regra"}
-              </div>
+              <div className="text-lg font-bold">Lançamento fora da regra</div>
               <p className="text-sm text-slate-600 mt-3 leading-relaxed">
                 {mensagens.join(" ")}
               </p>
-              {bloqueadoPorNumeracao ? (
-                <p className="text-sm text-slate-600 mt-3 leading-relaxed">
-                  Ajuste a grade para no máximo {LIMITE_PARES_POR_NUMERACAO} pares por numeração e tente novamente.
-                </p>
-              ) : (
-                <p className="text-sm text-slate-600 mt-3 leading-relaxed">Deseja realmente continuar com esse lançamento?</p>
-              )}
+              <p className="text-sm text-slate-600 mt-3 leading-relaxed">Deseja realmente continuar com esse lançamento?</p>
               <div className="mt-6 flex gap-3 justify-end">
                 <button onClick={() => setConfirmMov(null)} className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold bg-white">
-                  {bloqueadoPorNumeracao ? "Fechar" : "Cancelar"}
+                  Cancelar
                 </button>
-                {!bloqueadoPorNumeracao ? (
-                  <button
-                    onClick={() =>
-                      executeMov(confirmMov.tipo, confirmMov.form, true, confirmMov.progFichaStorageKey || undefined)
-                    }
-                    className="rounded-2xl bg-slate-950 text-white px-4 py-3 text-sm font-semibold"
-                  >
-                    Lançar mesmo assim
-                  </button>
-                ) : null}
+                <button
+                  onClick={() =>
+                    executeMov(confirmMov.tipo, confirmMov.form, true, confirmMov.progFichaStorageKey || undefined)
+                  }
+                  className="rounded-2xl bg-slate-950 text-white px-4 py-3 text-sm font-semibold"
+                >
+                  Lançar mesmo assim
+                </button>
               </div>
             </div>
           </div>
