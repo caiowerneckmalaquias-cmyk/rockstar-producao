@@ -18,6 +18,14 @@ import {
   ehRefMigracaoAntiga,
   refAntigaDe,
 } from "./constants/production";
+import {
+  BLING_STOCK_OFFSET,
+  BLING_DEPOSITO_PA_LABEL,
+  BLING_DEPOSITO_EST_LABEL,
+  blingToReal,
+  realToBling,
+  shouldZeroBling,
+} from "./constants/bling";
 
 /** Boost para fichas de Montagem das refs antigas (gastar EST legado primeiro). */
 const PRIORIDADE_BOOST_REF_ANTIGA = 500000;
@@ -2042,6 +2050,9 @@ const [previewFicha, setPreviewFicha] = useState(null);
 const [confirmImport, setConfirmImport] = useState(false);
 const [importMode, setImportMode] = useState("replace");
 const [importSoCoresCadastradas, setImportSoCoresCadastradas] = useState(true);
+const [blingStatus, setBlingStatus] = useState(null);
+const [blingStatusLoading, setBlingStatusLoading] = useState(false);
+const [blingFeedback, setBlingFeedback] = useState("");
 const [movError, setMovError] = useState({ Pesponto: "", Montagem: "" });
 const [confirmMov, setConfirmMov] = useState(null);
 const [editingMov, setEditingMov] = useState(null);
@@ -2610,6 +2621,51 @@ const programacaoMontagem = useMemo(
   useEffect(() => {
     setVendasDraft(vendas);
   }, [vendas]);
+
+  const carregarStatusBling = useCallback(async () => {
+    setBlingStatusLoading(true);
+    try {
+      const res = await fetch("/api/bling/status", { credentials: "same-origin" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setBlingStatus({ connected: false, error: data.error || "Falha ao ler status" });
+        return;
+      }
+      setBlingStatus(data);
+    } catch (err) {
+      setBlingStatus({
+        connected: false,
+        error: err?.message || "API Bling indisponível (deploy Vercel + env)",
+      });
+    } finally {
+      setBlingStatusLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const bling = params.get("bling");
+    if (!bling) return;
+    if (bling === "connected") {
+      setBlingFeedback("Bling conectado. Depósitos PA/EST serão vinculados automaticamente.");
+      setActive("Importar GCM");
+    } else if (bling === "error") {
+      setBlingFeedback(
+        `Erro ao conectar Bling: ${params.get("msg") || "tente novamente"}`
+      );
+      setActive("Importar GCM");
+    }
+    params.delete("bling");
+    params.delete("msg");
+    const next = params.toString();
+    const clean = `${window.location.pathname}${next ? `?${next}` : ""}${window.location.hash || ""}`;
+    window.history.replaceState({}, "", clean);
+    carregarStatusBling();
+  }, [carregarStatusBling]);
+
+  useEffect(() => {
+    carregarStatusBling();
+  }, [carregarStatusBling]);
 
 useEffect(() => {
   const carregarDadosIniciais = async () => {
@@ -5402,6 +5458,81 @@ const salvarVendasManuais = async () => {
               </div>
             )}
             {importFeedback && <div className="mt-3 text-sm text-slate-600">{importFeedback}</div>}
+          </div>
+
+          <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <div className="font-semibold">Integração Bling (fase 1)</div>
+                <div className="text-sm text-slate-500 mt-1">
+                  OAuth + depósitos {BLING_DEPOSITO_PA_LABEL} (PA) e {BLING_DEPOSITO_EST_LABEL} (EST).
+                  Regra Shopee: estoque no Bling = real + {BLING_STOCK_OFFSET} (ex.: real 10 →{" "}
+                  {realToBling(10)}; import {blingToReal(1010)}). Se Bling ≤ {BLING_STOCK_OFFSET},
+                  real = 0{shouldZeroBling(1000) ? " e zera no Bling" : ""}.
+                </div>
+                <div className="text-xs text-amber-800 mt-2 rounded-xl bg-amber-50 border border-amber-100 px-3 py-2">
+                  Sync de estoque por SKU (ref/cor/numeração) = fase 2 — ainda não puxa nem sobe pares.
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <a
+                  href="/api/bling/authorize"
+                  className="inline-flex items-center justify-center rounded-2xl bg-[#1B4F72] px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-[#163f5b]"
+                >
+                  Conectar Bling
+                </a>
+                <button
+                  type="button"
+                  onClick={carregarStatusBling}
+                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold shadow-sm hover:bg-slate-50"
+                >
+                  Atualizar status
+                </button>
+              </div>
+            </div>
+
+            {blingFeedback && (
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                {blingFeedback}
+              </div>
+            )}
+
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+              <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
+                <div className="text-slate-500">Status</div>
+                <div className="font-semibold text-slate-900 mt-1">
+                  {blingStatusLoading
+                    ? "Carregando…"
+                    : blingStatus?.connected
+                      ? blingStatus.expired
+                        ? "Conectado (token expirado — reconecte ou refresh)"
+                        : "Conectado"
+                      : blingStatus?.error
+                        ? `Desconectado — ${blingStatus.error}`
+                        : "Desconectado"}
+                </div>
+              </div>
+              <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
+                <div className="text-slate-500">Offset Shopee</div>
+                <div className="font-semibold text-slate-900 mt-1">
+                  +{blingStatus?.stockOffset ?? BLING_STOCK_OFFSET}
+                </div>
+              </div>
+              <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
+                <div className="text-slate-500">Depósito PA</div>
+                <div className="font-semibold text-slate-900 mt-1">
+                  {blingStatus?.depositoPaNome || BLING_DEPOSITO_PA_LABEL}
+                  {blingStatus?.depositoPaId != null ? ` · id ${blingStatus.depositoPaId}` : " · id —"}
+                </div>
+              </div>
+              <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
+                <div className="text-slate-500">Depósito EST</div>
+                <div className="font-semibold text-slate-900 mt-1">
+                  {blingStatus?.depositoEstNome || BLING_DEPOSITO_EST_LABEL}
+                  {blingStatus?.depositoEstId != null ? ` · id ${blingStatus.depositoEstId}` : " · id —"}
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
