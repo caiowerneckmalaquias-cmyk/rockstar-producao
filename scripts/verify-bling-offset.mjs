@@ -1,5 +1,5 @@
 /**
- * Smoke test da regra +1000 (sem rede).
+ * Smoke test da regra +1000 e SKU (sem rede).
  * Uso: node scripts/verify-bling-offset.mjs
  */
 import {
@@ -7,6 +7,9 @@ import {
   blingToReal,
   realToBling,
   shouldZeroBling,
+  buildBlingSku,
+  parseCorSiglaLine,
+  normalizeBlingSigla,
 } from "../src/constants/bling.js";
 
 function assert(cond, msg) {
@@ -22,5 +25,11 @@ assert(blingToReal(999) === 0, "999 → real 0");
 assert(shouldZeroBling(1000) === true, "≤1000 zera");
 assert(shouldZeroBling(1001) === false, "1001 não zera");
 assert(shouldZeroBling(0) === true, "0 zera");
+assert(buildBlingSku("TNCV010", "RS", 34) === "TNCV010RS34", "SKU");
+assert(buildBlingSku("tncv010", "rs", "35") === "TNCV010RS35", "SKU case");
+assert(normalizeBlingSigla("r-s") === "RS", "sigla limpa");
+const parsed = parseCorSiglaLine("ROSE|RS");
+assert(parsed.cor === "ROSE" && parsed.sigla === "RS", "parse COR|SIGLA");
+assert(parseCorSiglaLine("PRETO").sigla === "", "cor sem sigla");
 
-console.log("PASS: regra Bling +1000 (blingToReal / realToBling / shouldZeroBling)");
+console.log("PASS: regra Bling +1000 + SKU/sigla");

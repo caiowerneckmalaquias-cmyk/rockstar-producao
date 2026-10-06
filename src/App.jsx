@@ -25,6 +25,9 @@ import {
   blingToReal,
   realToBling,
   shouldZeroBling,
+  buildBlingSku,
+  normalizeBlingSigla,
+  parseCorSiglaLine,
 } from "./constants/bling";
 
 /** Boost para fichas de Montagem das refs antigas (gastar EST legado primeiro). */
@@ -2053,6 +2056,8 @@ const [importSoCoresCadastradas, setImportSoCoresCadastradas] = useState(true);
 const [blingStatus, setBlingStatus] = useState(null);
 const [blingStatusLoading, setBlingStatusLoading] = useState(false);
 const [blingFeedback, setBlingFeedback] = useState("");
+const [blingSiglas, setBlingSiglas] = useState({});
+const [blingSyncBusy, setBlingSyncBusy] = useState("");
 const [movError, setMovError] = useState({ Pesponto: "", Montagem: "" });
 const [confirmMov, setConfirmMov] = useState(null);
 const [editingMov, setEditingMov] = useState(null);
@@ -2622,6 +2627,99 @@ const programacaoMontagem = useMemo(
     setVendasDraft(vendas);
   }, [vendas]);
 
+  const produtoSiglaKey = (ref, cor) =>
+    `${normalizeKey(ref)}__${normalizeKey(cor)}`;
+
+  const getBlingSigla = (ref, cor) =>
+    normalizeBlingSigla(blingSiglas[produtoSiglaKey(ref, cor)] || "");
+
+  const carregarProdutosDoBanco = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("produtos")
+        .select("ref,cor,bling_sigla");
+      if (error) {
+        console.log("ERRO AO CARREGAR PRODUTOS:", error);
+        return {};
+      }
+      const map = {};
+      (data || []).forEach((p) => {
+        const key = produtoSiglaKey(p.ref, p.cor);
+        map[key] = normalizeBlingSigla(p.bling_sigla);
+      });
+      return map;
+    } catch (err) {
+      console.log("ERRO GERAL PRODUTOS:", err);
+      return {};
+    }
+  };
+
+  const salvarBlingSiglaProduto = async (ref, cor, sigla) => {
+    const clean = normalizeBlingSigla(sigla);
+    const { error } = await salvarProdutosNoBanco([
+      { ref, cor, bling_sigla: clean || null },
+    ]);
+    if (error) {
+      alert(`Erro ao salvar sigla: ${error.message || error}`);
+      return false;
+    }
+    setBlingSiglas((curr) => ({
+      ...curr,
+      [produtoSiglaKey(ref, cor)]: clean,
+    }));
+    return true;
+  };
+
+  const executarPullEstoqueBling = async () => {
+    if (blingSyncBusy) return;
+    setBlingSyncBusy("pull");
+    setBlingFeedback("Puxando estoque do Bling…");
+    try {
+      const res = await fetch("/api/bling/pull-estoque", {
+        method: "POST",
+        credentials: "same-origin",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setBlingFeedback(data.error || "Falha ao puxar estoque");
+        return;
+      }
+      const estoqueBanco = await carregarEstoqueDoBanco();
+      if (estoqueBanco) setRows(estoqueBanco);
+      setBlingFeedback(
+        `Puxado: ${data.updated || 0} linhas · SKUs ok ${data.skusOk || 0} · sem sigla ${data.semSigla || 0} · não achados ${data.notFound || 0} · zerados no Bling ${data.zeroedOnBling || 0}`
+      );
+    } catch (err) {
+      setBlingFeedback(err?.message || "Erro de rede ao puxar estoque");
+    } finally {
+      setBlingSyncBusy("");
+    }
+  };
+
+  const executarPushEstoqueBling = async () => {
+    if (blingSyncBusy) return;
+    setBlingSyncBusy("push");
+    setBlingFeedback("Subindo estoque para o Bling…");
+    try {
+      const res = await fetch("/api/bling/push-estoque", {
+        method: "POST",
+        credentials: "same-origin",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setBlingFeedback(data.error || "Falha ao subir estoque");
+        return;
+      }
+      setBlingFeedback(
+        `Subido: ${data.pushed || 0} atualizações · sem sigla ${data.semSigla || 0} · não achados ${data.notFound || 0}`
+      );
+    } catch (err) {
+      setBlingFeedback(err?.message || "Erro de rede ao subir estoque");
+    } finally {
+      setBlingSyncBusy("");
+    }
+  };
+
   const carregarStatusBling = useCallback(async () => {
     setBlingStatusLoading(true);
     try {
@@ -2670,10 +2768,13 @@ const programacaoMontagem = useMemo(
 useEffect(() => {
   const carregarDadosIniciais = async () => {
     const estoqueBanco = await carregarEstoqueDoBanco();
+    const produtosSiglas = await carregarProdutosDoBanco();
     const minimosBanco = await carregarMinimosDoBanco();
     const vendasBanco = await carregarVendasDoBanco();
     const movimentacoesBanco = await carregarMovimentacoesDoBanco();
     const configProducao = await carregarConfiguracoesProducaoDoBanco();
+
+    setBlingSiglas(produtosSiglas || {});
 
     if (estoqueBanco) {
       setRows(estoqueBanco);
@@ -5263,6 +5364,72 @@ const salvarVendasManuais = async () => {
         </div>
       </section>
 
+      <section className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-bold text-lg">Siglas Bling</h2>
+            <p className="text-sm text-slate-500 mt-1">
+              SKU = REF + SIGLA + tamanho (ex.: {buildBlingSku("TNCV010", "RS", 34) || "TNCV010RS34"}).
+              Edite cores já cadastradas aqui.
+            </p>
+          </div>
+        </div>
+        <div className="mt-4 max-h-[360px] overflow-auto space-y-2 pr-1">
+          {controleRows.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500">
+              Nenhuma cor no filtro atual.
+            </div>
+          ) : (
+            controleRows.map((row) => {
+              const key = produtoSiglaKey(row.ref, row.cor);
+              const valor = blingSiglas[key] || "";
+              const skuEx = buildBlingSku(row.ref, valor, 34);
+              return (
+                <div
+                  key={`${row.ref}-${row.cor}-sigla`}
+                  className="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2"
+                >
+                  <div className="min-w-[140px] text-sm font-semibold text-slate-900">
+                    {row.ref}
+                  </div>
+                  <div className="min-w-[120px] text-sm text-slate-700">{row.cor}</div>
+                  <input
+                    type="text"
+                    value={valor}
+                    onChange={(e) =>
+                      setBlingSiglas((curr) => ({
+                        ...curr,
+                        [key]: normalizeBlingSigla(e.target.value),
+                      }))
+                    }
+                    className="w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold uppercase tracking-wide"
+                    placeholder="RS"
+                    maxLength={12}
+                  />
+                  <span className="text-xs text-slate-500 font-mono">
+                    {skuEx || "—"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const ok = await salvarBlingSiglaProduto(
+                        row.ref,
+                        row.cor,
+                        blingSiglas[key]
+                      );
+                      if (ok) setBlingFeedback(`Sigla salva: ${row.ref} • ${row.cor}`);
+                    }}
+                    className="ml-auto rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
+                  >
+                    Salvar
+                  </button>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </section>
+
       <section className="space-y-6">
         <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm overflow-hidden">
           <div className="px-6 py-5 border-b border-slate-200">
@@ -5471,7 +5638,7 @@ const salvarVendasManuais = async () => {
                   real = 0{shouldZeroBling(1000) ? " e zera no Bling" : ""}.
                 </div>
                 <div className="text-xs text-amber-800 mt-2 rounded-xl bg-amber-50 border border-amber-100 px-3 py-2">
-                  Sync de estoque por SKU (ref/cor/numeração) = fase 2 — ainda não puxa nem sobe pares.
+                  Fase 2: puxe/suba estoque após cadastrar siglas. Vendas/fichas automáticas pelo Bling ficam para depois.
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -5488,6 +5655,22 @@ const salvarVendasManuais = async () => {
                 >
                   Atualizar status
                 </button>
+                <button
+                  type="button"
+                  onClick={executarPullEstoqueBling}
+                  disabled={!!blingSyncBusy || !blingStatus?.connected}
+                  className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-900 shadow-sm hover:bg-emerald-100 disabled:opacity-50"
+                >
+                  {blingSyncBusy === "pull" ? "Puxando…" : "Puxar estoque do Bling"}
+                </button>
+                <button
+                  type="button"
+                  onClick={executarPushEstoqueBling}
+                  disabled={!!blingSyncBusy || !blingStatus?.connected}
+                  className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-900 shadow-sm hover:bg-sky-100 disabled:opacity-50"
+                >
+                  {blingSyncBusy === "push" ? "Subindo…" : "Subir estoque para o Bling"}
+                </button>
               </div>
             </div>
 
@@ -5496,6 +5679,11 @@ const salvarVendasManuais = async () => {
                 {blingFeedback}
               </div>
             )}
+
+            <div className="text-xs text-slate-500 mt-3">
+              Cadastre siglas no Controle Geral (ou em Nova referência com COR|SIGLA).
+              Exemplo SKU: {buildBlingSku("TNCV010", getBlingSigla("TNCV010", "ROSE") || "RS", 34)}.
+            </div>
 
             <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
               <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
@@ -6428,12 +6616,12 @@ const salvarVendasManuais = async () => {
     String(texto || "")
       .split(/\r?\n/)
       .forEach((linha) => {
-        const cor = String(linha || "").trim().toUpperCase();
+        const { cor, sigla } = parseCorSiglaLine(linha);
         if (!cor) return;
         const key = normalizeKey(cor);
         if (seen.has(key)) return;
         seen.add(key);
-        cores.push(cor);
+        cores.push({ cor, sigla: normalizeBlingSigla(sigla) });
       });
     return cores;
   };
@@ -6442,28 +6630,33 @@ const salvarVendasManuais = async () => {
     if (novaRefBusy) return;
 
     const ref = String(novaRefForm.ref || "").trim().toUpperCase();
-    const cores = parseCoresNovaReferencia(novaRefForm.cores);
+    const coresInfo = parseCoresNovaReferencia(novaRefForm.cores);
+    const cores = coresInfo.map((c) => c.cor);
 
     if (!ref) {
       setNovaRefErro("Informe a referência.");
       return;
     }
     if (!cores.length) {
-      setNovaRefErro("Informe ao menos uma cor (uma por linha).");
+      setNovaRefErro(
+        "Informe ao menos uma cor (uma por linha). Opcional: COR|SIGLA (ex.: ROSE|RS)."
+      );
       return;
     }
 
     const existentes = [];
-    const novasCores = [];
-    cores.forEach((cor) => {
+    const novasCoresInfo = [];
+    coresInfo.forEach((item) => {
       const jaExiste = rows.some(
         (row) =>
           normalizeKey(row.ref) === normalizeKey(ref) &&
-          normalizeKey(row.cor) === normalizeKey(cor)
+          normalizeKey(row.cor) === normalizeKey(item.cor)
       );
-      if (jaExiste) existentes.push(cor);
-      else novasCores.push(cor);
+      if (jaExiste) existentes.push(item.cor);
+      else novasCoresInfo.push(item);
     });
+
+    const novasCores = novasCoresInfo.map((c) => c.cor);
 
     if (!novasCores.length) {
       setNovaRefErro(
@@ -6487,7 +6680,11 @@ const salvarVendasManuais = async () => {
       ),
     }));
 
-    const produtos = novasCores.map((cor) => ({ ref, cor }));
+    const produtos = novasCoresInfo.map(({ cor, sigla }) => ({
+      ref,
+      cor,
+      bling_sigla: sigla || null,
+    }));
     const estoque = novosRows.flatMap((row) =>
       sizes.map((numero) => ({
         ref: row.ref,
@@ -6554,6 +6751,13 @@ const salvarVendasManuais = async () => {
     }
 
     setRows((curr) => [...curr, ...novosRows]);
+    setBlingSiglas((curr) => {
+      const next = { ...curr };
+      novasCoresInfo.forEach(({ cor, sigla }) => {
+        next[produtoSiglaKey(ref, cor)] = normalizeBlingSigla(sigla);
+      });
+      return next;
+    });
     if (novaRefForm.aplicarMinimos) {
       setMinimos((curr) => {
         const next = { ...curr };
@@ -9591,15 +9795,17 @@ const salvarVendasManuais = async () => {
       {novaRefModalOpen && (() => {
         const refPreview = String(novaRefForm.ref || "").trim().toUpperCase();
         const coresPreview = parseCoresNovaReferencia(novaRefForm.cores);
-        const existentesPreview = coresPreview.filter((cor) =>
-          rows.some(
-            (row) =>
-              normalizeKey(row.ref) === normalizeKey(refPreview) &&
-              normalizeKey(row.cor) === normalizeKey(cor)
+        const existentesPreview = coresPreview
+          .filter((item) =>
+            rows.some(
+              (row) =>
+                normalizeKey(row.ref) === normalizeKey(refPreview) &&
+                normalizeKey(row.cor) === normalizeKey(item.cor)
+            )
           )
-        );
+          .map((item) => item.cor);
         const novasPreview = coresPreview.filter(
-          (cor) => !existentesPreview.includes(cor)
+          (item) => !existentesPreview.includes(item.cor)
         );
 
         return (
@@ -9608,6 +9814,7 @@ const salvarVendasManuais = async () => {
               <div className="text-lg font-bold text-slate-900">Nova referência</div>
               <p className="text-sm text-slate-600 mt-2 leading-relaxed">
                 Cadastre uma referência com uma ou mais cores. O estoque (PA, EST, M, P) fica zerado em todas as numerações 34–44.
+                Opcional: informe a sigla Bling com <span className="font-semibold">COR|SIGLA</span> (ex.: ROSE|RS → SKU TNCV010RS34).
               </p>
 
               <div className="mt-4 space-y-3">
@@ -9620,21 +9827,21 @@ const salvarVendasManuais = async () => {
                       setNovaRefForm((curr) => ({ ...curr, ref: e.target.value }))
                     }
                     className="mt-1.5 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm uppercase"
-                    placeholder="Ex.: 1234"
+                    placeholder="Ex.: TNCV010"
                     autoComplete="off"
                     disabled={novaRefBusy}
                   />
                 </label>
 
                 <label className="text-sm font-medium text-slate-700 block">
-                  Cores (uma por linha)
+                  Cores (uma por linha; opcional COR|SIGLA)
                   <textarea
                     value={novaRefForm.cores}
                     onChange={(e) =>
                       setNovaRefForm((curr) => ({ ...curr, cores: e.target.value }))
                     }
                     className="mt-1.5 w-full h-36 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm uppercase outline-none"
-                    placeholder={"PRETO\nBRANCO\nMARROM"}
+                    placeholder={"PRETO|PT\nBRANCO|BR\nROSE|RS"}
                     disabled={novaRefBusy}
                   />
                 </label>

@@ -213,3 +213,157 @@ export function createState() {
   ).toString("base64url");
   return nonce;
 }
+
+export function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function blingToReal(blingQty, offset = STOCK_OFFSET) {
+  const n = Number(blingQty);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, n - (Number(offset) || 0));
+}
+
+export function realToBling(realQty, offset = STOCK_OFFSET) {
+  const n = Number(realQty);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n + (Number(offset) || 0);
+}
+
+export function shouldZeroBling(blingQty, offset = STOCK_OFFSET) {
+  const n = Number(blingQty);
+  if (!Number.isFinite(n)) return true;
+  return n <= (Number(offset) || 0);
+}
+
+export function buildBlingSku(ref, sigla, size) {
+  const r = String(ref || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "");
+  const s = String(sigla || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+  const n = String(size ?? "").trim();
+  if (!r || !s || !n) return "";
+  return `${r}${s}${n}`;
+}
+
+/** Access token válido; renova com refresh se perto de expirar. */
+export async function getValidAccessToken() {
+  const row = await getConexao();
+  if (!row?.access_token) {
+    throw new Error("Bling não conectado. Use Conectar Bling primeiro.");
+  }
+
+  const expiresAt = row.expires_at ? new Date(row.expires_at).getTime() : 0;
+  const skewMs = 60_000;
+  if (expiresAt && expiresAt - skewMs > Date.now()) {
+    return { accessToken: row.access_token, conexao: row };
+  }
+
+  if (!row.refresh_token) {
+    throw new Error("Token Bling expirado. Reconecte o Bling.");
+  }
+
+  const tokenJson = await exchangeToken({
+    grantType: "refresh_token",
+    refreshToken: row.refresh_token,
+  });
+
+  const updated = await upsertConexao({
+    access_token: tokenJson.access_token,
+    refresh_token: tokenJson.refresh_token || row.refresh_token,
+    token_type: tokenJson.token_type || "Bearer",
+    expires_at: expiresAtFromToken(tokenJson),
+    scopes: tokenJson.scope || row.scopes,
+    deposito_pa_id: row.deposito_pa_id,
+    deposito_est_id: row.deposito_est_id,
+    deposito_pa_nome: row.deposito_pa_nome,
+    deposito_est_nome: row.deposito_est_nome,
+    connected_at: row.connected_at,
+  });
+
+  return { accessToken: updated.access_token, conexao: updated };
+}
+
+export async function findProductByCodigo(accessToken, codigo) {
+  const code = encodeURIComponent(String(codigo || "").trim());
+  if (!code) return null;
+  const json = await blingFetch(
+    `/produtos?codigo=${code}&pagina=1&limite=10`,
+    accessToken
+  );
+  const list = json?.data || [];
+  if (!Array.isArray(list) || !list.length) return null;
+  const exact = list.find(
+    (p) =>
+      String(p.codigo || "").toUpperCase() === String(codigo).toUpperCase()
+  );
+  return exact || list[0];
+}
+
+/** Saldo do produto em um depósito (0 se não achar). */
+export function saldoNoDeposito(saldosPayload, depositoId) {
+  const depId = Number(depositoId);
+  const items = Array.isArray(saldosPayload?.data)
+    ? saldosPayload.data
+    : Array.isArray(saldosPayload)
+      ? saldosPayload
+      : [];
+
+  for (const item of items) {
+    const deps = item?.depositos || item?.saldosDepositos || [];
+    if (Array.isArray(deps)) {
+      for (const d of deps) {
+        if (Number(d?.id || d?.deposito?.id) === depId) {
+          const saldo =
+            d?.saldo ??
+            d?.saldoVirtual ??
+            d?.saldoFisico ??
+            d?.quantidade ??
+            0;
+          return Number(saldo) || 0;
+        }
+      }
+    }
+    if (Number(item?.deposito?.id) === depId) {
+      return Number(item?.saldo ?? item?.quantidade ?? 0) || 0;
+    }
+  }
+
+  // Fallback: saldo geral do primeiro item
+  if (items[0] && depositoId == null) {
+    return Number(items[0].saldo ?? items[0].saldoVirtual ?? 0) || 0;
+  }
+  return 0;
+}
+
+export async function fetchSaldosProduto(accessToken, produtoId) {
+  const json = await blingFetch(
+    `/estoques/saldos?idsProdutos[]=${encodeURIComponent(produtoId)}`,
+    accessToken
+  );
+  return json;
+}
+
+export async function setEstoqueSaldo({
+  accessToken,
+  produtoId,
+  depositoId,
+  quantidade,
+  observacoes,
+}) {
+  return blingFetch("/estoques", accessToken, {
+    method: "POST",
+    body: JSON.stringify({
+      produto: { id: Number(produtoId) },
+      deposito: { id: Number(depositoId) },
+      operacao: "B",
+      quantidade: Number(quantidade) || 0,
+      observacoes: observacoes || "Rock Star Produção",
+    }),
+  });
+}
