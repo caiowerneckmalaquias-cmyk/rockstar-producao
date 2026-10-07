@@ -303,6 +303,23 @@ const normalizeProductData = (rawData) =>
   );
 
 const calcTotal = (item) => item.pa + item.est + item.m + item.p;
+
+/** Um tamanho = uma qtd: soma duplicados e devolve { items, total }. */
+function mergeItensGrade(items) {
+  const bySize = new Map();
+  (Array.isArray(items) ? items : []).forEach((entry) => {
+    const size = Number(entry?.size);
+    const qtd = Number(entry?.qtd) || 0;
+    if (!Number.isFinite(size) || size <= 0 || qtd <= 0) return;
+    bySize.set(size, (bySize.get(size) || 0) + qtd);
+  });
+  const merged = Array.from(bySize.entries())
+    .map(([size, qtd]) => ({ size, qtd }))
+    .sort((a, b) => a.size - b.size);
+  const total = merged.reduce((acc, item) => acc + item.qtd, 0);
+  return { items: merged, total };
+}
+
 const round12 = (n) => (n <= 0 ? 0 : Math.ceil(n / 12) * 12);
 const normalizeKey = (value) =>
   String(value || "")
@@ -1250,11 +1267,11 @@ function buildMovImpressaoPayload(
   const lancamentosSelecionadosMov = lancamentos.filter((item) => selecaoMovAtual[item.id] === true);
   const totalAtual = sizes.reduce((acc, size) => acc + (Number(form.grid[size]) || 0), 0);
   const buildFichaFromLancamento = (item, idx) => {
+    const { items: itensMesclados, total } = mergeItensGrade(item.items);
     const grid = Object.fromEntries(sizes.map((size) => [size, 0]));
-    (item.items || []).forEach((entry) => {
-      const sizeNum = Number(entry.size);
-      if (Number.isFinite(sizeNum) && Object.prototype.hasOwnProperty.call(grid, sizeNum)) {
-        grid[sizeNum] = Number(entry.qtd) || 0;
+    itensMesclados.forEach((entry) => {
+      if (Object.prototype.hasOwnProperty.call(grid, entry.size)) {
+        grid[entry.size] = entry.qtd;
       }
     });
     return {
@@ -1263,7 +1280,7 @@ function buildMovImpressaoPayload(
         cor: item.cor,
         nome: item.programacao || `${item.ref} - ${item.cor}`,
         sizes: grid,
-        total: Number(item.total) || sizes.reduce((acc, s) => acc + (Number(grid[s]) || 0), 0),
+        total,
       },
       dia: 1,
       ordem: idx + 1,
@@ -1815,7 +1832,6 @@ function ProgramacaoDiaFolhaImpressao({
 
       <div className={isEconomico ? "programacao-print-grid-economico" : "space-y-3"}>
         {gruposFicha.map((grupo, i) => {
-          const totalProg = grupo.itens.reduce((acc, row) => acc + (Number(row.ficha?.total) || 0), 0);
           const refsMap = new Map();
           grupo.itens.forEach((row) => {
             const ficha = row.ficha || {};
@@ -1828,13 +1844,29 @@ function ProgramacaoDiaFolhaImpressao({
                 rows: [],
               });
             }
+            const sizesRow = Object.fromEntries(
+              tamanhosGrade.map((s) => [s, Number(ficha.sizes?.[s] || 0)])
+            );
+            const totalLinha = tamanhosGrade.reduce(
+              (acc, s) => acc + (Number(sizesRow[s]) || 0),
+              0
+            );
             refsMap.get(ref).rows.push({
               cor,
-              sizes: Object.fromEntries(tamanhosGrade.map((s) => [s, Number(ficha.sizes?.[s] || 0)])),
-              total: Number(ficha.total) || 0,
+              sizes: sizesRow,
+              total: totalLinha,
             });
           });
           const refs = Array.from(refsMap.values());
+          const totalProg = refs.reduce(
+            (accRefs, refBlock) =>
+              accRefs +
+              refBlock.rows.reduce(
+                (accRows, rowCor) => accRows + (Number(rowCor.total) || 0),
+                0
+              ),
+            0
+          );
           const linhasCor = refs.reduce((acc, ref) => acc + ref.rows.length, 0);
           const blocoGrande = refs.length > 2 || linhasCor > 4;
           const baseKey = `${grupo.dia}__${grupo.fichaToken}`;
@@ -2993,8 +3025,10 @@ const startPrintWithTarget = useCallback((target) => {
   };
 
   const normalizeLancamentoItems = (lancamento) => {
-    const raw = Array.isArray(lancamento?.items) ? lancamento.items : [];
-    return raw.filter((item) => Number(item?.size) > 0 && Number(item?.qtd) > 0);
+    const { items } = mergeItensGrade(
+      Array.isArray(lancamento?.items) ? lancamento.items : []
+    );
+    return items;
   };
 
   const cloneRowDataDeep = (row) =>
@@ -3135,9 +3169,9 @@ const startPrintWithTarget = useCallback((target) => {
 
   const executeMov = async (tipo, form, force = false, progFichaStorageKey) => {
     console.log("EXECUTE MOV FOI CHAMADO", { tipo, form });
-    const items = sizes
-      .map((size) => ({ size, qtd: Number(form.grid[size]) || 0 }))
-      .filter((x) => x.qtd > 0);
+    const { items, total: totalLancamento } = mergeItensGrade(
+      sizes.map((size) => ({ size, qtd: Number(form.grid[size]) || 0 }))
+    );
 
     const programacaoNome = String(form.programacao || "").trim();
     const source = tipo === "Pesponto" ? pespontoLancamentos : montagemLancamentos;
@@ -3180,7 +3214,6 @@ const startPrintWithTarget = useCallback((target) => {
         ? items.filter((item) => item.qtd % 12 !== 0)
         : [];
 
-    const totalLancamento = items.reduce((acc, item) => acc + item.qtd, 0);
     const excedeLimite = (tipo === "Pesponto" || tipo === "Montagem") && totalLancamento > 396;
 
     // Acima de 36/num., fora de múltiplo de 12 ou total > 396: pede confirmação (não bloqueia).
@@ -3303,9 +3336,9 @@ const persistLaunch = await persistRowsToSupabase(nextRows);
       if (!ficha) continue;
       const ref = String(ficha.ref || "").trim();
       const cor = String(ficha.cor || "").trim();
-      const items = sizes
-        .map((size) => ({ size, qtd: Number(ficha.sizes?.[size]) || 0 }))
-        .filter((x) => x.qtd > 0);
+      const { items, total: totalLancamento } = mergeItensGrade(
+        sizes.map((size) => ({ size, qtd: Number(ficha.sizes?.[size]) || 0 }))
+      );
       if (!items.length) continue;
 
       const duplicada = source.some(
@@ -3323,7 +3356,6 @@ const persistLaunch = await persistRowsToSupabase(nextRows);
 
       const excedemNumeracao = items.filter((item) => item.qtd > LIMITE_PARES_POR_NUMERACAO);
       const invalidos = items.filter((item) => item.qtd % 12 !== 0);
-      const totalLancamento = items.reduce((acc, item) => acc + item.qtd, 0);
       if (excedemNumeracao.length) {
         avisos.push(
           `${ref} • ${cor}: acima de ${LIMITE_PARES_POR_NUMERACAO}/num. (${excedemNumeracao
@@ -4476,15 +4508,20 @@ const carregarMovimentacoesDoBanco = async () => {
           const size = Number(item.numero) || 0;
           const qtd = Number(item.quantidade) || 0;
           if (size > 0 && qtd > 0) {
-            agrupado[key].items.push({ size, qtd });
-            agrupado[key].total += qtd;
+            const existing = agrupado[key].items.find((x) => Number(x.size) === size);
+            if (existing) existing.qtd += qtd;
+            else agrupado[key].items.push({ size, qtd });
           }
         });
 
-      return Object.values(agrupado).map((lancamento) => ({
-        ...lancamento,
-        items: lancamento.items.sort((a, b) => a.size - b.size),
-      }));
+      return Object.values(agrupado).map((lancamento) => {
+        const { items, total } = mergeItensGrade(lancamento.items);
+        return {
+          ...lancamento,
+          items,
+          total,
+        };
+      });
     };
 
     console.log("TOTAL BRUTO MOVIMENTACOES", data.length);
