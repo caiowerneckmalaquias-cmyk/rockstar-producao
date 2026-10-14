@@ -2799,7 +2799,7 @@ const programacaoMontagem = useMemo(
       }
       esteiraBlingTimerRef.current = window.setTimeout(() => {
         flushEsteiraBlingQueue();
-      }, 45000);
+      }, 8000);
     },
     [flushEsteiraBlingQueue]
   );
