@@ -67,6 +67,7 @@ const PRINT_TARGET_CLASS_MAP = {
   mov: "print-target-mov",
   programacao: "print-target-programacao",
   relatorio: "print-target-relatorio",
+  etiqueta: "print-target-etiqueta",
 };
 
 /** Senha para zerar todo o EST (costura pronta). Defina VITE_SENHA_ZERAR_EST na Vercel para produção. */
@@ -9200,12 +9201,13 @@ const salvarVendasManuais = async () => {
         return (
           <PageShell
             title="Etiquetas"
-            subtitle="Monte o lote com grade (como Pesponto/Montagem) e baixe ZPL 10×6 para a Elgin L42 Pro — contador único por etiqueta."
+            subtitle="Monte o lote com grade, imprima pelo navegador ou baixe ZPL 10×6 — contador único por etiqueta."
           >
             <EtiquetaCaixaPreview
               refsUnicas={refsUnicas}
               coresPorRef={coresPorRef}
               getBlingSigla={getBlingSigla}
+              startPrintWithTarget={startPrintWithTarget}
             />
           </PageShell>
         );
@@ -9345,13 +9347,15 @@ const salvarVendasManuais = async () => {
             padding: 0;
             color: #0f172a;
           }
-          /* Pesponto e Relatório: #print-mov-root / #print-root ficam fora de #app-print-suppress — esconde o painel inteiro. */
+          /* Pesponto, Relatório e Etiquetas: roots fora / portal — esconde o painel inteiro. */
           body.print-target-mov #app-print-suppress,
-          body.print-target-relatorio #app-print-suppress {
+          body.print-target-relatorio #app-print-suppress,
+          body.print-target-etiqueta #app-print-suppress {
             display: none !important;
           }
           body.print-target-mov #print-mov-root,
-          body.print-target-relatorio #print-root {
+          body.print-target-relatorio #print-root,
+          body.print-target-etiqueta #print-etiqueta-root {
             display: block !important;
             visibility: visible !important;
             position: relative !important;
@@ -9363,8 +9367,38 @@ const salvarVendasManuais = async () => {
             color: #0f172a !important;
           }
           body.print-target-mov #print-mov-root *,
-          body.print-target-relatorio #print-root * {
+          body.print-target-relatorio #print-root *,
+          body.print-target-etiqueta #print-etiqueta-root,
+          body.print-target-etiqueta #print-etiqueta-root * {
             visibility: visible !important;
+          }
+          body.print-target-etiqueta {
+            margin: 0 !important;
+            padding: 0 !important;
+            background: white !important;
+          }
+          body.print-target-etiqueta #print-etiqueta-root {
+            width: 100mm !important;
+          }
+          @page etiqueta-caixa {
+            size: 100mm 60mm;
+            margin: 0;
+          }
+          body.print-target-etiqueta #print-etiqueta-root {
+            page: etiqueta-caixa;
+          }
+          body.print-target-etiqueta .etiqueta-print-page {
+            width: 100mm !important;
+            height: 60mm !important;
+            max-width: none !important;
+            box-shadow: none !important;
+            overflow: hidden !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          body.print-target-etiqueta .etiqueta-print-break {
+            break-after: page;
+            page-break-after: always;
           }
           #print-root {
             padding: 24px;

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import JsBarcode from "jsbarcode";
 import { sizes, refAntigaDe } from "./constants/production";
 import { buildBlingSku, normalizeBlingSigla } from "./constants/bling";
@@ -6,6 +7,7 @@ import {
   buildAndDownloadEtiquetaLoteZpl,
   expandLoteToLabels,
   readStoredContador,
+  writeStoredContador,
 } from "./etiquetaZpl";
 
 const makeEmptyGrid = () => Object.fromEntries(sizes.map((s) => [s, 0]));
@@ -84,11 +86,26 @@ function BarcodeSvg({
   return <svg ref={svgRef} className={className} style={{ display: "block", width: "100%" }} />;
 }
 
-function EtiquetaFace({ nomeLinha, corLinha, tamanho, prog, sku, contador }) {
+function EtiquetaFace({ nomeLinha, corLinha, tamanho, prog, sku, contador, variant = "preview" }) {
+  const isPrint = variant === "print";
   return (
     <div
-      className="relative w-full max-w-[560px] overflow-hidden bg-white text-black shadow-[0_8px_28px_rgba(0,0,0,0.18)]"
-      style={{ aspectRatio: "10 / 6", fontFamily: "Arial, Helvetica, sans-serif" }}
+      className={
+        isPrint
+          ? "etiqueta-print-page relative overflow-hidden bg-white text-black"
+          : "relative w-full max-w-[560px] overflow-hidden bg-white text-black shadow-[0_8px_28px_rgba(0,0,0,0.18)]"
+      }
+      style={
+        isPrint
+          ? {
+              width: "100mm",
+              height: "60mm",
+              fontFamily: "Arial, Helvetica, sans-serif",
+              WebkitPrintColorAdjust: "exact",
+              printColorAdjust: "exact",
+            }
+          : { aspectRatio: "10 / 6", fontFamily: "Arial, Helvetica, sans-serif" }
+      }
       aria-label="Preview da etiqueta 10 por 6 centímetros"
     >
       <div className="absolute left-[8%] top-[1.1%] h-[38.3%] w-[22%]">
@@ -132,6 +149,7 @@ export default function EtiquetaCaixaPreview({
   refsUnicas = [],
   coresPorRef = new Map(),
   getBlingSigla = () => "",
+  startPrintWithTarget,
 }) {
   const firstRef = refsUnicas[0] || "RCCA010";
   const firstCores = coresPorRef.get?.(firstRef) || [];
@@ -146,7 +164,10 @@ export default function EtiquetaCaixaPreview({
   const [lote, setLote] = useState([]);
   const [previewSize, setPreviewSize] = useState(34);
   const [zplBusy, setZplBusy] = useState(false);
+  const [printBusy, setPrintBusy] = useState(false);
+  const [printLabels, setPrintLabels] = useState([]);
   const [error, setError] = useState("");
+  const pendingNextContadorRef = useRef("");
 
   const sigla = useMemo(
     () => normalizeBlingSigla(getBlingSigla(ref, cor) || ""),
@@ -267,6 +288,58 @@ export default function EtiquetaCaixaPreview({
       setZplBusy(false);
     }
   };
+
+  const imprimirLote = () => {
+    setError("");
+    if (!lote.length) {
+      setError("Adicione pelo menos uma linha ao lote.");
+      return;
+    }
+    const { labels, nextContador, total } = expandLoteToLabels(lote, contadorInicial);
+    if (!total) {
+      setError("Nenhuma etiqueta no lote (grade vazia ou sem sigla Bling).");
+      return;
+    }
+    pendingNextContadorRef.current = nextContador;
+    setPrintBusy(true);
+    setPrintLabels(labels);
+  };
+
+  useEffect(() => {
+    if (!printLabels.length) return undefined;
+
+    let finished = false;
+    const finishPrint = () => {
+      if (finished) return;
+      finished = true;
+      const next = pendingNextContadorRef.current;
+      if (next) {
+        writeStoredContador(next);
+        setContadorInicial(next);
+      }
+      pendingNextContadorRef.current = "";
+      setPrintLabels([]);
+      setPrintBusy(false);
+    };
+
+    // Aguarda barcodes (JsBarcode) montarem antes do diálogo de impressão.
+    const timer = window.setTimeout(() => {
+      window.addEventListener("afterprint", finishPrint, { once: true });
+      if (typeof startPrintWithTarget === "function") {
+        startPrintWithTarget("etiqueta");
+      } else {
+        document.body.classList.add("print-target-etiqueta");
+        const clearClass = () => document.body.classList.remove("print-target-etiqueta");
+        window.addEventListener("afterprint", clearClass, { once: true });
+        window.print();
+      }
+    }, 350);
+
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("afterprint", finishPrint);
+    };
+  }, [printLabels, startPrintWithTarget]);
 
   const previewContador = useMemo(() => {
     const { labels } = expandLoteToLabels(
@@ -430,22 +503,30 @@ export default function EtiquetaCaixaPreview({
                 {lote.length} linha(s) · {totalLote} etiqueta(s)
               </div>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={limparLote}
-                disabled={!lote.length}
+                disabled={!lote.length || printBusy || zplBusy}
                 className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 disabled:opacity-40"
               >
                 Limpar
               </button>
               <button
                 type="button"
+                onClick={imprimirLote}
+                disabled={printBusy || zplBusy || !lote.length}
+                className="rounded-xl bg-[#8B1E2D] px-3 py-1.5 text-xs font-bold text-white disabled:opacity-40"
+              >
+                {printBusy ? "Preparando…" : "Imprimir"}
+              </button>
+              <button
+                type="button"
                 onClick={baixarZplLote}
-                disabled={zplBusy || !lote.length}
+                disabled={zplBusy || printBusy || !lote.length}
                 className="rounded-xl bg-[#0F172A] px-3 py-1.5 text-xs font-bold text-white disabled:opacity-40"
               >
-                {zplBusy ? "Gerando…" : "Baixar ZPL do lote"}
+                {zplBusy ? "Gerando…" : "Baixar ZPL"}
               </button>
             </div>
           </div>
@@ -523,6 +604,29 @@ export default function EtiquetaCaixaPreview({
           />
         </div>
       </section>
+
+      {typeof document !== "undefined" &&
+        createPortal(
+          <div id="print-etiqueta-root" className="hidden">
+            {printLabels.map((label, idx) => (
+              <div
+                key={`etq-print-${label.contador}-${label.sku}-${idx}`}
+                className={idx < printLabels.length - 1 ? "etiqueta-print-break" : undefined}
+              >
+                <EtiquetaFace
+                  variant="print"
+                  nomeLinha={label.nomeLinha}
+                  corLinha={label.corLinha}
+                  tamanho={label.tamanho}
+                  prog={label.prog}
+                  sku={label.sku}
+                  contador={label.contador}
+                />
+              </div>
+            ))}
+          </div>,
+          document.body
+        )}
     </div>
   );
 }
