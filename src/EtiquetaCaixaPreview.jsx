@@ -46,12 +46,24 @@ function BarcodeSvg({
         textAlign: "center",
         fontOptions: "",
       });
+      // Mantém os dois barcodes na mesma altura visual (base alinhada).
+      svgRef.current.setAttribute("preserveAspectRatio", "xMidYMax meet");
+      svgRef.current.style.width = "100%";
+      svgRef.current.style.height = "100%";
+      svgRef.current.style.display = "block";
     } catch {
       svgRef.current.innerHTML = "";
     }
   }, [safe, height, fontSize, width, displayValue]);
 
-  return <svg ref={svgRef} className={className} />;
+  return (
+    <svg
+      ref={svgRef}
+      className={className}
+      preserveAspectRatio="xMidYMax meet"
+      style={{ width: "100%", height: "100%", display: "block" }}
+    />
+  );
 }
 
 /** Preview visual da etiqueta de caixa 10×6 cm, geometria do PDF TESTE ETIQUETA. */
@@ -216,8 +228,8 @@ export default function EtiquetaCaixaPreview() {
               </span>
             </div>
 
-            {/* Nome + cor — centralizado na faixa entre topo (logo/PROG/nº) e barcodes */}
-            <div className="absolute left-[2%] right-[2%] top-[38%] bottom-[34%] flex flex-col items-center justify-center px-[2%] text-center">
+            {/* Nome + cor — centro vertical entre topo (logo/PROG/nº) e barcodes */}
+            <div className="absolute left-[2%] right-[2%] top-[39.5%] bottom-[35%] flex flex-col items-center justify-center px-[2%] text-center">
               <div className="text-[clamp(15px,3.15vw,21px)] font-bold uppercase leading-tight tracking-tight text-black">
                 {nomeLinha}
               </div>
@@ -226,24 +238,22 @@ export default function EtiquetaCaixaPreview() {
               </div>
             </div>
 
-            {/* Barcodes na mesma altura / mesma linha de base */}
-            <div className="absolute bottom-[5%] left-[10%] right-[9.4%] flex h-[30%] items-end justify-between gap-[8%]">
-              <div className="flex h-full w-[55%] items-end justify-center overflow-hidden">
+            {/* Barcodes na mesma altura (mesma base e mesma altura de barra) */}
+            <div className="absolute bottom-[4.5%] left-[10%] right-[9.4%] grid h-[31%] grid-cols-[1.55fr_1fr] items-end gap-[10%]">
+              <div className="h-full min-w-0">
                 <BarcodeSvg
                   value={sku}
-                  className="block h-auto max-h-full w-full"
-                  height={52}
+                  height={50}
                   fontSize={13}
-                  width={1.55}
+                  width={1.5}
                 />
               </div>
-              <div className="flex h-full w-[32%] items-end justify-center overflow-hidden">
+              <div className="h-full min-w-0">
                 <BarcodeSvg
                   value={contador}
-                  className="block h-auto max-h-full w-full"
-                  height={52}
+                  height={50}
                   fontSize={13}
-                  width={1.35}
+                  width={1.5}
                 />
               </div>
             </div>
