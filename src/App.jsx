@@ -30,6 +30,8 @@ import {
   parseCorSiglaLine,
 } from "./constants/bling";
 import EtiquetaCaixaPreview from "./EtiquetaCaixaPreview";
+import EsteiraAcabamento from "./EsteiraAcabamento";
+import { confirmarBipsNoBanco } from "./etiquetasCaixaDb";
 
 /** Boost para fichas de Montagem das refs antigas (gastar EST legado primeiro). */
 const PRIORIDADE_BOOST_REF_ANTIGA = 500000;
@@ -2698,28 +2700,124 @@ const programacaoMontagem = useMemo(
     }
   };
 
-  const executarPushEstoqueBling = async () => {
-    if (blingSyncBusy) return;
-    setBlingSyncBusy("push");
-    setBlingFeedback("Subindo estoque para o Bling…");
+  const executarPushEstoqueBling = async (skuFilter) => {
+    if (blingSyncBusy && !skuFilter) return { ok: false, error: "Sync Bling ocupado." };
+    const skus = Array.isArray(skuFilter)
+      ? [...new Set(skuFilter.map((s) => String(s || "").trim().toUpperCase()).filter(Boolean))]
+      : null;
+    if (!skuFilter) {
+      setBlingSyncBusy("push");
+      setBlingFeedback("Subindo estoque para o Bling…");
+    }
     try {
       const res = await fetch("/api/bling/push-estoque", {
         method: "POST",
         credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: skus?.length ? JSON.stringify({ skus }) : JSON.stringify({}),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setBlingFeedback(data.error || "Falha ao subir estoque");
-        return;
+        const errMsg = data.error || "Falha ao subir estoque";
+        if (!skuFilter) setBlingFeedback(errMsg);
+        return { ok: false, error: errMsg, data };
       }
-      setBlingFeedback(
-        `Subido: ${data.pushed || 0} atualizações · sem sigla ${data.semSigla || 0} · não achados ${data.notFound || 0}`
-      );
+      if (!skuFilter) {
+        setBlingFeedback(
+          `Subido: ${data.pushed || 0} atualizações · sem sigla ${data.semSigla || 0} · não achados ${data.notFound || 0}`
+        );
+      }
+      return { ok: true, error: null, data };
     } catch (err) {
-      setBlingFeedback(err?.message || "Erro de rede ao subir estoque");
+      const errMsg = err?.message || "Erro de rede ao subir estoque";
+      if (!skuFilter) setBlingFeedback(errMsg);
+      return { ok: false, error: errMsg };
     } finally {
-      setBlingSyncBusy("");
+      if (!skuFilter) setBlingSyncBusy("");
     }
+  };
+
+  /**
+   * Esteira opção A: bipados confirmados fazem M → PA e push Bling só dos SKUs do lote.
+   * @param {Array<{contador:string, sku:string, ref:string, cor:string, tamanho:number}>} items
+   */
+  const confirmarLoteEsteira = async (items) => {
+    const lista = Array.isArray(items) ? items : [];
+    if (!lista.length) return { ok: false, error: "Lote vazio." };
+
+    const grouped = new Map();
+    lista.forEach((item) => {
+      const ref = String(item.ref || "").trim();
+      const cor = String(item.cor || "").trim();
+      const tamanho = Number(item.tamanho) || 0;
+      if (!ref || !cor || !tamanho) return;
+      const key = `${ref}__${cor}__${tamanho}`;
+      const prev = grouped.get(key) || { ref, cor, tamanho, qtd: 0, sku: item.sku };
+      prev.qtd += 1;
+      grouped.set(key, prev);
+    });
+
+    if (!grouped.size) return { ok: false, error: "Nenhum item válido no lote." };
+
+    const nextRows = rows.map((row) => ({
+      ...row,
+      data: cloneRowDataDeep(row),
+    }));
+
+    for (const g of grouped.values()) {
+      const row = nextRows.find((r) => r.ref === g.ref && r.cor === g.cor);
+      if (!row) {
+        return {
+          ok: false,
+          error: `Produto não encontrado no estoque: ${g.ref} • ${g.cor}.`,
+        };
+      }
+      const atual = row.data[g.tamanho] || { pa: 0, est: 0, m: 0, p: 0 };
+      const disponivel = Number(atual.m) || 0;
+      if (disponivel < g.qtd) {
+        return {
+          ok: false,
+          error: `Saldo em Montagem insuficiente para ${g.ref} • ${g.cor} nº ${g.tamanho} (M=${disponivel}, bipado=${g.qtd}). Finalize a montagem e confira o estoque.`,
+        };
+      }
+      row.data[g.tamanho] = {
+        ...atual,
+        m: disponivel - g.qtd,
+        pa: (Number(atual.pa) || 0) + g.qtd,
+      };
+    }
+
+    const persist = await persistRowsToSupabase(nextRows);
+    if (!persist.ok) {
+      return {
+        ok: false,
+        error: `Falha ao salvar estoque: ${persist.error?.message || persist.error || "erro"}`,
+      };
+    }
+
+    const contadores = lista.map((i) => i.contador).filter(Boolean);
+    const mark = await confirmarBipsNoBanco(contadores);
+    if (!mark.ok) {
+      await persistRowsToSupabase(rows);
+      return {
+        ok: false,
+        error: `Estoque revertido: falha ao marcar bips confirmados (${mark.error?.message || mark.error}).`,
+      };
+    }
+
+    setRows(nextRows);
+
+    const skus = [...new Set(lista.map((i) => String(i.sku || "").trim().toUpperCase()).filter(Boolean))];
+    const push = await executarPushEstoqueBling(skus);
+    const blingNote = push.ok
+      ? `Bling: ${push.data?.pushed || 0} upd.`
+      : `Bling falhou: ${push.error || "erro"} (PA já subiu no Rock Star).`;
+
+    return {
+      ok: true,
+      total: lista.length,
+      message: `Confirmado: ${lista.length} par(es) M → PA. ${blingNote}`,
+    };
   };
 
   const carregarStatusBling = useCallback(async () => {
@@ -3056,17 +3154,16 @@ const startPrintWithTarget = useCallback((target) => {
             est: (atual.est || 0) + item.qtd,
           };
         } else {
+          // Opção A (esteira): finalizar Montagem só valida saldo em M e marca status.
+          // PA sobe apenas ao confirmar lote na Esteira (bip do sequencial).
           const disponivel = atual.m || 0;
           if (disponivel < item.qtd) {
             return {
               error: `Não dá para finalizar: na montagem faltam pares em ${lancamento.ref} • ${lancamento.cor}, num. ${item.size} (em aberto: ${disponivel}, necessário: ${item.qtd}).`,
             };
           }
-          row.data[item.size] = {
-            ...atual,
-            m: disponivel - item.qtd,
-            pa: (atual.pa || 0) + item.qtd,
-          };
+          // Sem alteração de estoque — pares permanecem em M até a esteira.
+          row.data[item.size] = { ...atual };
         }
       }
     }
@@ -3118,10 +3215,11 @@ const startPrintWithTarget = useCallback((target) => {
             est: Math.max(0, (atual.est || 0) - item.qtd),
           };
         } else {
+          // Opção A: finalizada ainda está em M (não foi para PA). Reverte M → EST.
           nextData[item.size] = {
             ...atual,
             est: (atual.est || 0) + item.qtd,
-            pa: Math.max(0, (atual.pa || 0) - item.qtd),
+            m: Math.max(0, (atual.m || 0) - item.qtd),
           };
         }
       });
@@ -3629,7 +3727,10 @@ const persistLaunch = await persistRowsToSupabase(nextRows);
       tipo,
       programacao,
       titulo: `Finalizar programação em ${tipo}`,
-      mensagem: `Deseja realmente finalizar a programação "${programacao}"? Ao confirmar, o estoque será atualizado.`,
+      mensagem:
+        tipo === "Montagem"
+          ? `Finalizar "${programacao}"? Os pares continuam em M; o PA sobe só na Esteira (bip do sequencial).`
+          : `Deseja realmente finalizar a programação "${programacao}"? Ao confirmar, o estoque será atualizado.`,
     });
   };
 
@@ -3640,7 +3741,10 @@ const persistLaunch = await persistRowsToSupabase(nextRows);
       tipo,
       lancamento,
       titulo: `Finalizar ${lancamento.ref} • ${lancamento.cor}`,
-      mensagem: `Finalizar só esta cor da programação "${lancamento.programacao}"? As outras cores com o mesmo nome continuam em aberto.`,
+      mensagem:
+        tipo === "Montagem"
+          ? `Finalizar só esta cor de "${lancamento.programacao}"? Pares ficam em M até a Esteira confirmar o bip.`
+          : `Finalizar só esta cor da programação "${lancamento.programacao}"? As outras cores com o mesmo nome continuam em aberto.`,
     });
   };
 
@@ -3801,7 +3905,9 @@ const persistLaunch = await persistRowsToSupabase(nextRows);
     const persist = await persistRowsToSupabase(nextRows);
     if (!persist.ok) {
       alert(
-        `Não foi possível salvar o estoque no Supabase. A Costura Pronta / PA não será atualizada até o salvamento funcionar.\n\n${persist.error?.message || persist.error || "Erro desconhecido"}`
+        tipo === "Montagem"
+          ? `Não foi possível salvar a validação no Supabase.\n\n${persist.error?.message || persist.error || "Erro desconhecido"}`
+          : `Não foi possível salvar o estoque no Supabase. A Costura Pronta / PA não será atualizada até o salvamento funcionar.\n\n${persist.error?.message || persist.error || "Erro desconhecido"}`
       );
       return;
     }
@@ -3858,7 +3964,9 @@ const persistLaunch = await persistRowsToSupabase(nextRows);
     const persist = await persistRowsToSupabase(nextRows);
     if (!persist.ok) {
       alert(
-        `Não foi possível salvar o estoque no Supabase. A Costura Pronta / PA não será atualizada até o salvamento funcionar.\n\n${persist.error?.message || persist.error || "Erro desconhecido"}`
+        tipo === "Montagem"
+          ? `Não foi possível salvar a validação no Supabase.\n\n${persist.error?.message || persist.error || "Erro desconhecido"}`
+          : `Não foi possível salvar o estoque no Supabase. A Costura Pronta / PA não será atualizada até o salvamento funcionar.\n\n${persist.error?.message || persist.error || "Erro desconhecido"}`
       );
       return;
     }
@@ -9211,6 +9319,15 @@ const salvarVendasManuais = async () => {
             />
           </PageShell>
         );
+      case "Esteira":
+        return (
+          <PageShell
+            title="Esteira / Acabamento"
+            subtitle="Bipe o sequencial da caixa (direita). 1 bip = 1 par. Confirmar lote sobe PA + Bling (opção A)."
+          >
+            <EsteiraAcabamento onConfirmLote={confirmarLoteEsteira} />
+          </PageShell>
+        );
       case "Programação do Dia":
         return renderProgramacaoDia();
       case "Relatório de Produção":
@@ -9248,6 +9365,7 @@ const salvarVendasManuais = async () => {
     "Sugestoes": "Planejamento",
     "Gerador de Fichas": "Planejamento",
     "Etiquetas": "Operação",
+    "Esteira": "Operação",
     "Programação do Dia": "Execução",
     "Relatório de Produção": "Relatórios",
   };

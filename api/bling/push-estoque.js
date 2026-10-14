@@ -18,6 +18,15 @@ export default async function handler(req, res) {
   }
 
   try {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const skuFilter = Array.isArray(body.skus)
+      ? new Set(
+          body.skus
+            .map((s) => String(s || "").trim().toUpperCase())
+            .filter(Boolean)
+        )
+      : null;
+
     const { accessToken, conexao } = await getValidAccessToken();
     const depositoPaId = conexao.deposito_pa_id;
     const depositoEstId = conexao.deposito_est_id;
@@ -52,6 +61,7 @@ export default async function handler(req, res) {
     const skuCache = new Map();
     let pushed = 0;
     let notFound = 0;
+    let skippedFilter = 0;
     const samples = [];
 
     for (const prod of comSigla) {
@@ -62,6 +72,11 @@ export default async function handler(req, res) {
       for (const size of SIZES) {
         const sku = buildBlingSku(ref, sigla, size);
         if (!sku) continue;
+
+        if (skuFilter && !skuFilter.has(sku)) {
+          skippedFilter += 1;
+          continue;
+        }
 
         let produtoBling = skuCache.get(sku);
         if (produtoBling === undefined) {
@@ -123,6 +138,8 @@ export default async function handler(req, res) {
       pushed,
       semSigla,
       notFound,
+      skippedFilter,
+      filtered: Boolean(skuFilter),
       stockOffset: STOCK_OFFSET,
       samples,
     });
