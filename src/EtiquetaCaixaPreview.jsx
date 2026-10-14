@@ -200,11 +200,11 @@ export default function EtiquetaCaixaPreview() {
             </div>
 
             {/* PROG empilhado — faixa central-topo do PDF */}
-            <div className="absolute left-[32.7%] top-[12.9%] flex h-[20.9%] w-[32.5%] flex-col items-center justify-center leading-none">
-              <div className="text-[clamp(12px,2.5vw,16px)] font-bold uppercase tracking-wide text-black">
+            <div className="absolute left-[32.7%] top-[10.5%] flex h-[24%] w-[32.5%] flex-col items-center justify-center leading-none">
+              <div className="text-[clamp(15px,3.1vw,20px)] font-bold uppercase tracking-wide text-black">
                 PROG:
               </div>
-              <div className="mt-[0.35em] text-[clamp(13px,2.7vw,18px)] font-bold tabular-nums tracking-tight text-black">
+              <div className="mt-[0.3em] text-[clamp(16px,3.3vw,22px)] font-bold tabular-nums tracking-tight text-black">
                 {prog || "—"}
               </div>
             </div>
@@ -217,11 +217,11 @@ export default function EtiquetaCaixaPreview() {
             </div>
 
             {/* Nome + cor — faixa média do PDF (~38–58% do topo), centralizado */}
-            <div className="absolute left-[1.7%] top-[37.8%] flex h-[20.9%] w-[96.5%] flex-col items-center justify-center px-[2%] text-center">
-              <div className="text-[clamp(12px,2.55vw,16px)] font-bold uppercase leading-tight tracking-tight text-black">
+            <div className="absolute left-[1.7%] top-[36.5%] flex h-[22.5%] w-[96.5%] flex-col items-center justify-center px-[2%] text-center">
+              <div className="text-[clamp(15px,3.15vw,21px)] font-bold uppercase leading-tight tracking-tight text-black">
                 {nomeLinha}
               </div>
-              <div className="mt-[0.12em] text-[clamp(12px,2.55vw,16px)] font-bold uppercase leading-tight tracking-tight text-black">
+              <div className="mt-[0.12em] text-[clamp(15px,3.15vw,21px)] font-bold uppercase leading-tight tracking-tight text-black">
                 {corLinha}
               </div>
             </div>
