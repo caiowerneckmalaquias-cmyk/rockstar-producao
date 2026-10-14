@@ -29,6 +29,7 @@ import {
   normalizeBlingSigla,
   parseCorSiglaLine,
 } from "./constants/bling";
+import EtiquetaCaixaPreview from "./EtiquetaCaixaPreview";
 
 /** Boost para fichas de Montagem das refs antigas (gastar EST legado primeiro). */
 const PRIORIDADE_BOOST_REF_ANTIGA = 500000;
@@ -9195,6 +9196,15 @@ const salvarVendasManuais = async () => {
         return renderSugestoes();
       case "Gerador de Fichas":
         return renderFichas();
+      case "Etiquetas":
+        return (
+          <PageShell
+            title="Etiquetas"
+            subtitle="Preview da etiqueta de caixa 10×6 cm (P&B). Depois validamos o layout e geramos ZPL para a Elgin L42 Pro."
+          >
+            <EtiquetaCaixaPreview />
+          </PageShell>
+        );
       case "Programação do Dia":
         return renderProgramacaoDia();
       case "Relatório de Produção":
@@ -9231,6 +9241,7 @@ const salvarVendasManuais = async () => {
     "Vendas": "Planejamento",
     "Sugestoes": "Planejamento",
     "Gerador de Fichas": "Planejamento",
+    "Etiquetas": "Operação",
     "Programação do Dia": "Execução",
     "Relatório de Produção": "Relatórios",
   };
