@@ -3,12 +3,12 @@ import JsBarcode from "jsbarcode";
 import { sizes } from "./constants/production";
 import { buildBlingSku, normalizeBlingSigla } from "./constants/bling";
 
-function RockStarLogoBw({ className = "" }) {
+function RockStarLogo({ className = "" }) {
   return (
     <img
       src="/logo-rockstar-etiqueta.png"
       alt="Rock Star"
-      className={`h-auto w-full object-contain grayscale contrast-150 brightness-90 ${className}`}
+      className={`h-full w-full object-contain ${className}`}
       draggable={false}
     />
   );
@@ -42,7 +42,9 @@ function BarcodeSvg({
         fontSize,
         margin: 0,
         textMargin: 2,
-        fontOptions: "bold",
+        font: "Arial",
+        textAlign: "center",
+        fontOptions: "",
       });
     } catch {
       svgRef.current.innerHTML = "";
@@ -52,7 +54,7 @@ function BarcodeSvg({
   return <svg ref={svgRef} className={className} />;
 }
 
-/** Preview visual da etiqueta de caixa 10×6 cm (P&B), fiel ao PDF TESTE ETIQUETA. */
+/** Preview visual da etiqueta de caixa 10×6 cm, geometria do PDF TESTE ETIQUETA. */
 export default function EtiquetaCaixaPreview() {
   const [ref, setRef] = useState("RCCA010");
   const [sigla, setSigla] = useState("BC");
@@ -175,7 +177,7 @@ export default function EtiquetaCaixaPreview() {
         <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Preview 10 × 6 cm</div>
-            <p className="mt-1 text-sm text-slate-500">Layout alinhado ao PDF TESTE ETIQUETA (P&B · sem ZPL ainda).</p>
+            <p className="mt-1 text-sm text-slate-500">Layout idêntico ao PDF TESTE ETIQUETA (sem ZPL ainda).</p>
           </div>
           <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-semibold text-slate-600">
             Elgin L42 Pro · Code 128
@@ -183,64 +185,67 @@ export default function EtiquetaCaixaPreview() {
         </div>
 
         <div className="flex justify-center overflow-x-auto rounded-[20px] bg-[#e8e8e8] p-4 sm:p-10">
-          {/* Etiqueta: proporção 10×6, sem borda grossa de “card” */}
+          {/*
+            Geometria do PDF MediaBox 283.50 × 170.25 pt (10×6 cm).
+            Posições em % da etiqueta (origem topo-esquerda).
+          */}
           <div
-            className="w-full max-w-[560px] bg-white text-black shadow-[0_8px_28px_rgba(0,0,0,0.18)]"
-            style={{ aspectRatio: "10 / 6" }}
+            className="relative w-full max-w-[560px] overflow-hidden bg-white text-black shadow-[0_8px_28px_rgba(0,0,0,0.18)]"
+            style={{ aspectRatio: "10 / 6", fontFamily: "Arial, Helvetica, sans-serif" }}
             aria-label="Preview da etiqueta 10 por 6 centímetros"
           >
-            <div className="box-border flex h-full flex-col px-[3.2%] pb-[2.2%] pt-[2.8%]">
-              {/* Topo: logo + título em 2 linhas */}
-              <div className="flex items-start gap-[2.5%]">
-                <div className="w-[16%] shrink-0 pt-[0.5%]">
-                  <RockStarLogoBw />
-                </div>
-                <div className="min-w-0 flex-1 pt-[0.5%]">
-                  <div className="text-[clamp(11px,2.35vw,15px)] font-bold uppercase leading-[1.15] tracking-tight text-black">
-                    {nomeLinha}
-                  </div>
-                  <div className="text-[clamp(11px,2.35vw,15px)] font-bold uppercase leading-[1.15] tracking-tight text-black">
-                    {corLinha}
-                  </div>
-                </div>
-              </div>
+            {/* Logo — PDF: x8% y1% w22% h38% */}
+            <div className="absolute left-[8%] top-[1.1%] h-[38.3%] w-[22%]">
+              <RockStarLogo />
+            </div>
 
-              {/* Meio: tamanho grande + PROG empilhado */}
-              <div className="mt-[1%] flex min-h-0 flex-1 items-center gap-2 pl-[2%]">
-                <div className="flex-1 text-[clamp(56px,12vw,96px)] font-black leading-none tracking-tight tabular-nums text-black">
-                  {tamanho}
-                </div>
-                <div className="shrink-0 self-center pr-[2%] text-right leading-none">
-                  <div className="text-[clamp(11px,2.1vw,14px)] font-bold uppercase tracking-wide text-black">
-                    PROG:
-                  </div>
-                  <div className="mt-1 text-[clamp(14px,2.6vw,18px)] font-black tabular-nums tracking-tight text-black">
-                    {prog || "—"}
-                  </div>
-                </div>
+            {/* PROG empilhado — faixa central-topo do PDF */}
+            <div className="absolute left-[32.7%] top-[12.9%] flex h-[20.9%] w-[32.5%] flex-col items-center justify-center leading-none">
+              <div className="text-[clamp(12px,2.5vw,16px)] font-bold uppercase tracking-wide text-black">
+                PROG:
               </div>
+              <div className="mt-[0.35em] text-[clamp(13px,2.7vw,18px)] font-bold tabular-nums tracking-tight text-black">
+                {prog || "—"}
+              </div>
+            </div>
 
-              {/* Base: SKU largo + contador compacto */}
-              <div className="mt-auto grid grid-cols-[1.35fr_0.75fr] items-end gap-[3%] px-[0.5%]">
-                <div className="min-w-0 overflow-hidden">
-                  <BarcodeSvg
-                    value={sku}
-                    className="mx-auto block h-auto max-h-[72px] w-full"
-                    height={56}
-                    fontSize={13}
-                    width={1.55}
-                  />
-                </div>
-                <div className="min-w-0 overflow-hidden pb-[1%]">
-                  <BarcodeSvg
-                    value={contador}
-                    className="mx-auto block h-auto max-h-[56px] w-[92%]"
-                    height={42}
-                    fontSize={11}
-                    width={1.25}
-                  />
-                </div>
+            {/* Tamanho branco em caixa preta — PDF: x72% y3% w22% h33% */}
+            <div className="absolute left-[72%] top-[3.3%] flex h-[33.3%] w-[22%] items-center justify-center bg-black">
+              <span className="text-[clamp(40px,9.5vw,72px)] font-bold leading-none tabular-nums tracking-tight text-white">
+                {tamanho}
+              </span>
+            </div>
+
+            {/* Nome + cor — faixa média do PDF (~38–58% do topo), centralizado */}
+            <div className="absolute left-[1.7%] top-[37.8%] flex h-[20.9%] w-[96.5%] flex-col items-center justify-center px-[2%] text-center">
+              <div className="text-[clamp(12px,2.55vw,16px)] font-bold uppercase leading-tight tracking-tight text-black">
+                {nomeLinha}
               </div>
+              <div className="mt-[0.12em] text-[clamp(12px,2.55vw,16px)] font-bold uppercase leading-tight tracking-tight text-black">
+                {corLinha}
+              </div>
+            </div>
+
+            {/* SKU barcode — PDF: x10% y61% w41% h33% */}
+            <div className="absolute bottom-[5.9%] left-[10%] flex h-[33.3%] w-[41.3%] items-end justify-center overflow-hidden">
+              <BarcodeSvg
+                value={sku}
+                className="block h-auto max-h-full w-full"
+                height={58}
+                fontSize={14}
+                width={1.6}
+              />
+            </div>
+
+            {/* Contador barcode — PDF: x67% y61% w24% h32% */}
+            <div className="absolute bottom-[7.6%] left-[66.8%] flex h-[31.6%] w-[23.8%] items-end justify-center overflow-hidden">
+              <BarcodeSvg
+                value={contador}
+                className="block h-auto max-h-full w-full"
+                height={48}
+                fontSize={12}
+                width={1.35}
+              />
             </div>
           </div>
         </div>
