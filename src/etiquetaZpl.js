@@ -110,14 +110,20 @@ export function buildEtiquetaCaixaZpl(data) {
   const sizeW = pctX(22);
   const sizeH = pctY(33.3);
   const progX = pctX(32.7);
-  const progY = pctY(14);
+  const progY = pctY(12);
   const progW = pctX(32.5);
-  const titleY1 = pctY(46);
-  const titleY2 = pctY(53);
+  const titleY1 = pctY(44);
+  const titleY2 = pctY(52.5);
   const barY = pctY(66);
   const barH = pctY(22);
   const skuX = pctX(10);
   const ctrX = pctX(66.8);
+
+  // Fontes maiores (203 dpi) — alinhadas ao visual da web / PDF.
+  const progLabelFont = 52;
+  const progValueFont = 56;
+  const titleFont = 40;
+  const sizeFont = tamanho.length >= 3 ? 90 : 120;
 
   const lines = [];
   lines.push("^XA");
@@ -138,17 +144,26 @@ export function buildEtiquetaCaixaZpl(data) {
     lines.push(`^FO${logoX},${logoY + 60}^A0N,36,36^FDSTAR^FS`);
   }
 
-  lines.push(`^FO${progX},${progY}^A0N,32,32^FB${progW},1,0,C,0^FDPROG:^FS`);
-  lines.push(`^FO${progX},${progY + 40}^A0N,36,36^FB${progW},1,0,C,0^FD${prog || "-"}^FS`);
+  lines.push(
+    `^FO${progX},${progY}^A0N,${progLabelFont},${progLabelFont}^FB${progW},1,0,C,0^FDPROG:^FS`
+  );
+  lines.push(
+    `^FO${progX},${progY + progLabelFont + 6}^A0N,${progValueFont},${progValueFont}^FB${progW},1,0,C,0^FD${prog || "-"}^FS`
+  );
 
+  // Caixa preta + numeração branca centralizada (H via ^FB, V via offset).
   lines.push(`^FO${sizeX},${sizeY}^GB${sizeW},${sizeH},${sizeH}^FS`);
-  const sizeFont = tamanho.length >= 3 ? 70 : 100;
-  const sizeTextX = sizeX + Math.round(sizeW * 0.12);
-  const sizeTextY = sizeY + Math.round(sizeH * 0.22);
-  lines.push(`^FO${sizeTextX},${sizeTextY}^FR^A0N,${sizeFont},${sizeFont}^FD${tamanho}^FS`);
+  const sizeTextY = sizeY + Math.max(0, Math.round((sizeH - sizeFont) / 2));
+  lines.push(
+    `^FO${sizeX},${sizeTextY}^FR^A0N,${sizeFont},${sizeFont}^FB${sizeW},1,0,C,0^FD${tamanho}^FS`
+  );
 
-  lines.push(`^FO0,${titleY1}^A0N,28,28^FB${ETIQUETA_LARGURA_DOTS},1,0,C,0^FD${nomeLinha || "-"}^FS`);
-  lines.push(`^FO0,${titleY2}^A0N,28,28^FB${ETIQUETA_LARGURA_DOTS},1,0,C,0^FD${corLinha || "-"}^FS`);
+  lines.push(
+    `^FO0,${titleY1}^A0N,${titleFont},${titleFont}^FB${ETIQUETA_LARGURA_DOTS},1,0,C,0^FD${nomeLinha || "-"}^FS`
+  );
+  lines.push(
+    `^FO0,${titleY2}^A0N,${titleFont},${titleFont}^FB${ETIQUETA_LARGURA_DOTS},1,0,C,0^FD${corLinha || "-"}^FS`
+  );
 
   lines.push(`^BY2,2,${barH}`);
   lines.push(`^FO${skuX},${barY}^BCN,${barH},Y,N,N^FD${sku}^FS`);
