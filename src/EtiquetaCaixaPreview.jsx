@@ -216,8 +216,8 @@ export default function EtiquetaCaixaPreview() {
               </span>
             </div>
 
-            {/* Nome + cor — faixa média do PDF (~38–58% do topo), centralizado */}
-            <div className="absolute left-[1.7%] top-[36.5%] flex h-[22.5%] w-[96.5%] flex-col items-center justify-center px-[2%] text-center">
+            {/* Nome + cor — centralizado na faixa entre topo (logo/PROG/nº) e barcodes */}
+            <div className="absolute left-[2%] right-[2%] top-[38%] bottom-[34%] flex flex-col items-center justify-center px-[2%] text-center">
               <div className="text-[clamp(15px,3.15vw,21px)] font-bold uppercase leading-tight tracking-tight text-black">
                 {nomeLinha}
               </div>
@@ -226,26 +226,26 @@ export default function EtiquetaCaixaPreview() {
               </div>
             </div>
 
-            {/* SKU barcode — PDF: x10% y61% w41% h33% */}
-            <div className="absolute bottom-[5.9%] left-[10%] flex h-[33.3%] w-[41.3%] items-end justify-center overflow-hidden">
-              <BarcodeSvg
-                value={sku}
-                className="block h-auto max-h-full w-full"
-                height={58}
-                fontSize={14}
-                width={1.6}
-              />
-            </div>
-
-            {/* Contador barcode — PDF: x67% y61% w24% h32% */}
-            <div className="absolute bottom-[7.6%] left-[66.8%] flex h-[31.6%] w-[23.8%] items-end justify-center overflow-hidden">
-              <BarcodeSvg
-                value={contador}
-                className="block h-auto max-h-full w-full"
-                height={48}
-                fontSize={12}
-                width={1.35}
-              />
+            {/* Barcodes na mesma altura / mesma linha de base */}
+            <div className="absolute bottom-[5%] left-[10%] right-[9.4%] flex h-[30%] items-end justify-between gap-[8%]">
+              <div className="flex h-full w-[55%] items-end justify-center overflow-hidden">
+                <BarcodeSvg
+                  value={sku}
+                  className="block h-auto max-h-full w-full"
+                  height={52}
+                  fontSize={13}
+                  width={1.55}
+                />
+              </div>
+              <div className="flex h-full w-[32%] items-end justify-center overflow-hidden">
+                <BarcodeSvg
+                  value={contador}
+                  className="block h-auto max-h-full w-full"
+                  height={52}
+                  fontSize={13}
+                  width={1.35}
+                />
+              </div>
             </div>
           </div>
         </div>
