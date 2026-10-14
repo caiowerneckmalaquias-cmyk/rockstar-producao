@@ -2738,7 +2738,8 @@ const programacaoMontagem = useMemo(
   };
 
   /**
-   * Esteira opção A: bipados confirmados fazem M → PA e push Bling só dos SKUs do lote.
+   * Esteira: bipados confirmados sobem PA (+ Bling) mesmo sem ficha/saldo em M
+   * (devolução, montagem sem ficha). Se houver M, baixa só o disponível.
    * @param {Array<{contador:string, sku:string, ref:string, cor:string, tamanho:number}>} items
    */
   const confirmarLoteEsteira = async (items) => {
@@ -2764,25 +2765,25 @@ const programacaoMontagem = useMemo(
       data: cloneRowDataDeep(row),
     }));
 
+    let baixouDeM = 0;
+    let soPa = 0;
+
     for (const g of grouped.values()) {
       const row = nextRows.find((r) => r.ref === g.ref && r.cor === g.cor);
       if (!row) {
         return {
           ok: false,
-          error: `Produto não encontrado no estoque: ${g.ref} • ${g.cor}.`,
+          error: `Produto não encontrado no estoque: ${g.ref} • ${g.cor}. Cadastre a cor no Controle Geral.`,
         };
       }
       const atual = row.data[g.tamanho] || { pa: 0, est: 0, m: 0, p: 0 };
-      const disponivel = Number(atual.m) || 0;
-      if (disponivel < g.qtd) {
-        return {
-          ok: false,
-          error: `Saldo em Montagem insuficiente para ${g.ref} • ${g.cor} nº ${g.tamanho} (M=${disponivel}, bipado=${g.qtd}). Finalize a montagem e confira o estoque.`,
-        };
-      }
+      const disponivelM = Math.max(0, Number(atual.m) || 0);
+      const tirarDeM = Math.min(disponivelM, g.qtd);
+      baixouDeM += tirarDeM;
+      soPa += g.qtd - tirarDeM;
       row.data[g.tamanho] = {
         ...atual,
-        m: disponivel - g.qtd,
+        m: disponivelM - tirarDeM,
         pa: (Number(atual.pa) || 0) + g.qtd,
       };
     }
@@ -2813,10 +2814,17 @@ const programacaoMontagem = useMemo(
       ? `Bling: ${push.data?.pushed || 0} upd.`
       : `Bling falhou: ${push.error || "erro"} (PA já subiu no Rock Star).`;
 
+    const origemNote =
+      soPa > 0 && baixouDeM > 0
+        ? `${baixouDeM} de M + ${soPa} direto no PA.`
+        : soPa > 0
+          ? `${soPa} direto no PA (sem M / devolução).`
+          : `${baixouDeM} de M → PA.`;
+
     return {
       ok: true,
       total: lista.length,
-      message: `Confirmado: ${lista.length} par(es) M → PA. ${blingNote}`,
+      message: `Confirmado: ${lista.length} par(es) → PA (${origemNote}) ${blingNote}`,
     };
   };
 
@@ -9323,7 +9331,7 @@ const salvarVendasManuais = async () => {
         return (
           <PageShell
             title="Esteira / Acabamento"
-            subtitle="Bipe o sequencial da caixa (direita). 1 bip = 1 par. Confirmar lote sobe PA + Bling (opção A)."
+            subtitle="Bipe o sequencial da caixa (direita). 1 bip = 1 par. Confirmar sobe PA + Bling — não exige ficha/saldo em M."
           >
             <EsteiraAcabamento onConfirmLote={confirmarLoteEsteira} />
           </PageShell>

@@ -7,7 +7,8 @@ import {
 
 /**
  * Esteira / Acabamento — bip do contador sequencial (1 bip = 1 par).
- * Anti-duplicidade no Supabase; confirmar lote aplica M→PA + Bling (via callback).
+ * Anti-duplicidade no Supabase; confirmar lote sobe PA (+ Bling).
+ * Não exige ficha/saldo em M (devolução / montagem sem ficha).
  */
 export default function EsteiraAcabamento({ onConfirmLote }) {
   const inputRef = useRef(null);
@@ -142,7 +143,7 @@ export default function EsteiraAcabamento({ onConfirmLote }) {
     }
     if (
       !window.confirm(
-        `Confirmar ${sessao.length} par(es)?\nIsso faz M → PA no Rock Star e sobe esses SKUs no Bling.`
+        `Confirmar ${sessao.length} par(es)?\nSobe PA no Rock Star (baixa M só se houver) e envia esses SKUs ao Bling.`
       )
     ) {
       return;
@@ -261,7 +262,7 @@ export default function EsteiraAcabamento({ onConfirmLote }) {
             <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
               Resumo por SKU
             </div>
-            <p className="mt-1 text-sm text-slate-500">Agrupado para a baixa M → PA.</p>
+            <p className="mt-1 text-sm text-slate-500">Agrupado para subir PA (M só se houver saldo).</p>
           </div>
         </div>
 
