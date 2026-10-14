@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import JsBarcode from "jsbarcode";
 import { sizes } from "./constants/production";
 import { buildBlingSku, normalizeBlingSigla } from "./constants/bling";
+import { buildAndDownloadEtiquetaZpl } from "./etiquetaZpl";
 
 function RockStarLogo({ className = "" }) {
   return (
@@ -71,6 +72,9 @@ export default function EtiquetaCaixaPreview() {
   const [tamanho, setTamanho] = useState(34);
   const [prog, setProg] = useState("26-215");
   const [contador, setContador] = useState("0487692");
+  const [copias, setCopias] = useState(1);
+  const [zplBusy, setZplBusy] = useState(false);
+  const [zplError, setZplError] = useState("");
 
   const sku = useMemo(
     () => buildBlingSku(ref, sigla, tamanho),
@@ -86,6 +90,34 @@ export default function EtiquetaCaixaPreview() {
     () => String(cor || "").trim().toUpperCase() || "—",
     [cor]
   );
+
+  const baixarZpl = async () => {
+    if (!sku) {
+      setZplError("Informe referência, sigla e tamanho para gerar o SKU.");
+      return;
+    }
+    if (!String(contador || "").trim()) {
+      setZplError("Informe o contador (código da direita).");
+      return;
+    }
+    setZplBusy(true);
+    setZplError("");
+    try {
+      await buildAndDownloadEtiquetaZpl({
+        nomeLinha,
+        corLinha,
+        tamanho,
+        prog,
+        sku,
+        contador,
+        copias,
+      });
+    } catch (err) {
+      setZplError(err?.message || "Falha ao gerar o ZPL.");
+    } finally {
+      setZplBusy(false);
+    }
+  };
 
   const inputClass =
     "w-full rounded-2xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-800 outline-none focus:border-[#8B1E2D] focus:ring-2 focus:ring-[#8B1E2D]/15";
@@ -179,16 +211,41 @@ export default function EtiquetaCaixaPreview() {
             {sku || "—"}
           </div>
         </div>
+
+        <label className="block space-y-1">
+          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Cópias (ZPL)</span>
+          <input
+            className={inputClass}
+            type="number"
+            min={1}
+            max={9999}
+            value={copias}
+            onChange={(e) => setCopias(Math.max(1, Math.min(9999, Number(e.target.value) || 1)))}
+          />
+        </label>
+
+        <button
+          type="button"
+          onClick={baixarZpl}
+          disabled={zplBusy}
+          className="w-full rounded-2xl bg-[#0F172A] px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {zplBusy ? "Gerando ZPL…" : "Baixar ZPL (Elgin L42 Pro)"}
+        </button>
+        {zplError ? <p className="text-sm font-semibold text-red-600">{zplError}</p> : null}
+        <p className="text-xs text-slate-500">
+          Arquivo .zpl em 203 dpi · etiqueta 10×6 cm. Envie para a impressora térmica (driver/raw ZPL).
+        </p>
       </section>
 
       <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Preview 10 × 6 cm</div>
-            <p className="mt-1 text-sm text-slate-500">Layout idêntico ao PDF TESTE ETIQUETA (sem ZPL ainda).</p>
+            <p className="mt-1 text-sm text-slate-500">Layout do PDF TESTE ETIQUETA · baixe o ZPL ao lado.</p>
           </div>
           <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-semibold text-slate-600">
-            Elgin L42 Pro · Code 128
+            Elgin L42 Pro · Code 128 · 203 dpi
           </div>
         </div>
 
