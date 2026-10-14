@@ -1,8 +1,30 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import JsBarcode from "jsbarcode";
-import { sizes } from "./constants/production";
+import { sizes, refAntigaDe } from "./constants/production";
 import { buildBlingSku, normalizeBlingSigla } from "./constants/bling";
-import { buildAndDownloadEtiquetaZpl } from "./etiquetaZpl";
+import {
+  buildAndDownloadEtiquetaLoteZpl,
+  expandLoteToLabels,
+  readStoredContador,
+} from "./etiquetaZpl";
+
+const makeEmptyGrid = () => Object.fromEntries(sizes.map((s) => [s, 0]));
+
+const normalizeKey = (value) =>
+  String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .trim();
+
+function nomeModeloDefault(ref) {
+  const codigo = String(ref || "").trim().toUpperCase();
+  const legado = refAntigaDe(codigo) || codigo;
+  if (legado === "TNCV010" || codigo === "RCCB010") return "TENIS ROCK STAR CANO BAIXO";
+  if (legado === "BTCV010" || codigo === "RCCA010") return "TENIS ROCK STAR CANO ALTO";
+  if (legado === "CRVTNCV" || codigo === "RCCOUR01") return "TENIS ROCK STAR COURINO";
+  return "TENIS ROCK STAR";
+}
 
 function RockStarLogo({ className = "" }) {
   return (
@@ -47,7 +69,6 @@ function BarcodeSvg({
         textAlign: "center",
         fontOptions: "",
       });
-      // Mesma altura de barras nos dois; escala só na largura da coluna.
       const intrinsicH = svgRef.current.height?.baseVal?.value || height + fontSize + 4;
       svgRef.current.setAttribute("height", String(intrinsicH));
       svgRef.current.removeAttribute("width");
@@ -63,22 +84,113 @@ function BarcodeSvg({
   return <svg ref={svgRef} className={className} style={{ display: "block", width: "100%" }} />;
 }
 
-/** Preview visual da etiqueta de caixa 10×6 cm, geometria do PDF TESTE ETIQUETA. */
-export default function EtiquetaCaixaPreview() {
-  const [ref, setRef] = useState("RCCA010");
-  const [sigla, setSigla] = useState("BC");
-  const [nome, setNome] = useState("TENIS ROCK STAR CANO ALTO");
-  const [cor, setCor] = useState("BRANCO");
-  const [tamanho, setTamanho] = useState(34);
-  const [prog, setProg] = useState("26-215");
-  const [contador, setContador] = useState("0487692");
-  const [copias, setCopias] = useState(1);
-  const [zplBusy, setZplBusy] = useState(false);
-  const [zplError, setZplError] = useState("");
+function EtiquetaFace({ nomeLinha, corLinha, tamanho, prog, sku, contador }) {
+  return (
+    <div
+      className="relative w-full max-w-[560px] overflow-hidden bg-white text-black shadow-[0_8px_28px_rgba(0,0,0,0.18)]"
+      style={{ aspectRatio: "10 / 6", fontFamily: "Arial, Helvetica, sans-serif" }}
+      aria-label="Preview da etiqueta 10 por 6 centímetros"
+    >
+      <div className="absolute left-[8%] top-[1.1%] h-[38.3%] w-[22%]">
+        <RockStarLogo />
+      </div>
+      <div className="absolute left-[32.7%] top-[10.5%] flex h-[24%] w-[32.5%] flex-col items-center justify-center leading-none">
+        <div className="text-[clamp(15px,3.1vw,20px)] font-bold uppercase tracking-wide text-black">PROG:</div>
+        <div className="mt-[0.3em] text-[clamp(16px,3.3vw,22px)] font-bold tabular-nums tracking-tight text-black">
+          {prog || "—"}
+        </div>
+      </div>
+      <div className="absolute left-[72%] top-[3.3%] flex h-[33.3%] w-[22%] items-center justify-center bg-black">
+        <span className="text-[clamp(40px,9.5vw,72px)] font-bold leading-none tabular-nums tracking-tight text-white">
+          {tamanho}
+        </span>
+      </div>
+      <div className="absolute inset-x-[2%] top-[39%] bottom-[34%] flex flex-col items-center justify-center text-center">
+        <div className="text-[clamp(15px,3.15vw,21px)] font-bold uppercase leading-tight tracking-tight text-black">
+          {nomeLinha}
+        </div>
+        <div className="mt-[0.12em] text-[clamp(15px,3.15vw,21px)] font-bold uppercase leading-tight tracking-tight text-black">
+          {corLinha}
+        </div>
+      </div>
+      <div className="absolute inset-x-[10%] bottom-[5%] flex h-[29%] items-end justify-between gap-[10%]">
+        <div className="flex w-[54%] shrink-0 items-end justify-center">
+          <BarcodeSvg value={sku} height={50} fontSize={13} width={1.5} />
+        </div>
+        <div className="flex w-[32%] shrink-0 items-end justify-center">
+          <BarcodeSvg value={contador} height={50} fontSize={13} width={1.5} />
+        </div>
+      </div>
+    </div>
+  );
+}
 
-  const sku = useMemo(
-    () => buildBlingSku(ref, sigla, tamanho),
-    [ref, sigla, tamanho]
+/**
+ * Aba Etiquetas — fluxo estilo Pesponto: programação, ref/cor, grade, lote e ZPL sequencial.
+ */
+export default function EtiquetaCaixaPreview({
+  refsUnicas = [],
+  coresPorRef = new Map(),
+  getBlingSigla = () => "",
+}) {
+  const firstRef = refsUnicas[0] || "RCCA010";
+  const firstCores = coresPorRef.get?.(firstRef) || [];
+  const firstCor = firstCores[0] || "BRANCO";
+
+  const [programacao, setProgramacao] = useState("");
+  const [ref, setRef] = useState(firstRef);
+  const [cor, setCor] = useState(firstCor);
+  const [nome, setNome] = useState(nomeModeloDefault(firstRef));
+  const [grid, setGrid] = useState(makeEmptyGrid);
+  const [contadorInicial, setContadorInicial] = useState(() => readStoredContador());
+  const [lote, setLote] = useState([]);
+  const [previewSize, setPreviewSize] = useState(34);
+  const [zplBusy, setZplBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const sigla = useMemo(
+    () => normalizeBlingSigla(getBlingSigla(ref, cor) || ""),
+    [getBlingSigla, ref, cor]
+  );
+
+  const coresDaRef = coresPorRef.get?.(ref) || [];
+
+  useEffect(() => {
+    if (!refsUnicas.length) return;
+    if (!refsUnicas.includes(ref)) {
+      const nextRef = refsUnicas[0];
+      const cores = coresPorRef.get?.(nextRef) || [];
+      setRef(nextRef);
+      setCor(cores[0] || "");
+      setNome(nomeModeloDefault(nextRef));
+    }
+  }, [refsUnicas, ref, coresPorRef]);
+
+  useEffect(() => {
+    if (!coresDaRef.length) return;
+    if (!coresDaRef.some((c) => normalizeKey(c) === normalizeKey(cor))) {
+      setCor(coresDaRef[0]);
+    }
+  }, [coresDaRef, cor]);
+
+  const totalForm = useMemo(
+    () => sizes.reduce((acc, s) => acc + (Number(grid[s]) || 0), 0),
+    [grid]
+  );
+
+  const totalLote = useMemo(
+    () =>
+      lote.reduce(
+        (acc, linha) =>
+          acc + sizes.reduce((sum, s) => sum + (Number(linha.grid?.[s]) || 0), 0),
+        0
+      ),
+    [lote]
+  );
+
+  const previewSku = useMemo(
+    () => buildBlingSku(ref, sigla, previewSize),
+    [ref, sigla, previewSize]
   );
 
   const nomeLinha = useMemo(() => {
@@ -91,158 +203,309 @@ export default function EtiquetaCaixaPreview() {
     [cor]
   );
 
-  const baixarZpl = async () => {
-    if (!sku) {
-      setZplError("Informe referência, sigla e tamanho para gerar o SKU.");
+  const adicionarAoLote = () => {
+    setError("");
+    if (!String(programacao || "").trim()) {
+      setError("Informe o nome da programação.");
       return;
     }
-    if (!String(contador || "").trim()) {
-      setZplError("Informe o contador (código da direita).");
+    if (!ref || !cor) {
+      setError("Selecione referência e cor.");
+      return;
+    }
+    if (!sigla) {
+      setError(`Sem sigla Bling para ${ref} • ${cor}. Cadastre no Controle Geral.`);
+      return;
+    }
+    if (!totalForm) {
+      setError("Preencha a grade (quantidade de etiquetas por numeração).");
+      return;
+    }
+
+    setLote((curr) => [
+      ...curr,
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        programacao: String(programacao).trim(),
+        ref,
+        cor,
+        sigla,
+        nome: String(nome || "").trim().toUpperCase() || nomeModeloDefault(ref),
+        grid: { ...grid },
+        total: totalForm,
+      },
+    ]);
+    setGrid(makeEmptyGrid());
+  };
+
+  const removerDoLote = (id) => {
+    setLote((curr) => curr.filter((item) => item.id !== id));
+  };
+
+  const limparLote = () => {
+    setLote([]);
+    setError("");
+  };
+
+  const baixarZplLote = async () => {
+    setError("");
+    if (!lote.length) {
+      setError("Adicione pelo menos uma linha ao lote.");
       return;
     }
     setZplBusy(true);
-    setZplError("");
     try {
-      await buildAndDownloadEtiquetaZpl({
-        nomeLinha,
-        corLinha,
-        tamanho,
-        prog,
-        sku,
-        contador,
-        copias,
+      const result = await buildAndDownloadEtiquetaLoteZpl({
+        lote,
+        contadorInicial,
+        filenameBase: String(programacao || lote[0]?.programacao || "etiquetas").trim(),
       });
+      setContadorInicial(result.nextContador);
     } catch (err) {
-      setZplError(err?.message || "Falha ao gerar o ZPL.");
+      setError(err?.message || "Falha ao gerar o ZPL.");
     } finally {
       setZplBusy(false);
     }
   };
 
-  const inputClass =
-    "w-full rounded-2xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-800 outline-none focus:border-[#8B1E2D] focus:ring-2 focus:ring-[#8B1E2D]/15";
+  const previewContador = useMemo(() => {
+    const { labels } = expandLoteToLabels(
+      [
+        {
+          programacao,
+          ref,
+          cor,
+          sigla,
+          nome,
+          grid: { ...makeEmptyGrid(), [previewSize]: Math.max(1, Number(grid[previewSize]) || 1) },
+        },
+      ],
+      contadorInicial
+    );
+    return labels[0]?.contador || contadorInicial;
+  }, [programacao, ref, cor, sigla, nome, previewSize, grid, contadorInicial]);
 
   return (
-    <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(280px,360px)_1fr]">
-      <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm space-y-4">
-        <div>
-          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Dados da etiqueta</div>
-          <p className="mt-1 text-sm text-slate-500">Altere os campos — o preview atualiza na hora.</p>
-        </div>
-
-        <label className="block space-y-1">
-          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Referência</span>
-          <input
-            className={inputClass}
-            value={ref}
-            onChange={(e) => setRef(e.target.value.toUpperCase())}
-            placeholder="RCCA010"
-          />
-        </label>
-
-        <label className="block space-y-1">
-          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Sigla (cor Bling)</span>
-          <input
-            className={inputClass}
-            value={sigla}
-            onChange={(e) => setSigla(normalizeBlingSigla(e.target.value))}
-            placeholder="BC"
-          />
-        </label>
-
-        <label className="block space-y-1">
-          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Nome / modelo</span>
-          <input
-            className={inputClass}
-            value={nome}
-            onChange={(e) => setNome(e.target.value.toUpperCase())}
-            placeholder="TENIS ROCK STAR CANO ALTO"
-          />
-        </label>
-
-        <label className="block space-y-1">
-          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Cor (texto)</span>
-          <input
-            className={inputClass}
-            value={cor}
-            onChange={(e) => setCor(e.target.value.toUpperCase())}
-            placeholder="BRANCO"
-          />
-        </label>
-
-        <label className="block space-y-1">
-          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Tamanho</span>
-          <select
-            className={inputClass}
-            value={tamanho}
-            onChange={(e) => setTamanho(Number(e.target.value))}
-          >
-            {sizes.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="block space-y-1">
-          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">PROG</span>
-          <input
-            className={inputClass}
-            value={prog}
-            onChange={(e) => setProg(e.target.value)}
-            placeholder="26-215"
-          />
-        </label>
-
-        <label className="block space-y-1">
-          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Contador (direita)</span>
-          <input
-            className={inputClass}
-            value={contador}
-            onChange={(e) => setContador(e.target.value.replace(/[^\d]/g, ""))}
-            placeholder="0487692"
-          />
-        </label>
-
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">SKU (esteira)</div>
-          <div className="mt-1 font-mono text-lg font-black tracking-tight text-slate-900">
-            {sku || "—"}
+    <div className="grid grid-cols-1 gap-6 xl:grid-cols-[440px_1fr] items-start">
+      <div className="space-y-4">
+        <div className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+          <div>
+            <div className="text-sm font-semibold text-slate-800">Montar lote de etiquetas</div>
+            <p className="mt-1 text-xs text-slate-500">
+              Grade = quantidade de etiquetas por numeração. SKU se repete; contador sobe 1 a 1.
+            </p>
           </div>
+
+          <label className="text-sm font-medium block">
+            Programação
+            <input
+              value={programacao}
+              onChange={(e) => setProgramacao(e.target.value)}
+              placeholder="Ex.: FICHA 220 / 26-215"
+              className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+            />
+          </label>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label className="text-sm font-medium block">
+              Referência
+              <select
+                value={ref}
+                onChange={(e) => {
+                  const nextRef = e.target.value;
+                  const cores = coresPorRef.get?.(nextRef) || [];
+                  setRef(nextRef);
+                  setCor(cores[0] || "");
+                  setNome(nomeModeloDefault(nextRef));
+                }}
+                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+              >
+                {(refsUnicas.length ? refsUnicas : [ref]).map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm font-medium block">
+              Cor
+              <select
+                value={cor}
+                onChange={(e) => setCor(e.target.value)}
+                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+              >
+                {(coresDaRef.length ? coresDaRef : [cor]).map((c) => (
+                  <option key={`${ref}__${c}`} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <label className="text-sm font-medium block">
+            Nome / modelo
+            <input
+              value={nome}
+              onChange={(e) => setNome(e.target.value.toUpperCase())}
+              className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+            />
+          </label>
+
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Sigla Bling</span>
+              <span className={`font-mono font-bold ${sigla ? "text-slate-900" : "text-red-600"}`}>
+                {sigla || "não cadastrada"}
+              </span>
+            </div>
+            {sigla ? (
+              <div className="mt-1 text-xs text-slate-500">
+                Ex. SKU {previewSize}: <span className="font-mono font-semibold text-slate-800">{previewSku}</span>
+              </div>
+            ) : null}
+          </div>
+
+          <div>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="text-sm font-medium">Grade completa</div>
+              <div className="text-xs font-semibold text-slate-500">Total: {totalForm}</div>
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              {sizes.map((size) => (
+                <div key={size} className="rounded-xl border border-slate-200 bg-slate-50 p-2">
+                  <button
+                    type="button"
+                    onClick={() => setPreviewSize(size)}
+                    className={`mx-auto block text-xs text-center ${
+                      previewSize === size ? "font-black text-[#8B1E2D]" : "text-slate-500"
+                    }`}
+                    title="Usar no preview"
+                  >
+                    {size}
+                  </button>
+                  <input
+                    value={grid[size]}
+                    onChange={(e) =>
+                      setGrid((curr) => ({
+                        ...curr,
+                        [size]: Number(e.target.value) || 0,
+                      }))
+                    }
+                    className="mt-1 w-full rounded-lg border border-slate-200 p-1.5 text-center text-sm"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <label className="text-sm font-medium block">
+            Contador inicial (direita)
+            <input
+              value={contadorInicial}
+              onChange={(e) => setContadorInicial(e.target.value.replace(/[^\d]/g, ""))}
+              className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 font-mono text-sm"
+              placeholder="0487692"
+            />
+            <span className="mt-1 block text-xs text-slate-500">
+              Cada etiqueta do lote recebe o próximo número. Após baixar, o próximo fica salvo.
+            </span>
+          </label>
+
+          <button
+            type="button"
+            onClick={adicionarAoLote}
+            className="w-full rounded-2xl bg-[#8B1E2D] px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-[#6f1824]"
+          >
+            Adicionar ao lote
+          </button>
+          {error ? <p className="text-sm font-semibold text-red-600">{error}</p> : null}
         </div>
 
-        <label className="block space-y-1">
-          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Cópias (ZPL)</span>
-          <input
-            className={inputClass}
-            type="number"
-            min={1}
-            max={9999}
-            value={copias}
-            onChange={(e) => setCopias(Math.max(1, Math.min(9999, Number(e.target.value) || 1)))}
-          />
-        </label>
+        <div className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-sm font-semibold text-slate-800">Lote para imprimir</div>
+              <div className="text-xs text-slate-500">
+                {lote.length} linha(s) · {totalLote} etiqueta(s)
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={limparLote}
+                disabled={!lote.length}
+                className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 disabled:opacity-40"
+              >
+                Limpar
+              </button>
+              <button
+                type="button"
+                onClick={baixarZplLote}
+                disabled={zplBusy || !lote.length}
+                className="rounded-xl bg-[#0F172A] px-3 py-1.5 text-xs font-bold text-white disabled:opacity-40"
+              >
+                {zplBusy ? "Gerando…" : "Baixar ZPL do lote"}
+              </button>
+            </div>
+          </div>
 
-        <button
-          type="button"
-          onClick={baixarZpl}
-          disabled={zplBusy}
-          className="w-full rounded-2xl bg-[#0F172A] px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {zplBusy ? "Gerando ZPL…" : "Baixar ZPL (Elgin L42 Pro)"}
-        </button>
-        {zplError ? <p className="text-sm font-semibold text-red-600">{zplError}</p> : null}
-        <p className="text-xs text-slate-500">
-          Arquivo .zpl em 203 dpi · etiqueta 10×6 cm. Envie para a impressora térmica (driver/raw ZPL).
-        </p>
-      </section>
+          {lote.length === 0 ? (
+            <p className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+              Nenhuma linha no lote. Preencha a grade e clique em Adicionar.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {lote.map((item) => (
+                <div
+                  key={item.id}
+                  className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-bold text-slate-900">
+                        {item.ref} • {item.cor}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        {item.programacao} · sigla {item.sigla} · {item.total} etq
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {sizes
+                          .filter((s) => Number(item.grid?.[s]) > 0)
+                          .map((s) => (
+                            <span
+                              key={`${item.id}-${s}`}
+                              className="rounded-md bg-sky-100 px-1.5 py-0.5 text-[11px] font-semibold text-sky-900"
+                            >
+                              {s} → {item.grid[s]}
+                            </span>
+                          ))}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removerDoLote(item.id)}
+                      className="shrink-0 rounded-lg bg-red-100 px-2 py-1 text-xs font-bold text-red-700"
+                    >
+                      Excluir
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
 
       <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
           <div>
-            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Preview 10 × 6 cm</div>
-            <p className="mt-1 text-sm text-slate-500">Layout do PDF TESTE ETIQUETA · baixe o ZPL ao lado.</p>
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+              Preview 10 × 6 cm
+            </div>
+            <p className="mt-1 text-sm text-slate-500">
+              Clique num tamanho na grade para atualizar o preview. ZPL do lote usa contador sequencial.
+            </p>
           </div>
           <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-semibold text-slate-600">
             Elgin L42 Pro · Code 128 · 203 dpi
@@ -250,57 +513,14 @@ export default function EtiquetaCaixaPreview() {
         </div>
 
         <div className="flex justify-center overflow-x-auto rounded-[20px] bg-[#e8e8e8] p-4 sm:p-10">
-          {/*
-            Geometria do PDF MediaBox 283.50 × 170.25 pt (10×6 cm).
-            Posições em % da etiqueta (origem topo-esquerda).
-          */}
-          <div
-            className="relative w-full max-w-[560px] overflow-hidden bg-white text-black shadow-[0_8px_28px_rgba(0,0,0,0.18)]"
-            style={{ aspectRatio: "10 / 6", fontFamily: "Arial, Helvetica, sans-serif" }}
-            aria-label="Preview da etiqueta 10 por 6 centímetros"
-          >
-            {/* Logo — PDF: x8% y1% w22% h38% */}
-            <div className="absolute left-[8%] top-[1.1%] h-[38.3%] w-[22%]">
-              <RockStarLogo />
-            </div>
-
-            {/* PROG empilhado — faixa central-topo do PDF */}
-            <div className="absolute left-[32.7%] top-[10.5%] flex h-[24%] w-[32.5%] flex-col items-center justify-center leading-none">
-              <div className="text-[clamp(15px,3.1vw,20px)] font-bold uppercase tracking-wide text-black">
-                PROG:
-              </div>
-              <div className="mt-[0.3em] text-[clamp(16px,3.3vw,22px)] font-bold tabular-nums tracking-tight text-black">
-                {prog || "—"}
-              </div>
-            </div>
-
-            {/* Tamanho branco em caixa preta — PDF: x72% y3% w22% h33% */}
-            <div className="absolute left-[72%] top-[3.3%] flex h-[33.3%] w-[22%] items-center justify-center bg-black">
-              <span className="text-[clamp(40px,9.5vw,72px)] font-bold leading-none tabular-nums tracking-tight text-white">
-                {tamanho}
-              </span>
-            </div>
-
-            {/* Nome + cor — centro vertical entre topo (logo/PROG/nº ~39%) e barcodes (~66%) */}
-            <div className="absolute inset-x-[2%] top-[39%] bottom-[34%] flex flex-col items-center justify-center text-center">
-              <div className="text-[clamp(15px,3.15vw,21px)] font-bold uppercase leading-tight tracking-tight text-black">
-                {nomeLinha}
-              </div>
-              <div className="mt-[0.12em] text-[clamp(15px,3.15vw,21px)] font-bold uppercase leading-tight tracking-tight text-black">
-                {corLinha}
-              </div>
-            </div>
-
-            {/* Barcodes: mesma altura de barra e mesma base */}
-            <div className="absolute inset-x-[10%] bottom-[5%] flex h-[29%] items-end justify-between gap-[10%]">
-              <div className="flex w-[54%] shrink-0 items-end justify-center">
-                <BarcodeSvg value={sku} height={50} fontSize={13} width={1.5} />
-              </div>
-              <div className="flex w-[32%] shrink-0 items-end justify-center">
-                <BarcodeSvg value={contador} height={50} fontSize={13} width={1.5} />
-              </div>
-            </div>
-          </div>
+          <EtiquetaFace
+            nomeLinha={nomeLinha}
+            corLinha={corLinha}
+            tamanho={previewSize}
+            prog={programacao || "—"}
+            sku={previewSku || "—"}
+            contador={previewContador}
+          />
         </div>
       </section>
     </div>

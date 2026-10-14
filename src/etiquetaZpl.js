@@ -1,10 +1,15 @@
 /** Etiqueta de caixa 10×6 cm para Elgin L42 Pro (ZPL, 203 dpi). */
 
+import { buildBlingSku } from "./constants/bling";
+import { sizes } from "./constants/production";
+
 export const ETIQUETA_DPI = 203;
 /** 100 mm */
 export const ETIQUETA_LARGURA_DOTS = 800;
 /** 60 mm */
 export const ETIQUETA_ALTURA_DOTS = 480;
+
+export const CONTADOR_STORAGE_KEY = "rockstar-etiqueta-contador-v1";
 
 const pctX = (p) => Math.round((p / 100) * ETIQUETA_LARGURA_DOTS);
 const pctY = (p) => Math.round((p / 100) * ETIQUETA_ALTURA_DOTS);
@@ -13,6 +18,37 @@ function zplSafe(value) {
   return String(value ?? "")
     .replace(/[\^~\\]/g, " ")
     .trim();
+}
+
+export function formatContador(n, width = 7) {
+  const num = Math.max(0, Math.floor(Number(n) || 0));
+  const w = Math.max(1, Math.min(12, Number(width) || 7));
+  return String(num).padStart(w, "0");
+}
+
+export function parseContadorInicial(value) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  if (!digits) return { n: 1, width: 7 };
+  return { n: Number(digits) || 1, width: Math.max(digits.length, 7) };
+}
+
+export function readStoredContador() {
+  try {
+    const raw = localStorage.getItem(CONTADOR_STORAGE_KEY);
+    if (!raw) return "0000001";
+    const { n, width } = parseContadorInicial(raw);
+    return formatContador(n, width);
+  } catch {
+    return "0000001";
+  }
+}
+
+export function writeStoredContador(value) {
+  try {
+    localStorage.setItem(CONTADOR_STORAGE_KEY, String(value));
+  } catch {
+    /* ignore */
+  }
 }
 
 function loadImage(url) {
@@ -27,7 +63,6 @@ function loadImage(url) {
 
 /**
  * Converte PNG/JPEG em ^GFA (1-bit) para ZPL.
- * @returns {{ hex: string, bytesPerRow: number, total: number, width: number, height: number }}
  */
 export async function imageUrlToZplGfa(url, destWidthDots, destHeightDots, threshold = 168) {
   const img = await loadImage(url);
@@ -59,19 +94,7 @@ export async function imageUrlToZplGfa(url, destWidthDots, destHeightDots, thres
   return { hex, bytesPerRow, total, width, height };
 }
 
-/**
- * Monta ZPL de uma etiqueta 10×6 com o layout do preview / PDF.
- * @param {{
- *   nomeLinha: string,
- *   corLinha: string,
- *   tamanho: string|number,
- *   prog: string,
- *   sku: string,
- *   contador: string,
- *   copias?: number,
- *   logoGfa?: { hex: string, bytesPerRow: number, total: number, width: number, height: number } | null,
- * }} data
- */
+/** Uma etiqueta 10×6. Sempre ^PQ1 — o lote repete ^XA...^XZ. */
 export function buildEtiquetaCaixaZpl(data) {
   const nomeLinha = zplSafe(data.nomeLinha).toUpperCase();
   const corLinha = zplSafe(data.corLinha).toUpperCase();
@@ -79,31 +102,22 @@ export function buildEtiquetaCaixaZpl(data) {
   const prog = zplSafe(data.prog);
   const sku = zplSafe(data.sku);
   const contador = zplSafe(data.contador);
-  const copias = Math.max(1, Math.min(9999, Number(data.copias) || 1));
 
   const logoX = pctX(8);
   const logoY = pctY(1.1);
-  const logoW = pctX(22);
-  const logoH = pctY(38.3);
-
   const sizeX = pctX(72);
   const sizeY = pctY(3.3);
   const sizeW = pctX(22);
   const sizeH = pctY(33.3);
-
   const progX = pctX(32.7);
   const progY = pctY(14);
   const progW = pctX(32.5);
-
   const titleY1 = pctY(46);
   const titleY2 = pctY(53);
-
   const barY = pctY(66);
   const barH = pctY(22);
   const skuX = pctX(10);
-  const skuW = pctX(41.3);
   const ctrX = pctX(66.8);
-  const ctrW = pctX(23.8);
 
   const lines = [];
   lines.push("^XA");
@@ -120,37 +134,79 @@ export function buildEtiquetaCaixaZpl(data) {
     const g = data.logoGfa;
     lines.push(`^FO${logoX},${logoY}^GFA,${g.total},${g.total},${g.bytesPerRow},${g.hex}^FS`);
   } else {
-    // Fallback textual se o logo não carregar
     lines.push(`^FO${logoX},${logoY + 20}^A0N,36,36^FDROCK^FS`);
     lines.push(`^FO${logoX},${logoY + 60}^A0N,36,36^FDSTAR^FS`);
   }
 
-  // PROG centrado na faixa do meio-topo
-  const progLabel = "PROG:";
-  const progValue = prog || "-";
-  lines.push(`^FO${progX},${progY}^A0N,32,32^FB${progW},1,0,C,0^FD${progLabel}^FS`);
-  lines.push(`^FO${progX},${progY + 40}^A0N,36,36^FB${progW},1,0,C,0^FD${progValue}^FS`);
+  lines.push(`^FO${progX},${progY}^A0N,32,32^FB${progW},1,0,C,0^FDPROG:^FS`);
+  lines.push(`^FO${progX},${progY + 40}^A0N,36,36^FB${progW},1,0,C,0^FD${prog || "-"}^FS`);
 
-  // Caixa preta + numeração branca (field reverse)
   lines.push(`^FO${sizeX},${sizeY}^GB${sizeW},${sizeH},${sizeH}^FS`);
   const sizeFont = tamanho.length >= 3 ? 70 : 100;
   const sizeTextX = sizeX + Math.round(sizeW * 0.12);
   const sizeTextY = sizeY + Math.round(sizeH * 0.22);
   lines.push(`^FO${sizeTextX},${sizeTextY}^FR^A0N,${sizeFont},${sizeFont}^FD${tamanho}^FS`);
 
-  // Título centralizado
   lines.push(`^FO0,${titleY1}^A0N,28,28^FB${ETIQUETA_LARGURA_DOTS},1,0,C,0^FD${nomeLinha || "-"}^FS`);
   lines.push(`^FO0,${titleY2}^A0N,28,28^FB${ETIQUETA_LARGURA_DOTS},1,0,C,0^FD${corLinha || "-"}^FS`);
 
-  // Code 128 — SKU (esteira) e contador; mesma altura de barra
-  // ^BCN,height,printInterpretation,printAbove,checkDigit
   lines.push(`^BY2,2,${barH}`);
   lines.push(`^FO${skuX},${barY}^BCN,${barH},Y,N,N^FD${sku}^FS`);
   lines.push(`^FO${ctrX},${barY}^BCN,${barH},Y,N,N^FD${contador}^FS`);
 
-  lines.push(`^PQ${copias},0,1,Y`);
+  lines.push("^PQ1,0,1,Y");
   lines.push("^XZ");
   return `${lines.join("\n")}\n`;
+}
+
+/**
+ * Expande linhas do lote: cada unidade da grade = 1 etiqueta; contador +1.
+ */
+export function expandLoteToLabels(lote, contadorInicial) {
+  const { n: startN, width } = parseContadorInicial(contadorInicial);
+  let n = startN;
+  const labels = [];
+
+  (lote || []).forEach((linha) => {
+    const nomeBase = String(linha.nome || "").trim().toUpperCase();
+    const nomeLinha = nomeBase ? (nomeBase.endsWith("-") ? nomeBase : `${nomeBase} -`) : "—";
+    const corLinha = String(linha.cor || "").trim().toUpperCase() || "—";
+    const prog = String(linha.programacao || "").trim();
+    const ref = String(linha.ref || "").trim();
+    const sigla = String(linha.sigla || "").trim();
+
+    sizes.forEach((size) => {
+      const qtd = Math.max(0, Math.floor(Number(linha.grid?.[size]) || 0));
+      if (!qtd) return;
+      const sku = buildBlingSku(ref, sigla, size);
+      if (!sku) return;
+      for (let i = 0; i < qtd; i += 1) {
+        labels.push({
+          nomeLinha,
+          corLinha,
+          tamanho: size,
+          prog,
+          sku,
+          contador: formatContador(n, width),
+          ref,
+          cor: corLinha,
+        });
+        n += 1;
+      }
+    });
+  });
+
+  return {
+    labels,
+    nextContador: formatContador(n, width),
+    total: labels.length,
+  };
+}
+
+export function buildEtiquetaLoteZpl(labels, logoGfa = null) {
+  return (labels || [])
+    .map((label) => buildEtiquetaCaixaZpl({ ...label, logoGfa }))
+    .join("");
 }
 
 export function downloadTextFile(filename, text, mime = "text/plain;charset=utf-8") {
@@ -165,16 +221,17 @@ export function downloadTextFile(filename, text, mime = "text/plain;charset=utf-
   URL.revokeObjectURL(url);
 }
 
-export async function buildAndDownloadEtiquetaZpl({
-  nomeLinha,
-  corLinha,
-  tamanho,
-  prog,
-  sku,
-  contador,
-  copias = 1,
+export async function buildAndDownloadEtiquetaLoteZpl({
+  lote,
+  contadorInicial,
   logoUrl = "/logo-rockstar-etiqueta.png",
+  filenameBase = "",
 }) {
+  const { labels, nextContador, total } = expandLoteToLabels(lote, contadorInicial);
+  if (!total) {
+    throw new Error("Nenhuma etiqueta no lote (grade vazia ou sem sigla Bling).");
+  }
+
   const logoW = pctX(22);
   const logoH = pctY(38.3);
   let logoGfa = null;
@@ -184,19 +241,10 @@ export async function buildAndDownloadEtiquetaZpl({
     logoGfa = null;
   }
 
-  const zpl = buildEtiquetaCaixaZpl({
-    nomeLinha,
-    corLinha,
-    tamanho,
-    prog,
-    sku,
-    contador,
-    copias,
-    logoGfa,
-  });
-
-  const safeSku = zplSafe(sku) || "etiqueta";
-  const safeProg = zplSafe(prog).replace(/\s+/g, "") || "prog";
-  downloadTextFile(`${safeSku}_${safeProg}.zpl`, zpl);
-  return zpl;
+  const zpl = buildEtiquetaLoteZpl(labels, logoGfa);
+  const prog = zplSafe(lote?.[0]?.programacao || "").replace(/\s+/g, "") || "lote";
+  const base = zplSafe(filenameBase).replace(/\s+/g, "") || prog;
+  downloadTextFile(`${base}_${total}etq.zpl`, zpl);
+  writeStoredContador(nextContador);
+  return { zpl, labels, nextContador, total };
 }
