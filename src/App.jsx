@@ -31,7 +31,7 @@ import {
 } from "./constants/bling";
 import EtiquetaCaixaPreview from "./EtiquetaCaixaPreview";
 import EsteiraAcabamento from "./EsteiraAcabamento";
-import { confirmarBipsNoBanco } from "./etiquetasCaixaDb";
+import { confirmarBipUnico, desfazerBipConfirmado } from "./etiquetasCaixaDb";
 
 /** Boost para fichas de Montagem das refs antigas (gastar EST legado primeiro). */
 const PRIORIDADE_BOOST_REF_ANTIGA = 500000;
@@ -2026,6 +2026,10 @@ function PageShell({ children, title, subtitle, action }) {
 export default function ModuloProducaoPreviewRecuperado() {
   const [active, setActive] = useState("Dashboard");
 const [rows, setRows] = useState([]);
+const rowsRef = useRef([]);
+useEffect(() => {
+  rowsRef.current = rows;
+}, [rows]);
 const [minimos, setMinimos] = useState({});
 const [vendas, setVendas] = useState({});
 const [importText, setImportText] = useState("");
@@ -2062,6 +2066,10 @@ const [blingStatusLoading, setBlingStatusLoading] = useState(false);
 const [blingFeedback, setBlingFeedback] = useState("");
 const [blingSiglas, setBlingSiglas] = useState({});
 const [blingSyncBusy, setBlingSyncBusy] = useState("");
+const [esteiraBlingStatus, setEsteiraBlingStatus] = useState({ state: "idle", text: "" });
+const esteiraBlingQueueRef = useRef(new Set());
+const esteiraBlingTimerRef = useRef(null);
+const esteiraBlingFlushingRef = useRef(false);
 const [movError, setMovError] = useState({ Pesponto: "", Montagem: "" });
 const [confirmMov, setConfirmMov] = useState(null);
 const [editingMov, setEditingMov] = useState(null);
@@ -2737,95 +2745,177 @@ const programacaoMontagem = useMemo(
     }
   };
 
-  /**
-   * Esteira: bipados confirmados sobem PA (+ Bling) mesmo sem ficha/saldo em M
-   * (devolução, montagem sem ficha). Se houver M, baixa só o disponível.
-   * @param {Array<{contador:string, sku:string, ref:string, cor:string, tamanho:number}>} items
-   */
-  const confirmarLoteEsteira = async (items) => {
-    const lista = Array.isArray(items) ? items : [];
-    if (!lista.length) return { ok: false, error: "Lote vazio." };
+  const flushEsteiraBlingQueue = useCallback(async () => {
+    if (esteiraBlingFlushingRef.current) return;
+    if (esteiraBlingTimerRef.current) {
+      window.clearTimeout(esteiraBlingTimerRef.current);
+      esteiraBlingTimerRef.current = null;
+    }
+    const skus = [...esteiraBlingQueueRef.current];
+    if (!skus.length) {
+      setEsteiraBlingStatus({ state: "idle", text: "" });
+      return;
+    }
 
-    const grouped = new Map();
-    lista.forEach((item) => {
-      const ref = String(item.ref || "").trim();
-      const cor = String(item.cor || "").trim();
-      const tamanho = Number(item.tamanho) || 0;
-      if (!ref || !cor || !tamanho) return;
-      const key = `${ref}__${cor}__${tamanho}`;
-      const prev = grouped.get(key) || { ref, cor, tamanho, qtd: 0, sku: item.sku };
-      prev.qtd += 1;
-      grouped.set(key, prev);
+    esteiraBlingFlushingRef.current = true;
+    setEsteiraBlingStatus({
+      state: "syncing",
+      text: `Bling: sincronizando ${skus.length} SKU(s)…`,
     });
+    try {
+      const push = await executarPushEstoqueBling(skus);
+      if (push.ok) {
+        esteiraBlingQueueRef.current = new Set();
+        setEsteiraBlingStatus({
+          state: "ok",
+          text: `Bling: ok (${push.data?.pushed || 0} upd.)`,
+        });
+      } else {
+        setEsteiraBlingStatus({
+          state: "erro",
+          text: `Bling: falhou — ${push.error || "erro"} (tenta de novo)`,
+        });
+      }
+    } finally {
+      esteiraBlingFlushingRef.current = false;
+    }
+  }, []);
 
-    if (!grouped.size) return { ok: false, error: "Nenhum item válido no lote." };
+  const enqueueEsteiraBlingSkus = useCallback(
+    (skuList) => {
+      (skuList || []).forEach((s) => {
+        const sku = String(s || "")
+          .trim()
+          .toUpperCase();
+        if (sku) esteiraBlingQueueRef.current.add(sku);
+      });
+      if (!esteiraBlingQueueRef.current.size) return;
+      setEsteiraBlingStatus({
+        state: "pending",
+        text: `Bling: ${esteiraBlingQueueRef.current.size} SKU(s) na fila…`,
+      });
+      if (esteiraBlingTimerRef.current) {
+        window.clearTimeout(esteiraBlingTimerRef.current);
+      }
+      esteiraBlingTimerRef.current = window.setTimeout(() => {
+        flushEsteiraBlingQueue();
+      }, 45000);
+    },
+    [flushEsteiraBlingQueue]
+  );
 
-    const nextRows = rows.map((row) => ({
+  /**
+   * Esteira: 1 bip = PA +1 na hora (baixa M se houver). Bling vai pra fila.
+   * @param {{contador:string, sku:string, ref:string, cor:string, tamanho:number}} item
+   */
+  const aplicarBipEsteira = async (item) => {
+    const ref = String(item?.ref || "").trim();
+    const cor = String(item?.cor || "").trim();
+    const tamanho = Number(item?.tamanho) || 0;
+    const contador = String(item?.contador || "").trim();
+    const sku = String(item?.sku || "").trim().toUpperCase();
+    if (!ref || !cor || !tamanho || !contador) {
+      return { ok: false, error: "Dados do bip incompletos." };
+    }
+
+    const baseRows = rowsRef.current || [];
+    const nextRows = baseRows.map((row) => ({
       ...row,
       data: cloneRowDataDeep(row),
     }));
-
-    let baixouDeM = 0;
-    let soPa = 0;
-
-    for (const g of grouped.values()) {
-      const row = nextRows.find((r) => r.ref === g.ref && r.cor === g.cor);
-      if (!row) {
-        return {
-          ok: false,
-          error: `Produto não encontrado no estoque: ${g.ref} • ${g.cor}. Cadastre a cor no Controle Geral.`,
-        };
-      }
-      const atual = row.data[g.tamanho] || { pa: 0, est: 0, m: 0, p: 0 };
-      const disponivelM = Math.max(0, Number(atual.m) || 0);
-      const tirarDeM = Math.min(disponivelM, g.qtd);
-      baixouDeM += tirarDeM;
-      soPa += g.qtd - tirarDeM;
-      row.data[g.tamanho] = {
-        ...atual,
-        m: disponivelM - tirarDeM,
-        pa: (Number(atual.pa) || 0) + g.qtd,
+    const row = nextRows.find((r) => r.ref === ref && r.cor === cor);
+    if (!row) {
+      return {
+        ok: false,
+        error: `Produto não encontrado no estoque: ${ref} • ${cor}. Cadastre a cor no Controle Geral.`,
       };
     }
+
+    const atual = row.data[tamanho] || { pa: 0, est: 0, m: 0, p: 0 };
+    const disponivelM = Math.max(0, Number(atual.m) || 0);
+    const tirouDeM = disponivelM > 0;
+    row.data[tamanho] = {
+      ...atual,
+      m: tirouDeM ? disponivelM - 1 : disponivelM,
+      pa: (Number(atual.pa) || 0) + 1,
+    };
 
     const persist = await persistRowsToSupabase(nextRows);
     if (!persist.ok) {
       return {
         ok: false,
-        error: `Falha ao salvar estoque: ${persist.error?.message || persist.error || "erro"}`,
+        error: `Falha ao salvar PA: ${persist.error?.message || persist.error || "erro"}`,
       };
     }
 
-    const contadores = lista.map((i) => i.contador).filter(Boolean);
-    const mark = await confirmarBipsNoBanco(contadores);
+    const mark = await confirmarBipUnico(contador);
     if (!mark.ok) {
-      await persistRowsToSupabase(rows);
+      await persistRowsToSupabase(baseRows);
+      rowsRef.current = baseRows;
       return {
         ok: false,
-        error: `Estoque revertido: falha ao marcar bips confirmados (${mark.error?.message || mark.error}).`,
+        error: `PA revertido: falha ao confirmar bip (${mark.error?.message || mark.error}).`,
       };
     }
 
+    rowsRef.current = nextRows;
     setRows(nextRows);
+    if (sku) enqueueEsteiraBlingSkus([sku]);
 
-    const skus = [...new Set(lista.map((i) => String(i.sku || "").trim().toUpperCase()).filter(Boolean))];
-    const push = await executarPushEstoqueBling(skus);
-    const blingNote = push.ok
-      ? `Bling: ${push.data?.pushed || 0} upd.`
-      : `Bling falhou: ${push.error || "erro"} (PA já subiu no Rock Star).`;
+    return { ok: true, tirouDeM, error: null };
+  };
 
-    const origemNote =
-      soPa > 0 && baixouDeM > 0
-        ? `${baixouDeM} de M + ${soPa} direto no PA.`
-        : soPa > 0
-          ? `${soPa} direto no PA (sem M / devolução).`
-          : `${baixouDeM} de M → PA.`;
+  /**
+   * Desfaz o último bip da sessão: PA −1, devolve M se tirouDeM, libera contador.
+   */
+  const desfazerBipEsteira = async (item) => {
+    const ref = String(item?.ref || "").trim();
+    const cor = String(item?.cor || "").trim();
+    const tamanho = Number(item?.tamanho) || 0;
+    const contador = String(item?.contador || "").trim();
+    if (!ref || !cor || !tamanho || !contador) {
+      return { ok: false, error: "Dados do bip incompletos." };
+    }
 
-    return {
-      ok: true,
-      total: lista.length,
-      message: `Confirmado: ${lista.length} par(es) → PA (${origemNote}) ${blingNote}`,
+    const baseRows = rowsRef.current || [];
+    const nextRows = baseRows.map((row) => ({
+      ...row,
+      data: cloneRowDataDeep(row),
+    }));
+    const row = nextRows.find((r) => r.ref === ref && r.cor === cor);
+    if (!row) {
+      return { ok: false, error: `Produto não encontrado: ${ref} • ${cor}.` };
+    }
+
+    const atual = row.data[tamanho] || { pa: 0, est: 0, m: 0, p: 0 };
+    const paAtual = Math.max(0, Number(atual.pa) || 0);
+    if (paAtual < 1) {
+      return { ok: false, error: "PA já está zerado para este tamanho — não dá para desfazer." };
+    }
+    row.data[tamanho] = {
+      ...atual,
+      pa: paAtual - 1,
+      m: item?.tirouDeM ? (Number(atual.m) || 0) + 1 : Number(atual.m) || 0,
     };
+
+    const persist = await persistRowsToSupabase(nextRows);
+    if (!persist.ok) {
+      return {
+        ok: false,
+        error: `Falha ao reverter PA: ${persist.error?.message || persist.error || "erro"}`,
+      };
+    }
+
+    const freed = await desfazerBipConfirmado(contador);
+    if (!freed.ok) {
+      await persistRowsToSupabase(baseRows);
+      rowsRef.current = baseRows;
+      return { ok: false, error: freed.error || "Falha ao liberar contador." };
+    }
+
+    rowsRef.current = nextRows;
+    setRows(nextRows);
+    return { ok: true, error: null };
   };
 
   const carregarStatusBling = useCallback(async () => {
@@ -9331,9 +9421,14 @@ const salvarVendasManuais = async () => {
         return (
           <PageShell
             title="Esteira / Acabamento"
-            subtitle="Bipe o sequencial da caixa (direita). 1 bip = 1 par. Confirmar sobe PA + Bling — não exige ficha/saldo em M."
+            subtitle="Cada bip sobe 1 par no PA na hora; Bling sincroniza sozinho. Não exige ficha/saldo em M."
           >
-            <EsteiraAcabamento onConfirmLote={confirmarLoteEsteira} />
+            <EsteiraAcabamento
+              onBipConfirmado={aplicarBipEsteira}
+              onDesfazerBip={desfazerBipEsteira}
+              blingQueueStatus={esteiraBlingStatus}
+              onFlushBling={flushEsteiraBlingQueue}
+            />
           </PageShell>
         );
       case "Programação do Dia":

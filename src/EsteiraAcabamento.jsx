@@ -6,20 +6,32 @@ import {
 } from "./etiquetasCaixaDb";
 
 /**
- * Esteira / Acabamento — bip do contador sequencial (1 bip = 1 par).
- * Anti-duplicidade no Supabase; confirmar lote sobe PA (+ Bling).
- * Não exige ficha/saldo em M (devolução / montagem sem ficha).
+ * Esteira / Acabamento — cada bip sobe 1 par no PA na hora.
+ * Bling sincroniza em background (status discreto). Desfazer último reverte o bip.
  */
-export default function EsteiraAcabamento({ onConfirmLote }) {
+export default function EsteiraAcabamento({
+  onBipConfirmado,
+  onDesfazerBip,
+  blingQueueStatus = { state: "idle", text: "" },
+  onFlushBling,
+}) {
   const inputRef = useRef(null);
   const [scan, setScan] = useState("");
   const [busy, setBusy] = useState(false);
-  const [confirmBusy, setConfirmBusy] = useState(false);
   const [feedback, setFeedback] = useState({ type: "", text: "" });
   const [sessao, setSessao] = useState([]);
 
+  const flushRef = useRef(onFlushBling);
+  flushRef.current = onFlushBling;
+
   useEffect(() => {
     inputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      flushRef.current?.();
+    };
   }, []);
 
   const totalPares = sessao.length;
@@ -55,38 +67,66 @@ export default function EsteiraAcabamento({ onConfirmLote }) {
       return;
     }
     if (busy) return;
+    if (typeof onBipConfirmado !== "function") {
+      setFeedback({ type: "err", text: "Handler de bip não configurado." });
+      return;
+    }
+
     setBusy(true);
     setFeedback({ type: "", text: "" });
+    let reservado = null;
     try {
-      if (sessao.some((s) => normalizeContadorScan(s.contador) === codigo || s.contador_n === Number(codigo))) {
-        setFeedback({ type: "err", text: `Caixa ${codigo} já está neste lote.` });
+      if (
+        sessao.some(
+          (s) =>
+            normalizeContadorScan(s.contador) === codigo || s.contador_n === Number(codigo)
+        )
+      ) {
+        setFeedback({ type: "err", text: `Caixa ${codigo} já está nesta sessão.` });
         return;
       }
 
-      const result = await reservarBipPorContador(codigo);
-      if (!result.ok) {
-        setFeedback({ type: "err", text: result.error || "Falha no bip." });
+      const reserved = await reservarBipPorContador(codigo);
+      if (!reserved.ok) {
+        setFeedback({ type: "err", text: reserved.error || "Falha no bip." });
+        return;
+      }
+      reservado = reserved.row;
+
+      const item = {
+        contador: reservado.contador,
+        contador_n: reservado.contador_n,
+        sku: reservado.sku,
+        ref: reservado.ref,
+        cor: reservado.cor,
+        tamanho: Number(reservado.tamanho),
+        programacao: reservado.programacao || "",
+      };
+
+      const applied = await onBipConfirmado(item);
+      if (!applied?.ok) {
+        await liberarBipPorContador(reservado.contador);
+        setFeedback({ type: "err", text: applied?.error || "Falha ao subir PA." });
         return;
       }
 
-      const row = result.row;
       setSessao((curr) => [
         {
-          contador: row.contador,
-          contador_n: row.contador_n,
-          sku: row.sku,
-          ref: row.ref,
-          cor: row.cor,
-          tamanho: Number(row.tamanho),
-          programacao: row.programacao || "",
-          bipadoEm: row.bipado_em,
+          ...item,
+          tirouDeM: Boolean(applied.tirouDeM),
+          bipadoEm: new Date().toISOString(),
         },
         ...curr,
       ]);
       setFeedback({
         type: "ok",
-        text: `OK ${row.contador} · ${row.sku} · ${row.ref} • ${row.cor} · nº ${row.tamanho}`,
+        text: `OK ${item.contador} · ${item.sku} · PA +1${applied.tirouDeM ? " (baixou M)" : ""}`,
       });
+    } catch (err) {
+      if (reservado?.contador) {
+        await liberarBipPorContador(reservado.contador);
+      }
+      setFeedback({ type: "err", text: err?.message || "Erro no bip." });
     } finally {
       setScan("");
       setBusy(false);
@@ -102,72 +142,38 @@ export default function EsteiraAcabamento({ onConfirmLote }) {
   };
 
   const desfazerUltimo = async () => {
-    if (!sessao.length || busy || confirmBusy) return;
+    if (!sessao.length || busy) return;
+    if (typeof onDesfazerBip !== "function") {
+      setFeedback({ type: "err", text: "Desfazer não configurado." });
+      return;
+    }
     const [ultimo, ...rest] = sessao;
     setBusy(true);
     try {
-      const result = await liberarBipPorContador(ultimo.contador);
-      if (!result.ok) {
-        setFeedback({ type: "err", text: result.error || "Não foi possível desfazer." });
+      const result = await onDesfazerBip(ultimo);
+      if (!result?.ok) {
+        setFeedback({ type: "err", text: result?.error || "Não foi possível desfazer." });
         return;
       }
       setSessao(rest);
-      setFeedback({ type: "ok", text: `Desfeito ${ultimo.contador}.` });
+      setFeedback({ type: "ok", text: `Desfeito ${ultimo.contador} · PA −1.` });
     } finally {
       setBusy(false);
       focar();
     }
   };
 
-  const limparSessaoLocal = async () => {
-    if (!sessao.length || confirmBusy) return;
-    if (!window.confirm(`Liberar ${sessao.length} bip(s) sem confirmar estoque?`)) return;
-    setBusy(true);
-    try {
-      for (const item of sessao) {
-        await liberarBipPorContador(item.contador);
-      }
-      setSessao([]);
-      setFeedback({ type: "ok", text: "Lote local liberado." });
-    } finally {
-      setBusy(false);
-      focar();
-    }
-  };
-
-  const confirmar = async () => {
-    if (!sessao.length || confirmBusy) return;
-    if (typeof onConfirmLote !== "function") {
-      setFeedback({ type: "err", text: "Confirmação de estoque não configurada." });
-      return;
-    }
-    if (
-      !window.confirm(
-        `Confirmar ${sessao.length} par(es)?\nSobe PA no Rock Star (baixa M só se houver) e envia esses SKUs ao Bling.`
-      )
-    ) {
-      return;
-    }
-    setConfirmBusy(true);
-    setFeedback({ type: "", text: "" });
-    try {
-      const result = await onConfirmLote(sessao);
-      if (!result?.ok) {
-        setFeedback({ type: "err", text: result?.error || "Falha ao confirmar lote." });
-        return;
-      }
-      setSessao([]);
-      setFeedback({
-        type: "ok",
-        text: result.message || `Lote confirmado: ${result.total || 0} par(es) → PA + Bling.`,
-      });
-    } catch (err) {
-      setFeedback({ type: "err", text: err?.message || "Erro ao confirmar lote." });
-    } finally {
-      setConfirmBusy(false);
-      focar();
-    }
-  };
+  const blingText =
+    blingQueueStatus?.text ||
+    (blingQueueStatus?.state === "syncing"
+      ? "Bling: sincronizando…"
+      : blingQueueStatus?.state === "ok"
+        ? "Bling: ok"
+        : blingQueueStatus?.state === "erro"
+          ? "Bling: falhou (tenta de novo)"
+          : blingQueueStatus?.state === "pending"
+            ? "Bling: na fila…"
+            : "");
 
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
@@ -176,8 +182,8 @@ export default function EsteiraAcabamento({ onConfirmLote }) {
           Leitor — código sequencial
         </div>
         <p className="mt-1 text-sm text-slate-500">
-          Bipe o código da <strong>direita</strong> da etiqueta (contador). 1 bip = 1 par. Caixa já
-          lida = erro.
+          Bipe o código da <strong>direita</strong>. Cada bip sobe <strong>1 par no PA</strong> na
+          hora. Caixa já lida = erro. Bling sincroniza sozinho.
         </p>
 
         <label className="mt-4 block">
@@ -190,7 +196,7 @@ export default function EsteiraAcabamento({ onConfirmLote }) {
             value={scan}
             onChange={(e) => setScan(e.target.value)}
             onKeyDown={onKeyDown}
-            disabled={busy || confirmBusy}
+            disabled={busy}
             placeholder="0000001"
             autoComplete="off"
             inputMode="numeric"
@@ -201,7 +207,7 @@ export default function EsteiraAcabamento({ onConfirmLote }) {
           <button
             type="button"
             onClick={() => processarBip(scan)}
-            disabled={busy || confirmBusy || !scan.trim()}
+            disabled={busy || !scan.trim()}
             className="rounded-2xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
           >
             Registrar bip
@@ -209,18 +215,10 @@ export default function EsteiraAcabamento({ onConfirmLote }) {
           <button
             type="button"
             onClick={desfazerUltimo}
-            disabled={busy || confirmBusy || !sessao.length}
+            disabled={busy || !sessao.length}
             className="rounded-2xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-40"
           >
             Desfazer último
-          </button>
-          <button
-            type="button"
-            onClick={limparSessaoLocal}
-            disabled={busy || confirmBusy || !sessao.length}
-            className="rounded-2xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-40"
-          >
-            Limpar lote
           </button>
         </div>
 
@@ -238,22 +236,17 @@ export default function EsteiraAcabamento({ onConfirmLote }) {
           </div>
         ) : null}
 
+        {blingText ? (
+          <div className="mt-3 text-xs font-medium text-slate-500">{blingText}</div>
+        ) : null}
+
         <div className="mt-5 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            Total do lote
+            Total da sessão
           </div>
           <div className="mt-1 text-3xl font-black tabular-nums text-slate-900">{totalPares}</div>
-          <div className="text-sm text-slate-500">par(es) bipados nesta sessão</div>
+          <div className="text-sm text-slate-500">par(es) já no PA nesta sessão</div>
         </div>
-
-        <button
-          type="button"
-          onClick={confirmar}
-          disabled={confirmBusy || busy || !sessao.length}
-          className="mt-4 w-full rounded-2xl bg-rose-600 px-4 py-3.5 text-base font-bold text-white shadow-sm disabled:opacity-40"
-        >
-          {confirmBusy ? "Confirmando…" : `Confirmar lote → PA + Bling (${totalPares})`}
-        </button>
       </section>
 
       <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
@@ -262,7 +255,7 @@ export default function EsteiraAcabamento({ onConfirmLote }) {
             <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
               Resumo por SKU
             </div>
-            <p className="mt-1 text-sm text-slate-500">Agrupado para subir PA (M só se houver saldo).</p>
+            <p className="mt-1 text-sm text-slate-500">Já contados no PA (esta sessão).</p>
           </div>
         </div>
 

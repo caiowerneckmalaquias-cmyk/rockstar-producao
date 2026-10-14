@@ -187,7 +187,7 @@ export async function reservarBipPorContador(rawContador) {
   return { ok: true, code: "ok", row: updated, error: null };
 }
 
-/** Desfaz reserva do último bip (só se ainda não confirmado). */
+/** Desfaz reserva do bip (só se ainda não confirmado / PA não subiu). */
 export async function liberarBipPorContador(contador) {
   const key = String(contador || "").trim();
   if (!key) return { ok: false, error: "Contador vazio." };
@@ -199,20 +199,41 @@ export async function liberarBipPorContador(contador) {
     .select("contador")
     .maybeSingle();
   if (error) return { ok: false, error: error.message };
-  if (!data) return { ok: false, error: "Não foi possível desfazer (já confirmada?)." };
+  if (!data) return { ok: false, error: "Não foi possível liberar a reserva." };
   return { ok: true, error: null };
 }
 
-/** Marca lote como confirmado (após M→PA + Bling). */
-export async function confirmarBipsNoBanco(contadores) {
-  const keys = (contadores || []).map((c) => String(c).trim()).filter(Boolean);
-  if (!keys.length) return { ok: true, error: null };
+/** Marca um bip como confirmado (PA já persistido). */
+export async function confirmarBipUnico(contador) {
+  const key = String(contador || "").trim();
+  if (!key) return { ok: false, error: new Error("Contador vazio.") };
   const now = new Date().toISOString();
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("etiquetas_caixa")
     .update({ confirmado_em: now, bipado_em: now })
-    .in("contador", keys);
+    .eq("contador", key)
+    .select("contador")
+    .maybeSingle();
   if (error) return { ok: false, error };
+  if (!data) return { ok: false, error: new Error("Etiqueta não encontrada ao confirmar.") };
+  return { ok: true, error: null };
+}
+
+/**
+ * Desfaz bip já confirmado (PA será revertido pelo App).
+ * Limpa bipado_em + confirmado_em para permitir nova leitura.
+ */
+export async function desfazerBipConfirmado(contador) {
+  const key = String(contador || "").trim();
+  if (!key) return { ok: false, error: "Contador vazio." };
+  const { data, error } = await supabase
+    .from("etiquetas_caixa")
+    .update({ bipado_em: null, confirmado_em: null })
+    .eq("contador", key)
+    .select("contador")
+    .maybeSingle();
+  if (error) return { ok: false, error: error.message };
+  if (!data) return { ok: false, error: "Não foi possível desfazer o bip." };
   return { ok: true, error: null };
 }
 
