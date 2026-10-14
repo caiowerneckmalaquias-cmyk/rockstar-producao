@@ -163,17 +163,28 @@ export default function EsteiraAcabamento({
     }
   };
 
+  const blingState = blingQueueStatus?.state || "idle";
   const blingText =
     blingQueueStatus?.text ||
-    (blingQueueStatus?.state === "syncing"
+    (blingState === "syncing"
       ? "Bling: sincronizando…"
-      : blingQueueStatus?.state === "ok"
+      : blingState === "ok"
         ? "Bling: ok"
-        : blingQueueStatus?.state === "erro"
+        : blingState === "erro"
           ? "Bling: falhou (tenta de novo)"
-          : blingQueueStatus?.state === "pending"
+          : blingState === "pending"
             ? "Bling: na fila…"
             : "");
+  const blingBannerClass =
+    blingState === "ok"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+      : blingState === "erro"
+        ? "border-rose-200 bg-rose-50 text-rose-800"
+        : blingState === "syncing"
+          ? "border-sky-200 bg-sky-50 text-sky-800"
+          : blingState === "pending"
+            ? "border-amber-200 bg-amber-50 text-amber-900"
+            : "";
 
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
@@ -237,7 +248,12 @@ export default function EsteiraAcabamento({
         ) : null}
 
         {blingText ? (
-          <div className="mt-3 text-xs font-medium text-slate-500">{blingText}</div>
+          <div
+            className={`mt-4 rounded-2xl border px-4 py-3 text-sm font-semibold ${blingBannerClass}`}
+            role="status"
+          >
+            {blingText}
+          </div>
         ) : null}
 
         <div className="mt-5 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3">
