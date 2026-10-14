@@ -151,11 +151,19 @@ export function buildEtiquetaCaixaZpl(data) {
     `^FO${progX},${progY + progLabelFont + 6}^A0N,${progValueFont},${progValueFont}^FB${progW},1,0,C,0^FD${prog || "-"}^FS`
   );
 
-  // Caixa preta + numeração branca centralizada (H via ^FB, V via offset).
+  // Caixa preta + numeração branca. ^FB+^FR descentraliza na Elgin L42 —
+  // posiciona FO na mão (largura estimada dos dígitos A0 + nudge ótico Y).
   lines.push(`^FO${sizeX},${sizeY}^GB${sizeW},${sizeH},${sizeH}^FS`);
-  const sizeTextY = sizeY + Math.max(0, Math.round((sizeH - sizeFont) / 2));
+  const digitCount = Math.max(1, tamanho.length);
+  // A0 dígitos ~0.56 da altura; nudge Y compensa o “vazio” abaixo do glifo.
+  const estimatedCharW = Math.round(sizeFont * 0.56);
+  const textW = estimatedCharW * digitCount;
+  const sizeTextX = sizeX + Math.max(0, Math.round((sizeW - textW) / 2));
+  const opticalNudgeY = Math.round(sizeFont * 0.08);
+  const sizeTextY =
+    sizeY + Math.max(0, Math.round((sizeH - sizeFont) / 2)) + opticalNudgeY;
   lines.push(
-    `^FO${sizeX},${sizeTextY}^FR^A0N,${sizeFont},${sizeFont}^FB${sizeW},1,0,C,0^FD${tamanho}^FS`
+    `^FO${sizeTextX},${sizeTextY}^FR^A0N,${sizeFont},${sizeFont}^FD${tamanho}^FS`
   );
 
   lines.push(
