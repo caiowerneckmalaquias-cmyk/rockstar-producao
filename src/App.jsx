@@ -9200,9 +9200,13 @@ const salvarVendasManuais = async () => {
         return (
           <PageShell
             title="Etiquetas"
-            subtitle="Preview da etiqueta de caixa 10×6 cm (P&B). Depois validamos o layout e geramos ZPL para a Elgin L42 Pro."
+            subtitle="Monte o lote com grade (como Pesponto/Montagem) e baixe ZPL 10×6 para a Elgin L42 Pro — contador único por etiqueta."
           >
-            <EtiquetaCaixaPreview />
+            <EtiquetaCaixaPreview
+              refsUnicas={refsUnicas}
+              coresPorRef={coresPorRef}
+              getBlingSigla={getBlingSigla}
+            />
           </PageShell>
         );
       case "Programação do Dia":
