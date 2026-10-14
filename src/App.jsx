@@ -1254,7 +1254,7 @@ function buildMovImpressaoPayload(
     (item.items || []).forEach((entry) => {
       const sizeNum = Number(entry.size);
       if (Number.isFinite(sizeNum) && Object.prototype.hasOwnProperty.call(grid, sizeNum)) {
-        grid[sizeNum] = Number(entry.qtd) || 0;
+        grid[sizeNum] = (Number(grid[sizeNum]) || 0) + (Number(entry.qtd) || 0);
       }
     });
     return {
