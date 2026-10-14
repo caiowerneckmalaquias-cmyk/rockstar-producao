@@ -6,9 +6,15 @@ import { buildBlingSku, normalizeBlingSigla } from "./constants/bling";
 import {
   buildAndDownloadEtiquetaLoteZpl,
   expandLoteToLabels,
+  formatContador,
   readStoredContador,
   writeStoredContador,
 } from "./etiquetaZpl";
+import {
+  peekNextContadorN,
+  registrarEtiquetasImpressas,
+  syncLocalContadorFromN,
+} from "./etiquetasCaixaDb";
 
 const makeEmptyGrid = () => Object.fromEntries(sizes.map((s) => [s, 0]));
 
@@ -168,6 +174,23 @@ export default function EtiquetaCaixaPreview({
   const [printLabels, setPrintLabels] = useState([]);
   const [error, setError] = useState("");
   const pendingNextContadorRef = useRef("");
+  const pendingLabelsRef = useRef([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const peek = await peekNextContadorN();
+      if (cancelled) return;
+      if (peek?.n) {
+        const formatted = formatContador(peek.n, peek.width || 7);
+        setContadorInicial(formatted);
+        syncLocalContadorFromN(peek.n, peek.width || 7);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const sigla = useMemo(
     () => normalizeBlingSigla(getBlingSigla(ref, cor) || ""),
@@ -268,6 +291,20 @@ export default function EtiquetaCaixaPreview({
     setError("");
   };
 
+  const registrarLabels = async (labels, origem) => {
+    const reg = await registrarEtiquetasImpressas(labels, origem);
+    if (!reg.ok) {
+      const msg = reg.error?.message || String(reg.error || "Falha ao registrar etiquetas.");
+      if (String(msg).toLowerCase().includes("etiquetas_caixa")) {
+        throw new Error(
+          "Rode scripts/etiquetas-caixa-schema.sql no Supabase antes de imprimir (necessário para a esteira)."
+        );
+      }
+      throw new Error(msg);
+    }
+    return reg;
+  };
+
   const baixarZplLote = async () => {
     setError("");
     if (!lote.length) {
@@ -276,11 +313,14 @@ export default function EtiquetaCaixaPreview({
     }
     setZplBusy(true);
     try {
+      const peek = await peekNextContadorN();
+      const startContador = formatContador(peek.n, peek.width || 7);
       const result = await buildAndDownloadEtiquetaLoteZpl({
         lote,
-        contadorInicial,
+        contadorInicial: startContador,
         filenameBase: String(programacao || lote[0]?.programacao || "etiquetas").trim(),
       });
+      await registrarLabels(result.labels, "zpl");
       setContadorInicial(result.nextContador);
     } catch (err) {
       setError(err?.message || "Falha ao gerar o ZPL.");
@@ -289,20 +329,30 @@ export default function EtiquetaCaixaPreview({
     }
   };
 
-  const imprimirLote = () => {
+  const imprimirLote = async () => {
     setError("");
     if (!lote.length) {
       setError("Adicione pelo menos uma linha ao lote.");
       return;
     }
-    const { labels, nextContador, total } = expandLoteToLabels(lote, contadorInicial);
-    if (!total) {
-      setError("Nenhuma etiqueta no lote (grade vazia ou sem sigla Bling).");
-      return;
-    }
-    pendingNextContadorRef.current = nextContador;
     setPrintBusy(true);
-    setPrintLabels(labels);
+    try {
+      const peek = await peekNextContadorN();
+      const startContador = formatContador(peek.n, peek.width || 7);
+      const { labels, nextContador, total } = expandLoteToLabels(lote, startContador);
+      if (!total) {
+        setError("Nenhuma etiqueta no lote (grade vazia ou sem sigla Bling).");
+        setPrintBusy(false);
+        return;
+      }
+      await registrarLabels(labels, "print");
+      pendingNextContadorRef.current = nextContador;
+      pendingLabelsRef.current = labels;
+      setPrintLabels(labels);
+    } catch (err) {
+      setError(err?.message || "Falha ao preparar impressão.");
+      setPrintBusy(false);
+    }
   };
 
   useEffect(() => {
@@ -318,6 +368,7 @@ export default function EtiquetaCaixaPreview({
         setContadorInicial(next);
       }
       pendingNextContadorRef.current = "";
+      pendingLabelsRef.current = [];
       setPrintLabels([]);
       setPrintBusy(false);
     };

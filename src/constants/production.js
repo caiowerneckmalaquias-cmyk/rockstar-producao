@@ -12,6 +12,7 @@ export const navItems = [
   "Sugestoes",
   "Gerador de Fichas",
   "Etiquetas",
+  "Esteira",
   "Programação do Dia",
   "Relatório de Produção",
 ];

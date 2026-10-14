@@ -198,6 +198,8 @@ export function expandLoteToLabels(lote, contadorInicial) {
     const ref = String(linha.ref || "").trim();
     const sigla = String(linha.sigla || "").trim();
 
+    const corProduto = String(linha.cor || "").trim();
+
     sizes.forEach((size) => {
       const qtd = Math.max(0, Math.floor(Number(linha.grid?.[size]) || 0));
       if (!qtd) return;
@@ -212,7 +214,8 @@ export function expandLoteToLabels(lote, contadorInicial) {
           sku,
           contador: formatContador(n, width),
           ref,
-          cor: corLinha,
+          cor: corProduto || corLinha,
+          sigla,
         });
         n += 1;
       }
