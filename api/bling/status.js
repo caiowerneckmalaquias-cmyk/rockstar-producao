@@ -12,12 +12,14 @@ export default async function handler(req, res) {
         connected: false,
         depositoPaId: null,
         depositoEstId: null,
+        depositoMultiId: null,
         depositoPaNome: null,
         depositoEstNome: null,
+        depositoMultiNome: null,
         expiresAt: null,
         connectedAt: null,
         stockOffset: Number(process.env.BLING_STOCK_OFFSET) || 1000,
-        phase2Note: "Sync de estoque por SKU (ref/cor/numeração) = fase 2",
+        phase2Note: "Sugestões usam DISP (Multiempresa). Esteira/push usam PA.",
       });
     }
 
@@ -29,12 +31,14 @@ export default async function handler(req, res) {
       expired,
       depositoPaId: row.deposito_pa_id ?? null,
       depositoEstId: row.deposito_est_id ?? null,
+      depositoMultiId: row.deposito_multi_id ?? null,
       depositoPaNome: row.deposito_pa_nome ?? null,
       depositoEstNome: row.deposito_est_nome ?? null,
+      depositoMultiNome: row.deposito_multi_nome ?? null,
       expiresAt: row.expires_at ?? null,
       connectedAt: row.connected_at ?? row.updated_at ?? null,
       stockOffset: Number(process.env.BLING_STOCK_OFFSET) || 1000,
-      phase2Note: "Sync de estoque por SKU (ref/cor/numeração) = fase 2",
+      phase2Note: "Sugestões usam DISP (Multiempresa). Esteira/push usam PA.",
     });
   } catch (e) {
     console.error("bling status", e);

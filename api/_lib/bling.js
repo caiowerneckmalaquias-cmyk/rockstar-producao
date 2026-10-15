@@ -54,14 +54,24 @@ export function matchDepositos(depositos) {
   const list = Array.isArray(depositos) ? depositos : [];
   let depositoPaId = null;
   let depositoEstId = null;
+  let depositoMultiId = null;
   let depositoPaNome = null;
   let depositoEstNome = null;
+  let depositoMultiNome = null;
 
   for (const dep of list) {
-    const nome = normalizeDepositName(dep?.descricao || dep?.nome || dep?.name);
+    const rawNome = dep?.descricao || dep?.nome || dep?.name || "";
+    const nome = normalizeDepositName(rawNome);
     const id = dep?.id ?? null;
     if (id == null) continue;
     const compact = nome.replace(/\s+/g, "");
+    if (
+      !depositoMultiId &&
+      (nome.includes("MULTIEMPRESA") || compact.includes("MULTIEMPRESA"))
+    ) {
+      depositoMultiId = id;
+      depositoMultiNome = rawNome || nome;
+    }
     if (
       !depositoPaId &&
       (DEPOSITO_PA_NAMES.includes(nome) || DEPOSITO_PA_NAMES.includes(compact) || nome.includes("PRODUTO ACABADO"))
@@ -78,7 +88,14 @@ export function matchDepositos(depositos) {
     }
   }
 
-  return { depositoPaId, depositoEstId, depositoPaNome, depositoEstNome };
+  return {
+    depositoPaId,
+    depositoEstId,
+    depositoMultiId,
+    depositoPaNome,
+    depositoEstNome,
+    depositoMultiNome,
+  };
 }
 
 export function createServiceClient() {
@@ -281,8 +298,10 @@ export async function getValidAccessToken() {
     scopes: tokenJson.scope || row.scopes,
     deposito_pa_id: row.deposito_pa_id,
     deposito_est_id: row.deposito_est_id,
+    deposito_multi_id: row.deposito_multi_id,
     deposito_pa_nome: row.deposito_pa_nome,
     deposito_est_nome: row.deposito_est_nome,
+    deposito_multi_nome: row.deposito_multi_nome,
     connected_at: row.connected_at,
   });
 

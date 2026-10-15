@@ -30,8 +30,10 @@ export default async function handler(req, res) {
       scopes: tokenJson.scope || row.scopes,
       deposito_pa_id: row.deposito_pa_id,
       deposito_est_id: row.deposito_est_id,
+      deposito_multi_id: row.deposito_multi_id,
       deposito_pa_nome: row.deposito_pa_nome,
       deposito_est_nome: row.deposito_est_nome,
+      deposito_multi_nome: row.deposito_multi_nome,
       connected_at: row.connected_at,
     });
 

@@ -24,6 +24,7 @@ export default async function handler(req, res) {
     const { accessToken, conexao } = await getValidAccessToken();
     const depositoPaId = conexao.deposito_pa_id;
     const depositoEstId = conexao.deposito_est_id;
+    const depositoMultiId = conexao.deposito_multi_id;
     if (!depositoPaId || !depositoEstId) {
       return json(res, 400, {
         error:
@@ -44,7 +45,7 @@ export default async function handler(req, res) {
 
     const { data: estoqueAtual, error: erroEst } = await supabase
       .from("estoque")
-      .select("ref,cor,numero,pa,est,m,p");
+      .select("ref,cor,numero,pa,est,m,p,disp");
     if (erroEst) throw new Error(erroEst.message);
 
     const estoqueMap = new Map();
@@ -58,6 +59,7 @@ export default async function handler(req, res) {
     let notFound = 0;
     let zeroedOnBling = 0;
     const samples = [];
+    const multiVinculado = depositoMultiId != null;
 
     for (const prod of comSigla) {
       const ref = String(prod.ref || "").trim();
@@ -100,6 +102,9 @@ export default async function handler(req, res) {
 
         let paBling = saldoNoDeposito(saldos, depositoPaId);
         let estBling = saldoNoDeposito(saldos, depositoEstId);
+        const multiRaw = multiVinculado
+          ? saldoNoDeposito(saldos, depositoMultiId)
+          : null;
 
         if (shouldZeroBling(paBling, STOCK_OFFSET)) {
           if (paBling !== 0) {
@@ -140,6 +145,10 @@ export default async function handler(req, res) {
 
         const paReal = blingToReal(paBling, STOCK_OFFSET);
         const estReal = blingToReal(estBling, STOCK_OFFSET);
+        // Multiempresa = disponível consolidado (unidades reais, sem offset Shopee).
+        const dispReal = multiVinculado
+          ? Math.max(0, Math.round(Number(multiRaw) || 0))
+          : paReal;
         const prev = estoqueMap.get(`${ref}__${cor}__${size}`) || {};
 
         toUpsert.push({
@@ -148,6 +157,7 @@ export default async function handler(req, res) {
           numero: size,
           pa: paReal,
           est: estReal,
+          disp: dispReal,
           m: Number(prev.m) || 0,
           p: Number(prev.p) || 0,
         });
@@ -173,8 +183,14 @@ export default async function handler(req, res) {
       semSigla,
       notFound,
       zeroedOnBling,
+      multiVinculado,
+      depositoMultiId: depositoMultiId ?? null,
+      depositoMultiNome: conexao.deposito_multi_nome ?? null,
       stockOffset: STOCK_OFFSET,
       samples,
+      warning: multiVinculado
+        ? null
+        : "Depósito Multiempresa não vinculado — DISP = PA (fallback). Reconecte o Bling.",
     });
   } catch (e) {
     console.error("pull-estoque", e);
