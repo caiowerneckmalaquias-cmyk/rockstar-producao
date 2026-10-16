@@ -50,6 +50,39 @@ export function normalizeDepositName(name) {
     .replace(/\s+/g, " ");
 }
 
+/** Nome bruto do depósito em vários formatos da API Bling. */
+export function depositRawName(dep) {
+  if (!dep || typeof dep !== "object") return "";
+  return (
+    dep.descricao ||
+    dep.nome ||
+    dep.name ||
+    dep.descricaoDeposito ||
+    dep.deposito?.descricao ||
+    dep.deposito?.nome ||
+    dep.deposito?.name ||
+    ""
+  );
+}
+
+export function depositId(dep) {
+  if (!dep || typeof dep !== "object") return null;
+  const id = dep.id ?? dep.deposito?.id ?? null;
+  return id == null ? null : id;
+}
+
+/** Multiempresa / Multiempresas / Multi Empresa (com ou sem espaços). */
+export function isMultiempresaName(rawNome) {
+  const nome = normalizeDepositName(rawNome);
+  if (!nome) return false;
+  const compact = nome.replace(/\s+/g, "");
+  return (
+    compact.includes("MULTIEMPRESA") ||
+    nome.includes("MULTI EMPRESA") ||
+    /\bMULTI\s*EMPRESAS?\b/.test(nome)
+  );
+}
+
 export function matchDepositos(depositos) {
   const list = Array.isArray(depositos) ? depositos : [];
   let depositoPaId = null;
@@ -60,31 +93,30 @@ export function matchDepositos(depositos) {
   let depositoMultiNome = null;
 
   for (const dep of list) {
-    const rawNome = dep?.descricao || dep?.nome || dep?.name || "";
+    const rawNome = depositRawName(dep);
     const nome = normalizeDepositName(rawNome);
-    const id = dep?.id ?? null;
+    const id = depositId(dep);
     if (id == null) continue;
     const compact = nome.replace(/\s+/g, "");
-    if (
-      !depositoMultiId &&
-      (nome.includes("MULTIEMPRESA") || compact.includes("MULTIEMPRESA"))
-    ) {
+    if (!depositoMultiId && isMultiempresaName(rawNome)) {
       depositoMultiId = id;
       depositoMultiNome = rawNome || nome;
     }
     if (
       !depositoPaId &&
-      (DEPOSITO_PA_NAMES.includes(nome) || DEPOSITO_PA_NAMES.includes(compact) || nome.includes("PRODUTO ACABADO"))
+      (DEPOSITO_PA_NAMES.includes(nome) ||
+        DEPOSITO_PA_NAMES.includes(compact) ||
+        nome.includes("PRODUTO ACABADO"))
     ) {
       depositoPaId = id;
-      depositoPaNome = dep?.descricao || dep?.nome || nome;
+      depositoPaNome = rawNome || nome;
     }
     if (
       !depositoEstId &&
       (DEPOSITO_EST_NAMES.includes(nome) || nome.includes("OVERLOQUE"))
     ) {
       depositoEstId = id;
-      depositoEstNome = dep?.descricao || dep?.nome || nome;
+      depositoEstNome = rawNome || nome;
     }
   }
 
@@ -96,6 +128,50 @@ export function matchDepositos(depositos) {
     depositoEstNome,
     depositoMultiNome,
   };
+}
+
+/** Lista resumida para debug na UI. */
+export function summarizeDepositos(depositos) {
+  const list = Array.isArray(depositos) ? depositos : [];
+  return list
+    .map((dep) => {
+      const id = depositId(dep);
+      const nome = depositRawName(dep) || "(sem nome)";
+      if (id == null) return null;
+      return { id, nome: String(nome) };
+    })
+    .filter(Boolean);
+}
+
+/**
+ * Descobre Multiempresa a partir do payload de saldos do produto
+ * (quando GET /depositos não lista o virtual).
+ */
+export function discoverMultiempresaFromSaldos(saldosPayload) {
+  const items = Array.isArray(saldosPayload?.data)
+    ? saldosPayload.data
+    : Array.isArray(saldosPayload)
+      ? saldosPayload
+      : [];
+
+  for (const item of items) {
+    const deps = item?.depositos || item?.saldosDepositos || [];
+    if (Array.isArray(deps)) {
+      for (const d of deps) {
+        const rawNome = depositRawName(d);
+        const id = depositId(d);
+        if (id != null && isMultiempresaName(rawNome)) {
+          return { id, nome: rawNome || "Multiempresa" };
+        }
+      }
+    }
+    const nestedNome = depositRawName(item?.deposito || item);
+    const nestedId = depositId(item?.deposito || item);
+    if (nestedId != null && isMultiempresaName(nestedNome)) {
+      return { id: nestedId, nome: nestedNome || "Multiempresa" };
+    }
+  }
+  return null;
 }
 
 export function createServiceClient() {
@@ -176,7 +252,10 @@ export async function blingFetch(path, accessToken, options = {}) {
 
 export async function listDepositos(accessToken) {
   const json = await blingFetch("/depositos?pagina=1&limite=100", accessToken);
-  return json?.data || json || [];
+  const raw = json?.data ?? json;
+  if (Array.isArray(raw)) return raw;
+  if (Array.isArray(raw?.data)) return raw.data;
+  return [];
 }
 
 export async function upsertConexao(row) {

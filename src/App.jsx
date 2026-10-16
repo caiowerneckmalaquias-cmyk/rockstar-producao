@@ -2696,6 +2696,42 @@ const programacaoMontagem = useMemo(
     return true;
   };
 
+  const executarRelinkDepositosBling = async () => {
+    if (blingSyncBusy) return;
+    setBlingSyncBusy("relink");
+    setBlingFeedback("Vinculando depósitos do Bling…");
+    try {
+      const res = await fetch("/api/bling/relink-depositos", {
+        method: "POST",
+        credentials: "same-origin",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setBlingFeedback(data.error || "Falha ao vincular depósitos");
+        return;
+      }
+      await carregarStatusBling();
+      const nomes = Array.isArray(data.depositos)
+        ? data.depositos.map((d) => d.nome).filter(Boolean)
+        : [];
+      if (data.multiVinculado) {
+        setBlingFeedback(
+          `Depósitos vinculados: PA ${data.matched?.depositoPaNome || "—"} · EST ${data.matched?.depositoEstNome || "—"} · Multiempresa ${data.matched?.depositoMultiNome || data.matched?.depositoMultiId} (id ${data.matched?.depositoMultiId}).`
+        );
+      } else {
+        setBlingFeedback(
+          `${data.warning || "Multiempresa não vinculado."}${
+            nomes.length ? ` Depósitos na API: ${nomes.join(", ")}.` : ""
+          } Se o Multiempresa não listar, use Puxar estoque (descoberta via saldos).`
+        );
+      }
+    } catch (err) {
+      setBlingFeedback(err?.message || "Erro de rede ao vincular depósitos");
+    } finally {
+      setBlingSyncBusy("");
+    }
+  };
+
   const executarPullEstoqueBling = async () => {
     if (blingSyncBusy) return;
     setBlingSyncBusy("pull");
@@ -2712,8 +2748,13 @@ const programacaoMontagem = useMemo(
       }
       const estoqueBanco = await carregarEstoqueDoBanco();
       if (estoqueBanco) setRows(estoqueBanco);
+      if (data.multiVinculado || data.multiDescobertoNoPull) {
+        await carregarStatusBling();
+      }
       const multiNote = data.multiVinculado
-        ? ` · Multiempresa → DISP (${data.depositoMultiNome || data.depositoMultiId})`
+        ? ` · Multiempresa → DISP (${data.depositoMultiNome || data.depositoMultiId})${
+            data.multiDescobertoNoPull ? " [descoberto no pull]" : ""
+          }`
         : ` · Aviso: Multiempresa não vinculado (DISP=PA)`;
       setBlingFeedback(
         `Puxado: ${data.updated || 0} linhas · SKUs ok ${data.skusOk || 0} · sem sigla ${data.semSigla || 0} · não achados ${data.notFound || 0} · zerados no Bling ${data.zeroedOnBling || 0}${multiNote}${
@@ -2962,7 +3003,9 @@ const programacaoMontagem = useMemo(
     const bling = params.get("bling");
     if (!bling) return;
     if (bling === "connected") {
-      setBlingFeedback("Bling conectado. Depósitos PA/EST serão vinculados automaticamente.");
+      setBlingFeedback(
+        "Bling conectado. PA/EST/Multiempresa serão vinculados automaticamente. Se Multiempresa ficar âmbar, use Vincular depósitos e depois Puxar estoque."
+      );
       setActive("Importar GCM");
     } else if (bling === "error") {
       setBlingFeedback(
@@ -5901,6 +5944,14 @@ const salvarVendasManuais = async () => {
                 </button>
                 <button
                   type="button"
+                  onClick={executarRelinkDepositosBling}
+                  disabled={!!blingSyncBusy || !blingStatus?.connected}
+                  className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-950 shadow-sm hover:bg-amber-100 disabled:opacity-50"
+                >
+                  {blingSyncBusy === "relink" ? "Vinculando…" : "Vincular depósitos"}
+                </button>
+                <button
+                  type="button"
                   onClick={executarPullEstoqueBling}
                   disabled={!!blingSyncBusy || !blingStatus?.connected}
                   className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-900 shadow-sm hover:bg-emerald-100 disabled:opacity-50"
@@ -5975,7 +6026,7 @@ const salvarVendasManuais = async () => {
                 <div className="font-semibold text-slate-900 mt-1">
                   {blingStatus?.depositoMultiId != null
                     ? `${blingStatus.depositoMultiNome || "Multiempresa"} · id ${blingStatus.depositoMultiId}`
-                    : "Não vinculado — reconecte o Bling"}
+                    : "Não vinculado — use Vincular depósitos ou Puxar estoque"}
                 </div>
                 <div className="text-xs text-slate-500 mt-1">
                   Base das Sugestões / Programação após puxar estoque.
