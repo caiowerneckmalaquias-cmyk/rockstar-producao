@@ -2120,6 +2120,7 @@ const [tempoProducao, setTempoProducao] = useState(initialTempoProducao);
 const [tempoProducaoDraft, setTempoProducaoDraft] = useState(initialTempoProducao);
 const [fichasAbertas, setFichasAbertas] = useState({});
 const [costuraProntaRefsAbertas, setCosturaProntaRefsAbertas] = useState({});
+const [estoqueProntoRefsAbertas, setEstoqueProntoRefsAbertas] = useState({});
 const [programacaoDias, setProgramacaoDias] = useState(7);
 const [confirmAction, setConfirmAction] = useState(null);
 const [relatorioDataInicial, setRelatorioDataInicial] = useState("");
@@ -7600,6 +7601,174 @@ const salvarVendasManuais = async () => {
     );
   };
 
+  const renderEstoquePronto = () => {
+    const totalGeralDisp = sortedRowsByRefCor.reduce(
+      (acc, row) =>
+        acc +
+        sizes.reduce((sum, size) => sum + cellDisponivel(row.data?.[size]), 0),
+      0
+    );
+
+    return (
+      <PageShell
+        title="Estoque Pronto"
+        subtitle="Disponível pra venda (DISP) = PA da conta principal + Geral das contas secundárias, após Puxar estoque."
+      >
+        <div className="grid grid-cols-1 xl:grid-cols-[1fr_320px] gap-6 items-start">
+          <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm overflow-auto p-6">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="text-sm text-slate-600">
+                <span className="font-semibold text-slate-900">{gruposCosturaProntaPorRef.length}</span>{" "}
+                referência(s) ·{" "}
+                <span className="font-semibold text-slate-900">{sortedRowsByRefCor.length}</span>{" "}
+                cor(es) · total{" "}
+                <span className="font-semibold text-slate-900">
+                  {totalGeralDisp.toLocaleString("pt-BR")}
+                </span>{" "}
+                par(es)
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setEstoqueProntoRefsAbertas(
+                      Object.fromEntries(gruposCosturaProntaPorRef.map(([ref]) => [ref, true]))
+                    )
+                  }
+                  className="px-3 py-1.5 text-xs font-semibold rounded-xl border border-slate-200 bg-white hover:bg-slate-50"
+                >
+                  Expandir todas
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEstoqueProntoRefsAbertas({})}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-xl border border-slate-200 bg-white hover:bg-slate-50"
+                >
+                  Recolher todas
+                </button>
+              </div>
+            </div>
+            <table className="min-w-[1200px] w-full border-collapse text-sm">
+              <thead>
+                <tr className="bg-slate-50 text-slate-500">
+                  <th className="border px-4 py-3 text-left">Ref</th>
+                  <th className="border px-4 py-3 text-left">Cor</th>
+                  {sizes.map((s) => (
+                    <th key={s} className="border px-3 py-3 text-center">
+                      {s}
+                    </th>
+                  ))}
+                  <th className="border px-4 py-3 text-center">Total DISP</th>
+                </tr>
+              </thead>
+              <tbody>
+                {gruposCosturaProntaPorRef.map(([ref, corRows]) => {
+                  const aberto = Boolean(estoqueProntoRefsAbertas[ref]);
+                  const totaisPorSize = Object.fromEntries(
+                    sizes.map((size) => [
+                      size,
+                      corRows.reduce(
+                        (acc, row) => acc + cellDisponivel(row.data?.[size]),
+                        0
+                      ),
+                    ])
+                  );
+                  const totalRef = sizes.reduce(
+                    (acc, size) => acc + (totaisPorSize[size] || 0),
+                    0
+                  );
+                  return (
+                    <React.Fragment key={`ep-ref-${ref}`}>
+                      <tr className="bg-slate-100/90 hover:bg-slate-200/80 transition-colors">
+                        <td className="border px-2 py-2 font-bold text-slate-900" colSpan={2}>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setEstoqueProntoRefsAbertas((curr) => ({
+                                ...curr,
+                                [ref]: !curr[ref],
+                              }))
+                            }
+                            className="w-full flex items-center justify-between gap-3 text-left px-2 py-1 rounded-lg hover:bg-white/60"
+                          >
+                            <span className="inline-flex items-center gap-2 min-w-0">
+                              <span className="text-slate-500 shrink-0 w-4 text-center" aria-hidden>
+                                {aberto ? "▼" : "▶"}
+                              </span>
+                              <span className="truncate">{ref}</span>
+                            </span>
+                            <span className="text-xs font-semibold text-slate-600 shrink-0">
+                              {corRows.length} cor{corRows.length !== 1 ? "es" : ""}
+                            </span>
+                          </button>
+                        </td>
+                        {sizes.map((size) => (
+                          <td
+                            key={`${ref}-ep-sum-${size}`}
+                            className="border px-3 py-3 text-center font-semibold text-slate-800"
+                          >
+                            {totaisPorSize[size]}
+                          </td>
+                        ))}
+                        <td className="border px-4 py-3 text-center font-bold text-slate-900">
+                          {totalRef}
+                        </td>
+                      </tr>
+                      {aberto
+                        ? corRows.map((row) => {
+                            const totalCor = sizes.reduce(
+                              (acc, size) => acc + cellDisponivel(row.data?.[size]),
+                              0
+                            );
+                            return (
+                              <tr key={`ep-${row.ref}-${row.cor}`} className="bg-white">
+                                <td className="border px-4 py-2 w-8" />
+                                <td className="border px-4 py-2 pl-6 text-slate-800">{row.cor}</td>
+                                {sizes.map((size) => (
+                                  <td
+                                    key={size}
+                                    className="border px-3 py-2 text-center text-slate-700"
+                                  >
+                                    {cellDisponivel(row.data?.[size])}
+                                  </td>
+                                ))}
+                                <td className="border px-4 py-2 text-center font-semibold text-slate-800">
+                                  {totalCor}
+                                </td>
+                              </tr>
+                            );
+                          })
+                        : null}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6 space-y-3">
+            <div className="font-bold text-lg">Como ler esta aba</div>
+            <p className="text-sm text-slate-600 leading-relaxed">
+              Os números são o <span className="font-semibold">DISP</span> consolidado após{" "}
+              <span className="font-semibold">Puxar estoque</span> no Importar GCM: PA da conta
+              principal somado ao Geral de cada conta secundária conectada.
+            </p>
+            <p className="text-sm text-slate-600 leading-relaxed">
+              É a mesma base usada nas <span className="font-semibold">Sugestões</span> e na
+              programação. Somente leitura — não edita estoque.
+            </p>
+            <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-sm">
+              <div className="text-slate-500">Total DISP</div>
+              <div className="text-2xl font-bold text-slate-900 mt-1">
+                {totalGeralDisp.toLocaleString("pt-BR")}
+              </div>
+            </div>
+          </div>
+        </div>
+      </PageShell>
+    );
+  };
+
   const renderConfig = () => {
   const updateLocal = (ref, cor, size, key, value) => {
     setDraftMinimos((curr) => ({
@@ -9577,6 +9746,8 @@ const salvarVendasManuais = async () => {
         return renderMovPage("Montagem", montagemForm, setMontagemForm, "Lance pares em montagem com grade completa.");
       case "Costura Pronta":
         return renderCosturaPronta();
+      case "Estoque Pronto":
+        return renderEstoquePronto();
       case "Minimos":
         return renderConfig();
       case "Vendas":
@@ -9645,6 +9816,7 @@ const salvarVendasManuais = async () => {
     "Pesponto": "Operação",
     "Montagem": "Operação",
     "Costura Pronta": "Operação",
+    "Estoque Pronto": "Operação",
     "Minimos": "Planejamento",
     "Vendas": "Planejamento",
     "Sugestoes": "Planejamento",

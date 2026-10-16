@@ -7,6 +7,7 @@ export const navItems = [
   "Pesponto",
   "Montagem",
   "Costura Pronta",
+  "Estoque Pronto",
   "Minimos",
   "Vendas",
   "Sugestoes",
