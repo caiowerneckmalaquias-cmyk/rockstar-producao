@@ -3,6 +3,7 @@ import {
   blingToReal,
   buildBlingSku,
   createServiceClient,
+  discoverMultiempresaFromSaldos,
   fetchSaldosProduto,
   findProductByCodigo,
   getValidAccessToken,
@@ -11,6 +12,7 @@ import {
   setEstoqueSaldo,
   shouldZeroBling,
   sleep,
+  upsertConexao,
 } from "../_lib/bling.js";
 
 const SIZES = [34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44];
@@ -24,7 +26,8 @@ export default async function handler(req, res) {
     const { accessToken, conexao } = await getValidAccessToken();
     const depositoPaId = conexao.deposito_pa_id;
     const depositoEstId = conexao.deposito_est_id;
-    const depositoMultiId = conexao.deposito_multi_id;
+    let depositoMultiId = conexao.deposito_multi_id ?? null;
+    let depositoMultiNome = conexao.deposito_multi_nome ?? null;
     if (!depositoPaId || !depositoEstId) {
       return json(res, 400, {
         error:
@@ -59,7 +62,7 @@ export default async function handler(req, res) {
     let notFound = 0;
     let zeroedOnBling = 0;
     const samples = [];
-    const multiVinculado = depositoMultiId != null;
+    let multiDescobertoNoPull = false;
 
     for (const prod of comSigla) {
       const ref = String(prod.ref || "").trim();
@@ -99,6 +102,36 @@ export default async function handler(req, res) {
           }
           continue;
         }
+
+        // Fallback: virtual Multiempresa às vezes não vem em GET /depositos.
+        if (depositoMultiId == null) {
+          const found = discoverMultiempresaFromSaldos(saldos);
+          if (found?.id != null) {
+            depositoMultiId = found.id;
+            depositoMultiNome = found.nome || "Multiempresa";
+            multiDescobertoNoPull = true;
+            try {
+              await upsertConexao({
+                access_token: conexao.access_token,
+                refresh_token: conexao.refresh_token,
+                token_type: conexao.token_type || "Bearer",
+                expires_at: conexao.expires_at,
+                scopes: conexao.scopes,
+                deposito_pa_id: depositoPaId,
+                deposito_est_id: depositoEstId,
+                deposito_multi_id: depositoMultiId,
+                deposito_pa_nome: conexao.deposito_pa_nome,
+                deposito_est_nome: conexao.deposito_est_nome,
+                deposito_multi_nome: depositoMultiNome,
+                connected_at: conexao.connected_at,
+              });
+            } catch (persistErr) {
+              console.warn("persist multi from saldos:", persistErr.message);
+            }
+          }
+        }
+
+        const multiVinculado = depositoMultiId != null;
 
         let paBling = saldoNoDeposito(saldos, depositoPaId);
         let estBling = saldoNoDeposito(saldos, depositoEstId);
@@ -176,6 +209,8 @@ export default async function handler(req, res) {
       }
     }
 
+    const multiVinculado = depositoMultiId != null;
+
     return json(res, 200, {
       ok: true,
       updated: toUpsert.length,
@@ -184,13 +219,14 @@ export default async function handler(req, res) {
       notFound,
       zeroedOnBling,
       multiVinculado,
+      multiDescobertoNoPull,
       depositoMultiId: depositoMultiId ?? null,
-      depositoMultiNome: conexao.deposito_multi_nome ?? null,
+      depositoMultiNome: depositoMultiNome ?? null,
       stockOffset: STOCK_OFFSET,
       samples,
       warning: multiVinculado
         ? null
-        : "Depósito Multiempresa não vinculado — DISP = PA (fallback). Reconecte o Bling.",
+        : "Depósito Multiempresa não vinculado — DISP = PA (fallback). Use Vincular depósitos ou reconecte o Bling.",
     });
   } catch (e) {
     console.error("pull-estoque", e);
