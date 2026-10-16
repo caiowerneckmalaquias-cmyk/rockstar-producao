@@ -2080,7 +2080,6 @@ const [blingStatusLoading, setBlingStatusLoading] = useState(false);
 const [blingFeedback, setBlingFeedback] = useState("");
 const [blingSiglas, setBlingSiglas] = useState({});
 const [blingSyncBusy, setBlingSyncBusy] = useState("");
-const [blingMultiIdManual, setBlingMultiIdManual] = useState("");
 const [esteiraBlingStatus, setEsteiraBlingStatus] = useState({ state: "idle", text: "" });
 const esteiraBlingQueueRef = useRef(new Set());
 const esteiraBlingTimerRef = useRef(null);
@@ -2733,44 +2732,6 @@ const programacaoMontagem = useMemo(
     }
   };
 
-  const executarSalvarMultiIdManual = async () => {
-    if (blingSyncBusy) return;
-    const idNum = Number(String(blingMultiIdManual || "").trim());
-    if (!Number.isFinite(idNum) || idNum <= 0) {
-      setBlingFeedback("Informe o id numérico do depósito Multiempresa (copie da URL/detalhe no Bling).");
-      return;
-    }
-    setBlingSyncBusy("set-multi");
-    setBlingFeedback("Salvando id Multiempresa…");
-    try {
-      const res = await fetch("/api/bling/set-deposito-multi", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          depositoMultiId: Math.trunc(idNum),
-          depositoMultiNome: "Multiempresa",
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setBlingFeedback(
-          data.error || `Falha ao salvar Multiempresa (HTTP ${res.status})`
-        );
-        return;
-      }
-      setBlingMultiIdManual("");
-      await carregarStatusBling();
-      setBlingFeedback(
-        `Multiempresa salvo: ${data.depositoMultiNome || "Multiempresa"} · id ${data.depositoMultiId}. Agora use Puxar estoque.`
-      );
-    } catch (err) {
-      setBlingFeedback(err?.message || "Erro de rede ao salvar Multiempresa");
-    } finally {
-      setBlingSyncBusy("");
-    }
-  };
-
   const executarPullEstoqueBling = async () => {
     if (blingSyncBusy) return;
     setBlingSyncBusy("pull");
@@ -2804,16 +2765,14 @@ const programacaoMontagem = useMemo(
       }
       const estoqueBanco = await carregarEstoqueDoBanco();
       if (estoqueBanco) setRows(estoqueBanco);
-      if (data.multiVinculado || data.multiDescobertoNoPull) {
-        await carregarStatusBling();
-      }
-      const multiNote = data.multiVinculado
-        ? ` · Multiempresa → DISP (${data.depositoMultiNome || data.depositoMultiId})${
-            data.multiDescobertoNoPull ? " [descoberto no pull]" : ""
-          }`
-        : ` · Aviso: Multiempresa não vinculado (DISP=PA)`;
+      await carregarStatusBling();
+      const secN = Number(data.secundariasUsadas) || 0;
+      const dispNote =
+        secN > 0
+          ? ` · DISP = PA + Geral de ${secN} conta(s) secundária(s)`
+          : ` · DISP = PA (nenhuma secundária pronta)`;
       setBlingFeedback(
-        `Puxado: ${data.updated || 0} linhas · SKUs ok ${data.skusOk || 0} · sem sigla ${data.semSigla || 0} · não achados ${data.notFound || 0} · zerados no Bling ${data.zeroedOnBling || 0}${multiNote}${
+        `Puxado: ${data.updated || 0} linhas · SKUs ok ${data.skusOk || 0} · sem sigla ${data.semSigla || 0} · não achados ${data.notFound || 0} · zerados no Bling ${data.zeroedOnBling || 0}${dispNote}${
           data.warning ? ` — ${data.warning}` : ""
         }`
       );
@@ -3067,7 +3026,13 @@ const programacaoMontagem = useMemo(
     if (!bling) return;
     if (bling === "connected") {
       setBlingFeedback(
-        "Bling conectado. PA/EST/Multiempresa serão vinculados automaticamente. Se Multiempresa ficar âmbar, use Vincular depósitos e depois Puxar estoque."
+        "Bling principal conectado (PA/EST). Conecte as 4 contas secundárias (Geral) e use Puxar estoque — DISP = PA + Gerais."
+      );
+      setActive("Importar GCM");
+    } else if (bling === "connected_sec") {
+      const slot = params.get("slot") || "?";
+      setBlingFeedback(
+        `Conta secundária ${slot} conectada (depósito Geral). Conecte as demais e use Puxar estoque.`
       );
       setActive("Importar GCM");
     } else if (bling === "error") {
@@ -3078,6 +3043,7 @@ const programacaoMontagem = useMemo(
     }
     params.delete("bling");
     params.delete("msg");
+    params.delete("slot");
     const next = params.toString();
     const clean = `${window.location.pathname}${next ? `?${next}` : ""}${window.location.hash || ""}`;
     window.history.replaceState({}, "", clean);
@@ -5982,13 +5948,13 @@ const salvarVendasManuais = async () => {
               <div>
                 <div className="font-semibold">Integração Bling (fase 1)</div>
                 <div className="text-sm text-slate-500 mt-1">
-                  OAuth + depósitos {BLING_DEPOSITO_PA_LABEL} (PA), {BLING_DEPOSITO_EST_LABEL} (EST) e{" "}
-                  <strong>Multiempresa</strong> (DISP nas Sugestões). Esteira/push usam PA.
-                  Regra Shopee no PA/EST: Bling = real + {BLING_STOCK_OFFSET}.
+                  Conta principal: {BLING_DEPOSITO_PA_LABEL} (PA) + {BLING_DEPOSITO_EST_LABEL}{" "}
+                  (EST). <strong>DISP</strong> = PA + Geral das 4 contas secundárias. Esteira/push
+                  usam PA. Regra Shopee só no PA/EST: Bling = real + {BLING_STOCK_OFFSET}.
                 </div>
                 <div className="text-xs text-amber-800 mt-2 rounded-xl bg-amber-50 border border-amber-100 px-3 py-2">
-                  Após criar Multiempresa no Bling, reconecte o Bling e use &quot;Puxar estoque&quot; para
-                  atualizar DISP. Programação usa DISP, não PA.
+                  Conecte a principal e as 4 secundárias (logar no Bling da empresa certa em cada
+                  OAuth). Depois use &quot;Puxar estoque&quot;. Programação usa DISP, não PA.
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -5996,7 +5962,7 @@ const salvarVendasManuais = async () => {
                   href="/api/bling/authorize"
                   className="inline-flex items-center justify-center rounded-2xl bg-[#1B4F72] px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-[#163f5b]"
                 >
-                  Conectar Bling
+                  Conectar Bling principal
                 </a>
                 <button
                   type="button"
@@ -6080,45 +6046,69 @@ const salvarVendasManuais = async () => {
               </div>
               <div
                 className={`rounded-2xl border px-4 py-3 md:col-span-2 ${
-                  blingStatus?.depositoMultiId != null
+                  (blingStatus?.secundariasProntas || 0) >= 1
                     ? "bg-emerald-50 border-emerald-200"
                     : "bg-amber-50 border-amber-200"
                 }`}
               >
-                <div className="text-slate-500">Depósito Multiempresa (DISP)</div>
+                <div className="text-slate-500">Contas secundárias (Geral → DISP)</div>
                 <div className="font-semibold text-slate-900 mt-1">
-                  {blingStatus?.depositoMultiId != null
-                    ? `${blingStatus.depositoMultiNome || "Multiempresa"} · id ${blingStatus.depositoMultiId}`
-                    : "Não vinculado — informe o id manualmente"}
+                  {(blingStatus?.secundariasProntas || 0) > 0
+                    ? `${blingStatus.secundariasProntas} de 4 pronta(s) para somar no DISP`
+                    : "Nenhuma secundária pronta — DISP = PA até conectar"}
                 </div>
                 <div className="text-xs text-slate-500 mt-1">
-                  Base das Sugestões / Programação após puxar estoque.
-                  {blingStatus?.depositoMultiId == null
-                    ? " No Bling, abra o depósito Multiempresa e copie o id da URL (ou do detalhe)."
-                    : ""}
+                  Em cada OAuth, entre no Bling da empresa secundária. O programa casa o depósito
+                  Geral automaticamente.
                 </div>
-                {blingStatus?.depositoMultiId == null && blingStatus?.connected && (
-                  <div className="mt-3 flex flex-col sm:flex-row gap-2 sm:items-center">
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      placeholder="Ex.: 1488921…"
-                      value={blingMultiIdManual}
-                      onChange={(e) =>
-                        setBlingMultiIdManual(e.target.value.replace(/[^\d]/g, ""))
-                      }
-                      className="rounded-xl border border-amber-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-200 w-full sm:w-56"
-                    />
-                    <button
-                      type="button"
-                      onClick={executarSalvarMultiIdManual}
-                      disabled={!!blingSyncBusy || !blingMultiIdManual.trim()}
-                      className="rounded-xl bg-amber-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-amber-950 disabled:opacity-50"
-                    >
-                      {blingSyncBusy === "set-multi" ? "Salvando…" : "Salvar id Multiempresa"}
-                    </button>
-                  </div>
-                )}
+                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {(blingStatus?.secundarias?.length
+                    ? blingStatus.secundarias
+                    : [1, 2, 3, 4].map((slot) => ({
+                        slot,
+                        label: `Conta secundária ${slot}`,
+                        connected: false,
+                        depositoGeralId: null,
+                        depositoGeralNome: null,
+                      }))
+                  ).map((sec) => {
+                    const pronta =
+                      sec.connected && !sec.expired && sec.depositoGeralId != null;
+                    return (
+                      <div
+                        key={sec.slot}
+                        className={`rounded-xl border px-3 py-2 ${
+                          pronta
+                            ? "border-emerald-200 bg-white"
+                            : "border-amber-200 bg-white/80"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="text-xs font-semibold text-slate-800">
+                              Slot {sec.slot}
+                            </div>
+                            <div className="text-xs text-slate-600 mt-0.5">
+                              {pronta
+                                ? `${sec.depositoGeralNome || "Geral"} · id ${sec.depositoGeralId}`
+                                : sec.connected
+                                  ? sec.expired
+                                    ? "Token expirado — reconecte"
+                                    : "Sem depósito Geral"
+                                  : "Desconectada"}
+                            </div>
+                          </div>
+                          <a
+                            href={`/api/bling/authorize?tipo=secundaria&slot=${sec.slot}`}
+                            className="shrink-0 rounded-lg bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-slate-800"
+                          >
+                            {sec.connected ? "Reconectar" : "Conectar"}
+                          </a>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </div>

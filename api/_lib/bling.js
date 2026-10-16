@@ -8,6 +8,8 @@ export const STOCK_OFFSET = Number(process.env.BLING_STOCK_OFFSET) || 1000;
 
 const DEPOSITO_PA_NAMES = ["PRODUTO ACABADO", "PRODUTOACABADO"];
 const DEPOSITO_EST_NAMES = ["OVERLOQUE"];
+const DEPOSITO_GERAL_NAMES = ["GERAL"];
+export const BLING_SECUNDARIA_SLOTS = [1, 2, 3, 4];
 
 export function getEnv() {
   const clientId = process.env.BLING_CLIENT_ID || "";
@@ -127,6 +129,33 @@ export function matchDepositos(depositos) {
     depositoPaNome,
     depositoEstNome,
     depositoMultiNome,
+  };
+}
+
+/** Casa depósito Geral (vendas das contas secundárias). */
+export function matchDepositoGeral(depositos) {
+  const list = Array.isArray(depositos) ? depositos : [];
+  let exact = null;
+  let fuzzy = null;
+  for (const dep of list) {
+    const rawNome = depositRawName(dep);
+    const nome = normalizeDepositName(rawNome);
+    const id = depositId(dep);
+    if (id == null || !nome) continue;
+    if (isMultiempresaName(rawNome)) continue;
+    const compact = nome.replace(/\s+/g, "");
+    if (DEPOSITO_GERAL_NAMES.includes(nome) || DEPOSITO_GERAL_NAMES.includes(compact)) {
+      exact = { id, nome: rawNome || nome };
+      break;
+    }
+    if (!fuzzy && (nome === "GERAL" || compact === "GERAL" || nome.startsWith("GERAL "))) {
+      fuzzy = { id, nome: rawNome || nome };
+    }
+  }
+  const hit = exact || fuzzy;
+  return {
+    depositoGeralId: hit?.id ?? null,
+    depositoGeralNome: hit?.nome ?? null,
   };
 }
 
@@ -283,6 +312,110 @@ export async function getConexao() {
     .maybeSingle();
   if (error) throw new Error(`Supabase bling_conexao: ${error.message}`);
   return data;
+}
+
+export function normalizeSecundariaSlot(slot) {
+  const n = Number(slot);
+  if (!BLING_SECUNDARIA_SLOTS.includes(n)) return null;
+  return n;
+}
+
+export async function listContasSecundarias() {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("bling_conta_secundaria")
+    .select("*")
+    .order("slot", { ascending: true });
+  if (error) throw new Error(`Supabase bling_conta_secundaria: ${error.message}`);
+  return data || [];
+}
+
+export async function getContaSecundaria(slot) {
+  const s = normalizeSecundariaSlot(slot);
+  if (s == null) return null;
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("bling_conta_secundaria")
+    .select("*")
+    .eq("slot", s)
+    .maybeSingle();
+  if (error) throw new Error(`Supabase bling_conta_secundaria: ${error.message}`);
+  return data;
+}
+
+export async function upsertContaSecundaria(row) {
+  const s = normalizeSecundariaSlot(row?.slot);
+  if (s == null) throw new Error("Slot secundário inválido (use 1–4)");
+  const supabase = createServiceClient();
+  const payload = {
+    ...row,
+    slot: s,
+    label: row.label || `Conta secundária ${s}`,
+    updated_at: new Date().toISOString(),
+  };
+  const { data, error } = await supabase
+    .from("bling_conta_secundaria")
+    .upsert(payload, { onConflict: "slot" })
+    .select("*")
+    .single();
+  if (error) throw new Error(`Supabase bling_conta_secundaria: ${error.message}`);
+  return data;
+}
+
+/** Token válido de uma conta secundária (renova se precisar). */
+export async function getValidAccessTokenSecundaria(slot) {
+  const row = await getContaSecundaria(slot);
+  if (!row?.access_token) {
+    throw new Error(`Conta secundária ${slot} não conectada.`);
+  }
+
+  const expiresAt = row.expires_at ? new Date(row.expires_at).getTime() : 0;
+  const skewMs = 60_000;
+  if (expiresAt && expiresAt - skewMs > Date.now()) {
+    return { accessToken: row.access_token, conta: row };
+  }
+
+  if (!row.refresh_token) {
+    throw new Error(`Token da conta secundária ${slot} expirado. Reconecte.`);
+  }
+
+  const tokenJson = await exchangeToken({
+    grantType: "refresh_token",
+    refreshToken: row.refresh_token,
+  });
+
+  const updated = await upsertContaSecundaria({
+    slot: row.slot,
+    label: row.label,
+    access_token: tokenJson.access_token,
+    refresh_token: tokenJson.refresh_token || row.refresh_token,
+    token_type: tokenJson.token_type || "Bearer",
+    expires_at: expiresAtFromToken(tokenJson),
+    scopes: tokenJson.scope || row.scopes,
+    deposito_geral_id: row.deposito_geral_id,
+    deposito_geral_nome: row.deposito_geral_nome,
+    connected_at: row.connected_at,
+  });
+
+  return { accessToken: updated.access_token, conta: updated };
+}
+
+/** Contas secundárias prontas para somar no DISP (token + Geral). */
+export async function listContasSecundariasProntas() {
+  const rows = await listContasSecundarias();
+  const prontas = [];
+  for (const row of rows) {
+    if (!row?.access_token || row.deposito_geral_id == null) continue;
+    try {
+      const { accessToken, conta } = await getValidAccessTokenSecundaria(row.slot);
+      if (conta.deposito_geral_id != null) {
+        prontas.push({ accessToken, conta });
+      }
+    } catch (e) {
+      console.warn(`secundaria slot ${row.slot}:`, e.message);
+    }
+  }
+  return prontas;
 }
 
 export function expiresAtFromToken(tokenJson) {

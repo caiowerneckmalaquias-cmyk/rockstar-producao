@@ -3,16 +3,15 @@ import {
   blingToReal,
   buildBlingSku,
   createServiceClient,
-  discoverMultiempresaFromSaldos,
   fetchSaldosProduto,
   findProductByCodigo,
   getValidAccessToken,
   json,
+  listContasSecundariasProntas,
   saldoNoDeposito,
   setEstoqueSaldo,
   shouldZeroBling,
   sleep,
-  upsertConexao,
 } from "../_lib/bling.js";
 
 /** Vercel Pro: até 300s — o pull é sequencial e demora com muitos SKUs. */
@@ -29,13 +28,19 @@ export default async function handler(req, res) {
     const { accessToken, conexao } = await getValidAccessToken();
     const depositoPaId = conexao.deposito_pa_id;
     const depositoEstId = conexao.deposito_est_id;
-    let depositoMultiId = conexao.deposito_multi_id ?? null;
-    let depositoMultiNome = conexao.deposito_multi_nome ?? null;
     if (!depositoPaId || !depositoEstId) {
       return json(res, 400, {
         error:
           "Depósitos PA/EST não vinculados. Reconecte o Bling (PRODUTO ACABADO + OVERLOQUE).",
       });
+    }
+
+    let secundarias = [];
+    try {
+      secundarias = await listContasSecundariasProntas();
+    } catch (e) {
+      console.warn("listContasSecundariasProntas:", e.message);
+      secundarias = [];
     }
 
     const supabase = createServiceClient();
@@ -59,13 +64,18 @@ export default async function handler(req, res) {
       estoqueMap.set(`${e.ref}__${e.cor}__${e.numero}`, e);
     });
 
-    const skuCache = new Map();
+    const skuCachePrincipal = new Map();
+    /** cache por slot → Map(sku → produto|null) */
+    const skuCacheSec = new Map();
+    secundarias.forEach(({ conta }) => {
+      skuCacheSec.set(conta.slot, new Map());
+    });
+
     const toUpsert = [];
     let ok = 0;
     let notFound = 0;
     let zeroedOnBling = 0;
     const samples = [];
-    let multiDescobertoNoPull = false;
 
     for (const prod of comSigla) {
       const ref = String(prod.ref || "").trim();
@@ -76,7 +86,7 @@ export default async function handler(req, res) {
         const sku = buildBlingSku(ref, sigla, size);
         if (!sku) continue;
 
-        let produtoBling = skuCache.get(sku);
+        let produtoBling = skuCachePrincipal.get(sku);
         if (produtoBling === undefined) {
           await sleep(350);
           try {
@@ -87,7 +97,7 @@ export default async function handler(req, res) {
               samples.push({ sku, error: e.message });
             }
           }
-          skuCache.set(sku, produtoBling || null);
+          skuCachePrincipal.set(sku, produtoBling || null);
         }
 
         if (!produtoBling?.id) {
@@ -106,41 +116,8 @@ export default async function handler(req, res) {
           continue;
         }
 
-        // Fallback: virtual Multiempresa às vezes não vem em GET /depositos.
-        if (depositoMultiId == null) {
-          const found = discoverMultiempresaFromSaldos(saldos);
-          if (found?.id != null) {
-            depositoMultiId = found.id;
-            depositoMultiNome = found.nome || "Multiempresa";
-            multiDescobertoNoPull = true;
-            try {
-              await upsertConexao({
-                access_token: conexao.access_token,
-                refresh_token: conexao.refresh_token,
-                token_type: conexao.token_type || "Bearer",
-                expires_at: conexao.expires_at,
-                scopes: conexao.scopes,
-                deposito_pa_id: depositoPaId,
-                deposito_est_id: depositoEstId,
-                deposito_multi_id: depositoMultiId,
-                deposito_pa_nome: conexao.deposito_pa_nome,
-                deposito_est_nome: conexao.deposito_est_nome,
-                deposito_multi_nome: depositoMultiNome,
-                connected_at: conexao.connected_at,
-              });
-            } catch (persistErr) {
-              console.warn("persist multi from saldos:", persistErr.message);
-            }
-          }
-        }
-
-        const multiVinculado = depositoMultiId != null;
-
         let paBling = saldoNoDeposito(saldos, depositoPaId);
         let estBling = saldoNoDeposito(saldos, depositoEstId);
-        const multiRaw = multiVinculado
-          ? saldoNoDeposito(saldos, depositoMultiId)
-          : null;
 
         if (shouldZeroBling(paBling, STOCK_OFFSET)) {
           if (paBling !== 0) {
@@ -181,10 +158,39 @@ export default async function handler(req, res) {
 
         const paReal = blingToReal(paBling, STOCK_OFFSET);
         const estReal = blingToReal(estBling, STOCK_OFFSET);
-        // Multiempresa = disponível consolidado (unidades reais, sem offset Shopee).
-        const dispReal = multiVinculado
-          ? Math.max(0, Math.round(Number(multiRaw) || 0))
-          : paReal;
+
+        // DISP = PA principal + soma(Geral das secundárias). Geral sem offset.
+        let somaGeral = 0;
+        for (const { accessToken: tokenSec, conta } of secundarias) {
+          const cache = skuCacheSec.get(conta.slot);
+          let prodSec = cache.get(sku);
+          if (prodSec === undefined) {
+            await sleep(350);
+            try {
+              prodSec = await findProductByCodigo(tokenSec, sku);
+            } catch (_) {
+              prodSec = null;
+            }
+            cache.set(sku, prodSec || null);
+          }
+          if (!prodSec?.id) continue;
+
+          await sleep(350);
+          try {
+            const saldosSec = await fetchSaldosProduto(tokenSec, prodSec.id);
+            const geralRaw = saldoNoDeposito(saldosSec, conta.deposito_geral_id);
+            somaGeral += Number(geralRaw) || 0;
+          } catch (e) {
+            if (samples.length < 8) {
+              samples.push({
+                sku,
+                error: `sec${conta.slot} saldos: ${e.message}`,
+              });
+            }
+          }
+        }
+
+        const dispReal = Math.round(paReal + somaGeral);
         const prev = estoqueMap.get(`${ref}__${cor}__${size}`) || {};
 
         toUpsert.push({
@@ -212,8 +218,7 @@ export default async function handler(req, res) {
       }
     }
 
-    const multiVinculado = depositoMultiId != null;
-
+    const secundariasUsadas = secundarias.length;
     return json(res, 200, {
       ok: true,
       updated: toUpsert.length,
@@ -221,15 +226,18 @@ export default async function handler(req, res) {
       semSigla,
       notFound,
       zeroedOnBling,
-      multiVinculado,
-      multiDescobertoNoPull,
-      depositoMultiId: depositoMultiId ?? null,
-      depositoMultiNome: depositoMultiNome ?? null,
+      secundariasUsadas,
+      secundariasSlots: secundarias.map(({ conta }) => ({
+        slot: conta.slot,
+        depositoGeralId: conta.deposito_geral_id,
+        depositoGeralNome: conta.deposito_geral_nome,
+      })),
       stockOffset: STOCK_OFFSET,
       samples,
-      warning: multiVinculado
-        ? null
-        : "Depósito Multiempresa não vinculado — DISP = PA (fallback). Use Vincular depósitos ou reconecte o Bling.",
+      warning:
+        secundariasUsadas > 0
+          ? null
+          : "Nenhuma conta secundária pronta — DISP = PA. Conecte as 4 contas (Geral) e puxe de novo.",
     });
   } catch (e) {
     console.error("pull-estoque", e);

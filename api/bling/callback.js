@@ -4,8 +4,11 @@ import {
   getEnv,
   listDepositos,
   matchDepositos,
+  matchDepositoGeral,
+  normalizeSecundariaSlot,
   redirect,
   upsertConexao,
+  upsertContaSecundaria,
 } from "../_lib/bling.js";
 
 function readCookie(req, name) {
@@ -19,10 +22,19 @@ function readCookie(req, name) {
   return "";
 }
 
+function clearOauthCookies(res) {
+  res.setHeader("Set-Cookie", [
+    "bling_oauth_state=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
+    "bling_oauth_destino=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
+  ]);
+}
+
 export default async function handler(req, res) {
   const { appUrl } = getEnv();
-  const fail = (msg) =>
-    redirect(res, `${appUrl}/?bling=error&msg=${encodeURIComponent(msg)}`);
+  const fail = (msg) => {
+    clearOauthCookies(res);
+    return redirect(res, `${appUrl}/?bling=error&msg=${encodeURIComponent(msg)}`);
+  };
 
   try {
     if (req.method !== "GET") return fail("Método inválido");
@@ -41,6 +53,11 @@ export default async function handler(req, res) {
       return fail("State OAuth inválido");
     }
 
+    const destino = readCookie(req, "bling_oauth_destino") || "principal";
+    const secMatch = /^secundaria:(\d+)$/i.exec(destino);
+    const slot = secMatch ? normalizeSecundariaSlot(secMatch[1]) : null;
+    const isSecundaria = slot != null;
+
     const tokenJson = await exchangeToken({
       grantType: "authorization_code",
       code,
@@ -56,8 +73,33 @@ export default async function handler(req, res) {
     try {
       depositos = await listDepositos(accessToken);
     } catch (e) {
-      // Conecta mesmo se o escopo de depósitos falhar; IDs ficam null
       console.warn("listDepositos:", e.message);
+    }
+
+    if (isSecundaria) {
+      const geral = matchDepositoGeral(depositos);
+      if (geral.depositoGeralId == null) {
+        return fail(
+          `Conta secundária ${slot}: depósito Geral não encontrado. Confira o nome "Geral" no Bling.`
+        );
+      }
+      await upsertContaSecundaria({
+        slot,
+        label: `Conta secundária ${slot}`,
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        token_type: tokenJson.token_type || "Bearer",
+        expires_at: expiresAtFromToken(tokenJson),
+        scopes: tokenJson.scope || null,
+        deposito_geral_id: geral.depositoGeralId,
+        deposito_geral_nome: geral.depositoGeralNome,
+        connected_at: new Date().toISOString(),
+      });
+      clearOauthCookies(res);
+      return redirect(
+        res,
+        `${appUrl}/?bling=connected_sec&slot=${slot}`
+      );
     }
 
     const matched = matchDepositos(depositos);
@@ -77,10 +119,7 @@ export default async function handler(req, res) {
       connected_at: new Date().toISOString(),
     });
 
-    res.setHeader(
-      "Set-Cookie",
-      "bling_oauth_state=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0"
-    );
+    clearOauthCookies(res);
     return redirect(res, `${appUrl}/?bling=connected`);
   } catch (e) {
     console.error("bling callback", e);
