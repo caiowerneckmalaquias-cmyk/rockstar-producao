@@ -70,8 +70,10 @@ export default async function handler(req, res) {
       scopes: tokenJson.scope || null,
       deposito_pa_id: matched.depositoPaId,
       deposito_est_id: matched.depositoEstId,
+      deposito_multi_id: matched.depositoMultiId,
       deposito_pa_nome: matched.depositoPaNome,
       deposito_est_nome: matched.depositoEstNome,
+      deposito_multi_nome: matched.depositoMultiNome,
       connected_at: new Date().toISOString(),
     });
 

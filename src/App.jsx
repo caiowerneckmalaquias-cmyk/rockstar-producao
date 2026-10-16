@@ -294,10 +294,16 @@ const normalizeProductData = (rawData) =>
   Object.fromEntries(
     sizes.map((s) => {
       const cell = rawData?.[s] ?? rawData?.[String(s)];
+      const pa = Number(cell?.pa) || 0;
+      const disp =
+        cell?.disp != null && cell?.disp !== ""
+          ? Math.max(0, Number(cell.disp) || 0)
+          : pa;
       return [
         s,
         {
-          pa: Number(cell?.pa) || 0,
+          pa,
+          disp,
           est: Number(cell?.est) || 0,
           m: Number(cell?.m) || 0,
           p: Number(cell?.p) || 0,
@@ -305,6 +311,13 @@ const normalizeProductData = (rawData) =>
       ];
     })
   );
+
+/** Disponível pra venda (Multiempresa). Fallback: PA. */
+const cellDisponivel = (cell) => {
+  if (!cell) return 0;
+  if (cell.disp != null && cell.disp !== "") return Math.max(0, Number(cell.disp) || 0);
+  return Math.max(0, Number(cell.pa) || 0);
+};
 
 const calcTotal = (item) => item.pa + item.est + item.m + item.p;
 const round12 = (n) => (n <= 0 ? 0 : Math.ceil(n / 12) * 12);
@@ -887,13 +900,14 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
     let vendaTotalRefCor = 0;
 
     sizes.forEach((size) => {
-      const cellAntiga = familia.rowAntiga?.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 };
-      const cellNova = familia.rowNova?.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 };
-      const cellSolo = familia.rowSolo?.data?.[size] || { pa: 0, est: 0, m: 0, p: 0 };
+      const cellAntiga = familia.rowAntiga?.data?.[size] || { pa: 0, disp: 0, est: 0, m: 0, p: 0 };
+      const cellNova = familia.rowNova?.data?.[size] || { pa: 0, disp: 0, est: 0, m: 0, p: 0 };
+      const cellSolo = familia.rowSolo?.data?.[size] || { pa: 0, disp: 0, est: 0, m: 0, p: 0 };
 
+      // Programação usa DISP (Multiempresa), não PA fábrica.
       const pa = familia.migracao
-        ? (Number(cellAntiga.pa) || 0) + (Number(cellNova.pa) || 0)
-        : Number(cellSolo.pa) || 0;
+        ? cellDisponivel(cellAntiga) + cellDisponivel(cellNova)
+        : cellDisponivel(cellSolo);
       const estAntiga = familia.migracao ? Number(cellAntiga.est) || 0 : 0;
       const estNova = familia.migracao ? Number(cellNova.est) || 0 : 0;
       const est = familia.migracao
@@ -2546,7 +2560,7 @@ const programacaoMontagem = useMemo(
       .flatMap((row) =>
         sizes.map((size) => {
           const vendaMes = Number(vendas?.[row.ref]?.[row.cor]?.[size]) || 0;
-          const cobertura = coberturaDias(row.data[size]?.pa || 0, vendaMes);
+          const cobertura = coberturaDias(cellDisponivel(row.data[size]), vendaMes);
           return { ref: row.ref, cor: row.cor, size, cobertura, pa: row.data[size]?.pa || 0, vendaMes };
         })
       )
@@ -2698,8 +2712,13 @@ const programacaoMontagem = useMemo(
       }
       const estoqueBanco = await carregarEstoqueDoBanco();
       if (estoqueBanco) setRows(estoqueBanco);
+      const multiNote = data.multiVinculado
+        ? ` · Multiempresa → DISP (${data.depositoMultiNome || data.depositoMultiId})`
+        : ` · Aviso: Multiempresa não vinculado (DISP=PA)`;
       setBlingFeedback(
-        `Puxado: ${data.updated || 0} linhas · SKUs ok ${data.skusOk || 0} · sem sigla ${data.semSigla || 0} · não achados ${data.notFound || 0} · zerados no Bling ${data.zeroedOnBling || 0}`
+        `Puxado: ${data.updated || 0} linhas · SKUs ok ${data.skusOk || 0} · sem sigla ${data.semSigla || 0} · não achados ${data.notFound || 0} · zerados no Bling ${data.zeroedOnBling || 0}${multiNote}${
+          data.warning ? ` — ${data.warning}` : ""
+        }`
       );
     } catch (err) {
       setBlingFeedback(err?.message || "Erro de rede ao puxar estoque");
@@ -3174,6 +3193,10 @@ const startPrintWithTarget = useCallback((target) => {
           cor: row.cor,
           numero: Number(numero),
           pa: valores.pa || 0,
+          disp:
+            valores.disp != null && valores.disp !== ""
+              ? Number(valores.disp) || 0
+              : Number(valores.pa) || 0,
           est: valores.est || 0,
           m: valores.m || 0,
           p: valores.p || 0,
@@ -3197,15 +3220,23 @@ const startPrintWithTarget = useCallback((target) => {
 
   const cloneRowDataDeep = (row) =>
     Object.fromEntries(
-      sizes.map((s) => [
-        s,
-        {
-          pa: Number(row.data[s]?.pa) || 0,
-          est: Number(row.data[s]?.est) || 0,
-          m: Number(row.data[s]?.m) || 0,
-          p: Number(row.data[s]?.p) || 0,
-        },
-      ])
+      sizes.map((s) => {
+        const cell = row.data[s] || {};
+        const pa = Number(cell.pa) || 0;
+        return [
+          s,
+          {
+            pa,
+            disp:
+              cell.disp != null && cell.disp !== ""
+                ? Math.max(0, Number(cell.disp) || 0)
+                : pa,
+            est: Number(cell.est) || 0,
+            m: Number(cell.m) || 0,
+            p: Number(cell.p) || 0,
+          },
+        ];
+      })
     );
 
   /** Aplica finalização com validação de saldo (p ou m) e retorna erro se inválido. */
@@ -4612,8 +4643,13 @@ const carregarEstoqueDoBanco = async () => {
         };
       }
 
+      const pa = Number(item.pa) || 0;
       agrupado[key].data[item.numero] = {
-        pa: Number(item.pa) || 0,
+        pa,
+        disp:
+          item.disp != null && item.disp !== ""
+            ? Math.max(0, Number(item.disp) || 0)
+            : pa,
         est: Number(item.est) || 0,
         m: Number(item.m) || 0,
         p: Number(item.p) || 0,
@@ -5519,7 +5555,7 @@ const salvarVendasManuais = async () => {
     const coberturaCritica = controleRows
       .flatMap((row) => sizes.map((size) => {
         const vendaMes = Number(vendas?.[row.ref]?.[row.cor]?.[size]) || 0;
-        const cobertura = coberturaDias(row.data[size]?.pa || 0, vendaMes);
+        const cobertura = coberturaDias(cellDisponivel(row.data[size]), vendaMes);
         return { row, size, cobertura, vendaMes };
       }))
       .filter((item) => item.cobertura !== null)
@@ -5689,7 +5725,7 @@ const salvarVendasManuais = async () => {
               .slice(0, 9)
               .map((item, idx) => {
                 const vendaMes = Number(vendas?.[item.row.ref]?.[item.row.cor]?.[item.size]) || 0;
-                const cobertura = coberturaDias(item.row.data[item.size]?.pa || 0, vendaMes);
+                const cobertura = coberturaDias(cellDisponivel(item.row.data[item.size]), vendaMes);
                 return (
                   <div key={`${item.row.ref}-${item.size}-${idx}`} className="rounded-2xl border border-slate-200 px-4 py-3">
                     <div className="flex items-center justify-between gap-3">
@@ -5840,13 +5876,13 @@ const salvarVendasManuais = async () => {
               <div>
                 <div className="font-semibold">Integração Bling (fase 1)</div>
                 <div className="text-sm text-slate-500 mt-1">
-                  OAuth + depósitos {BLING_DEPOSITO_PA_LABEL} (PA) e {BLING_DEPOSITO_EST_LABEL} (EST).
-                  Regra Shopee: estoque no Bling = real + {BLING_STOCK_OFFSET} (ex.: real 10 →{" "}
-                  {realToBling(10)}; import {blingToReal(1010)}). Se Bling ≤ {BLING_STOCK_OFFSET},
-                  real = 0{shouldZeroBling(1000) ? " e zera no Bling" : ""}.
+                  OAuth + depósitos {BLING_DEPOSITO_PA_LABEL} (PA), {BLING_DEPOSITO_EST_LABEL} (EST) e{" "}
+                  <strong>Multiempresa</strong> (DISP nas Sugestões). Esteira/push usam PA.
+                  Regra Shopee no PA/EST: Bling = real + {BLING_STOCK_OFFSET}.
                 </div>
                 <div className="text-xs text-amber-800 mt-2 rounded-xl bg-amber-50 border border-amber-100 px-3 py-2">
-                  Fase 2: puxe/suba estoque após cadastrar siglas. Vendas/fichas automáticas pelo Bling ficam para depois.
+                  Após criar Multiempresa no Bling, reconecte o Bling e use &quot;Puxar estoque&quot; para
+                  atualizar DISP. Programação usa DISP, não PA.
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -5926,6 +5962,23 @@ const salvarVendasManuais = async () => {
                 <div className="font-semibold text-slate-900 mt-1">
                   {blingStatus?.depositoEstNome || BLING_DEPOSITO_EST_LABEL}
                   {blingStatus?.depositoEstId != null ? ` · id ${blingStatus.depositoEstId}` : " · id —"}
+                </div>
+              </div>
+              <div
+                className={`rounded-2xl border px-4 py-3 ${
+                  blingStatus?.depositoMultiId != null
+                    ? "bg-emerald-50 border-emerald-200"
+                    : "bg-amber-50 border-amber-200"
+                }`}
+              >
+                <div className="text-slate-500">Depósito Multiempresa (DISP)</div>
+                <div className="font-semibold text-slate-900 mt-1">
+                  {blingStatus?.depositoMultiId != null
+                    ? `${blingStatus.depositoMultiNome || "Multiempresa"} · id ${blingStatus.depositoMultiId}`
+                    : "Não vinculado — reconecte o Bling"}
+                </div>
+                <div className="text-xs text-slate-500 mt-1">
+                  Base das Sugestões / Programação após puxar estoque.
                 </div>
               </div>
             </div>
@@ -7890,7 +7943,7 @@ const salvarVendasManuais = async () => {
     const coberturaAnalise = rowsNormalized
       .flatMap((row) => sizes.map((size) => {
         const vendaMes = Number(vendas?.[row.ref]?.[row.cor]?.[size]) || 0;
-        const cobertura = coberturaDias(row.data[size]?.pa || 0, vendaMes);
+        const cobertura = coberturaDias(cellDisponivel(row.data[size]), vendaMes);
         return {
           ref: row.ref,
           cor: row.cor,
@@ -7907,7 +7960,7 @@ const salvarVendasManuais = async () => {
     const menorCobertura = coberturaAnalise.slice(0, 5);
 
     return (
-      <PageShell title="Sugestões" subtitle={`Planejamento automático com base em vendas, estoque atual, mínimos, produção em andamento e tempo de produção (${tempoProducao.pesponto}d pesponto + ${tempoProducao.montagem}d montagem).`}>
+      <PageShell title="Sugestões" subtitle={`Planejamento com DISP (Multiempresa / disponível pra venda), vendas, mínimos e tempo de produção (${tempoProducao.pesponto}d pesponto + ${tempoProducao.montagem}d montagem). PA fábrica não manda na programação.`}>
         <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
           <SummaryCard title="Sugestões de Montagem" value={suggestions.montagem.length} subtitle="Ordens sugeridas" />
           <SummaryCard title="Sugestões de Pesponto" value={suggestions.pesponto.length} subtitle="Ordens sugeridas" />
