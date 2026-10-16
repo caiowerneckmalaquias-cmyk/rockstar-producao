@@ -2080,6 +2080,7 @@ const [blingStatusLoading, setBlingStatusLoading] = useState(false);
 const [blingFeedback, setBlingFeedback] = useState("");
 const [blingSiglas, setBlingSiglas] = useState({});
 const [blingSyncBusy, setBlingSyncBusy] = useState("");
+const [blingMultiIdManual, setBlingMultiIdManual] = useState("");
 const [esteiraBlingStatus, setEsteiraBlingStatus] = useState({ state: "idle", text: "" });
 const esteiraBlingQueueRef = useRef(new Set());
 const esteiraBlingTimerRef = useRef(null);
@@ -2732,6 +2733,44 @@ const programacaoMontagem = useMemo(
     }
   };
 
+  const executarSalvarMultiIdManual = async () => {
+    if (blingSyncBusy) return;
+    const idNum = Number(String(blingMultiIdManual || "").trim());
+    if (!Number.isFinite(idNum) || idNum <= 0) {
+      setBlingFeedback("Informe o id numérico do depósito Multiempresa (copie da URL/detalhe no Bling).");
+      return;
+    }
+    setBlingSyncBusy("set-multi");
+    setBlingFeedback("Salvando id Multiempresa…");
+    try {
+      const res = await fetch("/api/bling/set-deposito-multi", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          depositoMultiId: Math.trunc(idNum),
+          depositoMultiNome: "Multiempresa",
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setBlingFeedback(
+          data.error || `Falha ao salvar Multiempresa (HTTP ${res.status})`
+        );
+        return;
+      }
+      setBlingMultiIdManual("");
+      await carregarStatusBling();
+      setBlingFeedback(
+        `Multiempresa salvo: ${data.depositoMultiNome || "Multiempresa"} · id ${data.depositoMultiId}. Agora use Puxar estoque.`
+      );
+    } catch (err) {
+      setBlingFeedback(err?.message || "Erro de rede ao salvar Multiempresa");
+    } finally {
+      setBlingSyncBusy("");
+    }
+  };
+
   const executarPullEstoqueBling = async () => {
     if (blingSyncBusy) return;
     setBlingSyncBusy("pull");
@@ -2741,9 +2780,26 @@ const programacaoMontagem = useMemo(
         method: "POST",
         credentials: "same-origin",
       });
-      const data = await res.json().catch(() => ({}));
+      const rawText = await res.text();
+      let data = {};
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch (_) {
+        data = {};
+      }
       if (!res.ok) {
-        setBlingFeedback(data.error || "Falha ao puxar estoque");
+        const detail = data.error || (rawText ? rawText.slice(0, 200) : "");
+        const timeoutHint =
+          res.status === 504 ||
+          res.status === 502 ||
+          /timeout|timed out|FUNCTION_INVOCATION_TIMEOUT/i.test(String(detail))
+            ? " Provável timeout — o pull demora com muitos SKUs; tente de novo."
+            : "";
+        setBlingFeedback(
+          `Falha ao puxar estoque (HTTP ${res.status})${
+            detail ? `: ${detail}` : " — resposta vazia (timeout ou rede)."
+          }${timeoutHint}`
+        );
         return;
       }
       const estoqueBanco = await carregarEstoqueDoBanco();
@@ -2762,7 +2818,14 @@ const programacaoMontagem = useMemo(
         }`
       );
     } catch (err) {
-      setBlingFeedback(err?.message || "Erro de rede ao puxar estoque");
+      const msg = String(err?.message || err || "");
+      const looksTimeout =
+        /abort|timeout|network|failed to fetch|load failed/i.test(msg);
+      setBlingFeedback(
+        looksTimeout
+          ? `Erro ao puxar estoque (rede/timeout): ${msg || "sem detalhe"}. O pull pode demorar vários minutos.`
+          : msg || "Erro de rede ao puxar estoque"
+      );
     } finally {
       setBlingSyncBusy("");
     }
@@ -6016,7 +6079,7 @@ const salvarVendasManuais = async () => {
                 </div>
               </div>
               <div
-                className={`rounded-2xl border px-4 py-3 ${
+                className={`rounded-2xl border px-4 py-3 md:col-span-2 ${
                   blingStatus?.depositoMultiId != null
                     ? "bg-emerald-50 border-emerald-200"
                     : "bg-amber-50 border-amber-200"
@@ -6026,11 +6089,36 @@ const salvarVendasManuais = async () => {
                 <div className="font-semibold text-slate-900 mt-1">
                   {blingStatus?.depositoMultiId != null
                     ? `${blingStatus.depositoMultiNome || "Multiempresa"} · id ${blingStatus.depositoMultiId}`
-                    : "Não vinculado — use Vincular depósitos ou Puxar estoque"}
+                    : "Não vinculado — informe o id manualmente"}
                 </div>
                 <div className="text-xs text-slate-500 mt-1">
                   Base das Sugestões / Programação após puxar estoque.
+                  {blingStatus?.depositoMultiId == null
+                    ? " No Bling, abra o depósito Multiempresa e copie o id da URL (ou do detalhe)."
+                    : ""}
                 </div>
+                {blingStatus?.depositoMultiId == null && blingStatus?.connected && (
+                  <div className="mt-3 flex flex-col sm:flex-row gap-2 sm:items-center">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="Ex.: 1488921…"
+                      value={blingMultiIdManual}
+                      onChange={(e) =>
+                        setBlingMultiIdManual(e.target.value.replace(/[^\d]/g, ""))
+                      }
+                      className="rounded-xl border border-amber-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-200 w-full sm:w-56"
+                    />
+                    <button
+                      type="button"
+                      onClick={executarSalvarMultiIdManual}
+                      disabled={!!blingSyncBusy || !blingMultiIdManual.trim()}
+                      className="rounded-xl bg-amber-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-amber-950 disabled:opacity-50"
+                    >
+                      {blingSyncBusy === "set-multi" ? "Salvando…" : "Salvar id Multiempresa"}
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
