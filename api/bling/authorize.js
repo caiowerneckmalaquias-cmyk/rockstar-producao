@@ -3,8 +3,13 @@ import {
   createState,
   getEnv,
   json,
+  normalizeSecundariaSlot,
   redirect,
 } from "../_lib/bling.js";
+
+function buildSetCookie(name, value, maxAge = 600) {
+  return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+}
 
 export default function handler(req, res) {
   if (req.method !== "GET") {
@@ -18,12 +23,24 @@ export default function handler(req, res) {
     });
   }
 
+  const urlReq = new URL(req.url, `https://${req.headers.host}`);
+  const tipo = String(urlReq.searchParams.get("tipo") || "principal").toLowerCase();
+  const slotRaw = urlReq.searchParams.get("slot");
+  let destino = "principal";
+
+  if (tipo === "secundaria") {
+    const slot = normalizeSecundariaSlot(slotRaw);
+    if (slot == null) {
+      return json(res, 400, { error: "Slot secundário inválido (use 1–4)" });
+    }
+    destino = `secundaria:${slot}`;
+  }
+
   const state = createState();
-  // Cookie curto só para validar o round-trip OAuth
-  res.setHeader(
-    "Set-Cookie",
-    `bling_oauth_state=${state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`
-  );
+  res.setHeader("Set-Cookie", [
+    buildSetCookie("bling_oauth_state", state),
+    buildSetCookie("bling_oauth_destino", destino),
+  ]);
 
   const url = new URL(BLING_AUTHORIZE_URL);
   url.searchParams.set("response_type", "code");
