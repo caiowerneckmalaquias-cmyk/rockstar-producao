@@ -15,6 +15,9 @@ import {
   upsertConexao,
 } from "../_lib/bling.js";
 
+/** Vercel Pro: até 300s — o pull é sequencial e demora com muitos SKUs. */
+export const config = { maxDuration: 300 };
+
 const SIZES = [34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44];
 
 export default async function handler(req, res) {
