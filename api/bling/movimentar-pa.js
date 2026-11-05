@@ -1,17 +1,13 @@
 import {
-  STOCK_OFFSET,
-  calcularAjusteComOffset,
-  fetchSaldosProduto,
   findProductByCodigo,
   getValidAccessToken,
   json,
   lancarMovimentoEstoque,
-  saldoNoDeposito,
   sleep,
 } from "../_lib/bling.js";
 
 /**
- * Aplica +N/−N pares no depósito PA do Bling por SKU (Esteira).
+ * Aplica +N/−N pares no depósito PA do Bling por SKU (Esteira) como entrada/saída.
  * Body: { movimentos: [{ sku, delta }] }. Responde o resultado de cada SKU para o app tirar da fila só o que deu certo.
  */
 export default async function handler(req, res) {
@@ -56,37 +52,23 @@ export default async function handler(req, res) {
         }
 
         await sleep(350);
-        const saldos = await fetchSaldosProduto(accessToken, produto.id);
-        const saldoAntes = saldoNoDeposito(saldos, depositoPaId);
-        const ajuste = calcularAjusteComOffset(saldoAntes, delta, STOCK_OFFSET);
-
-        if (ajuste.diff !== 0) {
-          await sleep(350);
-          await lancarMovimentoEstoque({
-            accessToken,
-            produtoId: produto.id,
-            depositoId: depositoPaId,
-            operacao: ajuste.diff > 0 ? "E" : "S",
-            quantidade: Math.abs(ajuste.diff),
-            observacoes: `Rock Star Esteira: ${delta > 0 ? "+" : ""}${delta} par(es)`,
-          });
-        }
-
-        resultados.push({
-          sku,
-          delta,
-          ok: true,
-          saldoBlingAntes: saldoAntes,
-          saldoBlingDepois: ajuste.alvoBling,
-          realDepois: ajuste.realDepois,
+        await lancarMovimentoEstoque({
+          accessToken,
+          produtoId: produto.id,
+          depositoId: depositoPaId,
+          operacao: delta > 0 ? "E" : "S",
+          quantidade: Math.abs(delta),
+          observacoes: `Rock Star Esteira: ${delta > 0 ? "+" : ""}${delta} par(es)`,
         });
+
+        resultados.push({ sku, delta, ok: true });
       } catch (e) {
         resultados.push({ sku, delta, ok: false, error: e.message || "Falha no Bling" });
       }
     }
 
     const falhas = resultados.filter((r) => !r.ok).length;
-    return json(res, 200, { ok: falhas === 0, falhas, resultados, stockOffset: STOCK_OFFSET });
+    return json(res, 200, { ok: falhas === 0, falhas, resultados });
   } catch (e) {
     console.error("movimentar-pa", e);
     return json(res, 500, { error: e.message || "Falha ao movimentar PA no Bling" });

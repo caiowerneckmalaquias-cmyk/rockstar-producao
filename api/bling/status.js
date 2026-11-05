@@ -59,7 +59,6 @@ export default async function handler(req, res) {
         depositoMultiNome: null,
         expiresAt: null,
         connectedAt: null,
-        stockOffset: Number(process.env.BLING_STOCK_OFFSET) || 1000,
         secundarias,
         secundariasProntas,
         phase2Note:
@@ -81,7 +80,6 @@ export default async function handler(req, res) {
       depositoMultiNome: row.deposito_multi_nome ?? null,
       expiresAt: row.expires_at ?? null,
       connectedAt: row.connected_at ?? row.updated_at ?? null,
-      stockOffset: Number(process.env.BLING_STOCK_OFFSET) || 1000,
       secundarias,
       secundariasProntas,
       phase2Note:

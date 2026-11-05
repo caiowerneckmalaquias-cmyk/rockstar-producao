@@ -106,7 +106,7 @@ export default async function handler(req, res) {
             produtoId: produtoBling.id,
             depositoId: depositoPaId,
             quantidade: paBling,
-            observacoes: "Rock Star: push PA (real+offset)",
+            observacoes: "Rock Star: subir PA",
           });
           pushed += 1;
         } catch (e) {
@@ -122,7 +122,7 @@ export default async function handler(req, res) {
             produtoId: produtoBling.id,
             depositoId: depositoEstId,
             quantidade: estBling,
-            observacoes: "Rock Star: push EST (real+offset)",
+            observacoes: "Rock Star: subir EST",
           });
           pushed += 1;
         } catch (e) {
@@ -140,7 +140,6 @@ export default async function handler(req, res) {
       notFound,
       skippedFilter,
       filtered: Boolean(skuFilter),
-      stockOffset: STOCK_OFFSET,
       samples,
     });
   } catch (e) {

@@ -26,11 +26,11 @@ npm run build
    - `BLING_REDIRECT_URI=https://rockstar-producao.vercel.app/bling/callback`
    - `APP_URL=https://rockstar-producao.vercel.app`
    - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
-   - `BLING_STOCK_OFFSET=1000` (opcional)
 3. No app Bling, o link de redirecionamento deve ser exatamente o `BLING_REDIRECT_URI` acima.
 4. Em **Importar GCM** → **Conectar Bling**. Depósitos `PRODUTO ACABADO` (PA) e `OVERLOQUE` (EST) são vinculados automaticamente.
 5. Cadastre **siglas** (Controle Geral ou Nova referência `COR|SIGLA`). SKU = `REF+SIGLA+tamanho` (ex.: `TNCV010RS34`).
-6. **Puxar estoque** (−1000) / **Subir estoque** (+1000). Se Bling ≤ 1000, zera no Bling.
+6. **Puxar estoque** lê PA/EST do Bling (número real, não grava no Bling). **Subir estoque** substitui o saldo do Bling pelo do app — use só para acerto, logo depois de puxar. A Esteira lança entrada/saída (+1/−1) no PA.
+7. Os 1000 que a Shopee mostra vêm do depósito **ESTOQUE 1000** do Bling; o app não mexe nele.
 
 ## Arquivos principais
 - `src/App.jsx` → seu código enviado

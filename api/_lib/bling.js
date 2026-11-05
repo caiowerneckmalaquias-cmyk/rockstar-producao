@@ -4,7 +4,12 @@ export const BLING_AUTHORIZE_URL = "https://www.bling.com.br/Api/v3/oauth/author
 export const BLING_TOKEN_URL = "https://www.bling.com.br/Api/v3/oauth/token";
 export const BLING_API_BASE = "https://api.bling.com.br/Api/v3";
 
-export const STOCK_OFFSET = Number(process.env.BLING_STOCK_OFFSET) || 1000;
+/**
+ * PA e EST no Bling guardam o número real. Os 1000 que a Shopee mostra vêm do depósito
+ * "ESTOQUE 1000" do Bling, que o app não toca. Valor antigo usado só pela conversão.
+ */
+export const STOCK_OFFSET = 0;
+export const OFFSET_LEGADO = 1000;
 
 const DEPOSITO_PA_NAMES = ["PRODUTO ACABADO", "PRODUTOACABADO"];
 const DEPOSITO_EST_NAMES = ["OVERLOQUE"];
@@ -623,14 +628,3 @@ export async function lancarMovimentoEstoque({
   });
 }
 
-/**
- * Quanto lançar no Bling para aplicar `deltaReal` pares mantendo a regra do offset
- * (real > 0 → Bling = real + offset; real = 0 → Bling = 0).
- */
-export function calcularAjusteComOffset(saldoBling, deltaReal, offset = STOCK_OFFSET) {
-  const realAntes = blingToReal(saldoBling, offset);
-  const realDepois = Math.max(0, realAntes + (Number(deltaReal) || 0));
-  const alvoBling = realToBling(realDepois, offset);
-  const diff = alvoBling - (Number(saldoBling) || 0);
-  return { realAntes, realDepois, alvoBling, diff };
-}

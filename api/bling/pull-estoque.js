@@ -9,8 +9,6 @@ import {
   json,
   listContasSecundariasProntas,
   saldoNoDeposito,
-  setEstoqueSaldo,
-  shouldZeroBling,
   sleep,
 } from "../_lib/bling.js";
 
@@ -74,7 +72,7 @@ export default async function handler(req, res) {
     const toUpsert = [];
     let ok = 0;
     let notFound = 0;
-    let zeroedOnBling = 0;
+    let negativosNoBling = 0;
     const samples = [];
 
     for (const prod of comSigla) {
@@ -116,45 +114,10 @@ export default async function handler(req, res) {
           continue;
         }
 
-        let paBling = saldoNoDeposito(saldos, depositoPaId);
-        let estBling = saldoNoDeposito(saldos, depositoEstId);
-
-        if (shouldZeroBling(paBling, STOCK_OFFSET)) {
-          if (paBling !== 0) {
-            await sleep(350);
-            try {
-              await setEstoqueSaldo({
-                accessToken,
-                produtoId: produtoBling.id,
-                depositoId: depositoPaId,
-                quantidade: 0,
-                observacoes: "Rock Star: ≤ offset → zerar PA",
-              });
-              zeroedOnBling += 1;
-            } catch (_) {
-              /* segue com real 0 */
-            }
-          }
-          paBling = 0;
-        }
-        if (shouldZeroBling(estBling, STOCK_OFFSET)) {
-          if (estBling !== 0) {
-            await sleep(350);
-            try {
-              await setEstoqueSaldo({
-                accessToken,
-                produtoId: produtoBling.id,
-                depositoId: depositoEstId,
-                quantidade: 0,
-                observacoes: "Rock Star: ≤ offset → zerar EST",
-              });
-              zeroedOnBling += 1;
-            } catch (_) {
-              /* segue */
-            }
-          }
-          estBling = 0;
-        }
+        const paBling = saldoNoDeposito(saldos, depositoPaId);
+        const estBling = saldoNoDeposito(saldos, depositoEstId);
+        if (paBling < 0) negativosNoBling += 1;
+        if (estBling < 0) negativosNoBling += 1;
 
         const paReal = blingToReal(paBling, STOCK_OFFSET);
         const estReal = blingToReal(estBling, STOCK_OFFSET);
@@ -225,14 +188,13 @@ export default async function handler(req, res) {
       skusOk: ok,
       semSigla,
       notFound,
-      zeroedOnBling,
+      negativosNoBling,
       secundariasUsadas,
       secundariasSlots: secundarias.map(({ conta }) => ({
         slot: conta.slot,
         depositoGeralId: conta.deposito_geral_id,
         depositoGeralNome: conta.deposito_geral_nome,
       })),
-      stockOffset: STOCK_OFFSET,
       samples,
       warning:
         secundariasUsadas > 0

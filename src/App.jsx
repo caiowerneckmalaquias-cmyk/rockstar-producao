@@ -19,12 +19,8 @@ import {
   refAntigaDe,
 } from "./constants/production";
 import {
-  BLING_STOCK_OFFSET,
   BLING_DEPOSITO_PA_LABEL,
   BLING_DEPOSITO_EST_LABEL,
-  blingToReal,
-  realToBling,
-  shouldZeroBling,
   buildBlingSku,
   normalizeBlingSigla,
   parseCorSiglaLine,
@@ -2802,7 +2798,9 @@ const programacaoMontagem = useMemo(
           ? ` · DISP = PA + Geral de ${secN} conta(s) secundária(s)`
           : ` · DISP = PA (nenhuma secundária pronta)`;
       setBlingFeedback(
-        `Puxado: ${data.updated || 0} linhas · SKUs ok ${data.skusOk || 0} · sem sigla ${data.semSigla || 0} · não achados ${data.notFound || 0} · zerados no Bling ${data.zeroedOnBling || 0}${dispNote}${
+        `Puxado: ${data.updated || 0} linhas · SKUs ok ${data.skusOk || 0} · sem sigla ${data.semSigla || 0} · não achados ${data.notFound || 0}${
+          data.negativosNoBling ? ` · ${data.negativosNoBling} saldo(s) negativo(s) no Bling (contados como 0)` : ""
+        }${dispNote}${
           data.warning ? ` — ${data.warning}` : ""
         }`
       );
@@ -2814,6 +2812,56 @@ const programacaoMontagem = useMemo(
         looksTimeout
           ? `Erro ao puxar estoque (rede/timeout): ${msg || "sem detalhe"}. O pull pode demorar vários minutos.`
           : msg || "Erro de rede ao puxar estoque"
+      );
+    } finally {
+      setBlingSyncBusy("");
+    }
+  };
+
+  const executarRemoverOffsetBling = async () => {
+    if (blingSyncBusy) return;
+    const confirmar = window.confirm(
+      "Isso tira os +1000 antigos dos depósitos PRODUTO ACABADO e OVERLOQUE no Bling.\n\n" +
+        "Só mexe em SKUs com saldo de 1000 ou mais (lança uma saída de 1000). O depósito ESTOQUE 1000 não é tocado. " +
+        "Pode rodar de novo sem risco de descontar duas vezes.\n\nContinuar?"
+    );
+    if (!confirmar) return;
+
+    setBlingSyncBusy("offset");
+    let inicio = 0;
+    const totais = { convertidos: 0, naoAchados: 0, erros: 0 };
+    try {
+      for (;;) {
+        const res = await fetch("/api/bling/remover-offset", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ inicio }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setBlingFeedback(
+            `Conversão parou no SKU ${inicio}: ${data.error || `HTTP ${res.status}`}. Clique de novo para continuar (não desconta duas vezes).`
+          );
+          return;
+        }
+        totais.convertidos += Number(data.convertidos) || 0;
+        totais.naoAchados += Number(data.naoAchados) || 0;
+        totais.erros += Number(data.erros) || 0;
+        setBlingFeedback(
+          `Removendo +1000 do Bling… ${data.fim} de ${data.total} SKUs · ${totais.convertidos} saldo(s) corrigido(s)`
+        );
+        if (data.proximo == null) break;
+        inicio = data.proximo;
+      }
+      setBlingFeedback(
+        `Regra +1000 removida do Bling: ${totais.convertidos} saldo(s) corrigido(s) · não achados ${totais.naoAchados}${
+          totais.erros ? ` · ${totais.erros} erro(s), clique de novo para tentar esses` : ""
+        }. Agora use "Puxar estoque".`
+      );
+    } catch (err) {
+      setBlingFeedback(
+        `Conversão interrompida (${err?.message || "rede"}). Clique de novo para continuar (não desconta duas vezes).`
       );
     } finally {
       setBlingSyncBusy("");
@@ -6061,8 +6109,7 @@ const salvarVendasManuais = async () => {
                   Conta principal: {BLING_DEPOSITO_PA_LABEL} (PA) + {BLING_DEPOSITO_EST_LABEL}{" "}
                   (EST). <strong>DISP</strong> = PA + Geral das 4 contas secundárias. A Esteira
                   lança entrada (+1) no PA do Bling, sem apagar vendas. &quot;Subir estoque&quot;
-                  substitui o saldo do Bling pelo do app. Regra Shopee só no PA/EST: Bling = real +{" "}
-                  {BLING_STOCK_OFFSET}.
+                  substitui o saldo do Bling pelo do app. PA e EST no Bling guardam o número real.
                 </div>
                 <div className="text-xs text-amber-800 mt-2 rounded-xl bg-amber-50 border border-amber-100 px-3 py-2">
                   Conecte a principal e as 4 secundárias (logar no Bling da empresa certa em cada
@@ -6145,10 +6192,18 @@ const salvarVendasManuais = async () => {
                 </div>
               </div>
               <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
-                <div className="text-slate-500">Offset Shopee</div>
+                <div className="text-slate-500">Regra +1000</div>
                 <div className="font-semibold text-slate-900 mt-1">
-                  +{blingStatus?.stockOffset ?? BLING_STOCK_OFFSET}
+                  Desligada — a Shopee usa o depósito ESTOQUE 1000
                 </div>
+                <button
+                  type="button"
+                  onClick={executarRemoverOffsetBling}
+                  disabled={!!blingSyncBusy || !blingStatus?.connected}
+                  className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-950 hover:bg-amber-100 disabled:opacity-50"
+                >
+                  {blingSyncBusy === "offset" ? "Removendo…" : "Tirar +1000 antigos do Bling (PA/EST)"}
+                </button>
               </div>
               <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
                 <div className="text-slate-500">Depósito PA</div>
