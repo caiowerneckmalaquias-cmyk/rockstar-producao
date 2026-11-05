@@ -49,6 +49,33 @@ function deepClonePlain(obj) {
 
 const PROG_FICHAS_LANCADAS_STORAGE_KEY = "rockstar-prog-fichas-lancadas-v1";
 
+/** Fila da Esteira → Bling: SKU → pares a lançar (+/−). Persistida para não perder bips se a página fechar. */
+const ESTEIRA_BLING_FILA_STORAGE_KEY = "rockstar-esteira-bling-fila-v1";
+
+function lerFilaEsteiraBling() {
+  try {
+    const raw = localStorage.getItem(ESTEIRA_BLING_FILA_STORAGE_KEY);
+    const obj = raw ? JSON.parse(raw) : {};
+    const fila = new Map();
+    Object.entries(obj || {}).forEach(([sku, delta]) => {
+      const d = Math.trunc(Number(delta) || 0);
+      if (sku && d) fila.set(sku, d);
+    });
+    return fila;
+  } catch {
+    return new Map();
+  }
+}
+
+function salvarFilaEsteiraBling(fila) {
+  try {
+    if (!fila.size) localStorage.removeItem(ESTEIRA_BLING_FILA_STORAGE_KEY);
+    else localStorage.setItem(ESTEIRA_BLING_FILA_STORAGE_KEY, JSON.stringify(Object.fromEntries(fila)));
+  } catch {
+    /* ignore */
+  }
+}
+
 function readProgFichasLancadasFromStorage() {
   try {
     const raw = localStorage.getItem(PROG_FICHAS_LANCADAS_STORAGE_KEY);
@@ -2081,9 +2108,11 @@ const [blingFeedback, setBlingFeedback] = useState("");
 const [blingSiglas, setBlingSiglas] = useState({});
 const [blingSyncBusy, setBlingSyncBusy] = useState("");
 const [esteiraBlingStatus, setEsteiraBlingStatus] = useState({ state: "idle", text: "" });
-const esteiraBlingQueueRef = useRef(new Set());
+const esteiraBlingQueueRef = useRef(null);
+if (esteiraBlingQueueRef.current === null) esteiraBlingQueueRef.current = lerFilaEsteiraBling();
 const esteiraBlingTimerRef = useRef(null);
 const esteiraBlingFlushingRef = useRef(false);
+const esteiraBlingFlushFnRef = useRef(null);
 const [movError, setMovError] = useState({ Pesponto: "", Montagem: "" });
 const [confirmMov, setConfirmMov] = useState(null);
 const [editingMov, setEditingMov] = useState(null);
@@ -2828,14 +2857,29 @@ const programacaoMontagem = useMemo(
     }
   };
 
+  const agendarFlushEsteiraBling = useCallback((ms) => {
+    if (esteiraBlingTimerRef.current) {
+      window.clearTimeout(esteiraBlingTimerRef.current);
+    }
+    esteiraBlingTimerRef.current = window.setTimeout(() => {
+      esteiraBlingFlushFnRef.current?.();
+    }, ms);
+  }, []);
+
+  /**
+   * Lança no Bling a fila de +1/−1 da Esteira como entrada/saída (não substitui o saldo,
+   * então vendas baixadas no Bling entre um Puxar e outro não são apagadas).
+   */
   const flushEsteiraBlingQueue = useCallback(async () => {
     if (esteiraBlingFlushingRef.current) return;
     if (esteiraBlingTimerRef.current) {
       window.clearTimeout(esteiraBlingTimerRef.current);
       esteiraBlingTimerRef.current = null;
     }
-    const skus = [...esteiraBlingQueueRef.current];
-    if (!skus.length) {
+    const enviados = [...esteiraBlingQueueRef.current.entries()].filter(([, delta]) => delta !== 0);
+    if (!enviados.length) {
+      esteiraBlingQueueRef.current = new Map();
+      salvarFilaEsteiraBling(esteiraBlingQueueRef.current);
       setEsteiraBlingStatus({ state: "idle", text: "" });
       return;
     }
@@ -2843,48 +2887,111 @@ const programacaoMontagem = useMemo(
     esteiraBlingFlushingRef.current = true;
     setEsteiraBlingStatus({
       state: "syncing",
-      text: `Bling: sincronizando ${skus.length} SKU(s)…`,
+      text: `Bling: lançando ${enviados.length} SKU(s)…`,
     });
+    let proximaTentativaMs = 0;
     try {
-      const push = await executarPushEstoqueBling(skus);
-      if (push.ok) {
-        esteiraBlingQueueRef.current = new Set();
+      const res = await fetch("/api/bling/movimentar-pa", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ movimentos: enviados.map(([sku, delta]) => ({ sku, delta })) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
         setEsteiraBlingStatus({
-          state: "ok",
-          text: `Bling: ok (${push.data?.pushed || 0} upd.)`,
+          state: "erro",
+          text: `Bling: falhou — ${data.error || "erro"} (continua na fila, tenta de novo)`,
+        });
+        proximaTentativaMs = 30000;
+        return;
+      }
+
+      const fila = esteiraBlingQueueRef.current;
+      const naoAchados = [];
+      let falhas = 0;
+      (Array.isArray(data.resultados) ? data.resultados : []).forEach((r) => {
+        const sku = String(r?.sku || "").trim().toUpperCase();
+        const enviado = enviados.find(([s]) => s === sku);
+        if (!enviado) return;
+        if (r.ok || r.permanente) {
+          const resto = (fila.get(sku) || 0) - enviado[1];
+          if (resto) fila.set(sku, resto);
+          else fila.delete(sku);
+          if (!r.ok) naoAchados.push(sku);
+        } else {
+          falhas += 1;
+        }
+      });
+      salvarFilaEsteiraBling(fila);
+
+      if (falhas) {
+        setEsteiraBlingStatus({
+          state: "erro",
+          text: `Bling: ${falhas} SKU(s) falharam (continuam na fila, tenta de novo)`,
+        });
+        proximaTentativaMs = 30000;
+      } else if (naoAchados.length) {
+        setEsteiraBlingStatus({
+          state: "erro",
+          text: `Bling: SKU não encontrado no Bling — ${naoAchados.join(", ")}`,
         });
       } else {
         setEsteiraBlingStatus({
-          state: "erro",
-          text: `Bling: falhou — ${push.error || "erro"} (tenta de novo)`,
+          state: "ok",
+          text: `Bling: ok (${enviados.length} SKU(s) lançados)`,
         });
       }
+      if (!proximaTentativaMs && fila.size) proximaTentativaMs = 8000;
+    } catch (err) {
+      setEsteiraBlingStatus({
+        state: "erro",
+        text: `Bling: sem conexão — ${err?.message || "erro"} (continua na fila, tenta de novo)`,
+      });
+      proximaTentativaMs = 30000;
     } finally {
       esteiraBlingFlushingRef.current = false;
+      if (proximaTentativaMs) agendarFlushEsteiraBling(proximaTentativaMs);
     }
-  }, []);
+  }, [agendarFlushEsteiraBling]);
 
-  const enqueueEsteiraBlingSkus = useCallback(
-    (skuList) => {
-      (skuList || []).forEach((s) => {
-        const sku = String(s || "")
-          .trim()
-          .toUpperCase();
-        if (sku) esteiraBlingQueueRef.current.add(sku);
-      });
-      if (!esteiraBlingQueueRef.current.size) return;
+  esteiraBlingFlushFnRef.current = flushEsteiraBlingQueue;
+
+  useEffect(() => {
+    if (esteiraBlingQueueRef.current.size) {
       setEsteiraBlingStatus({
         state: "pending",
-        text: `Bling: ${esteiraBlingQueueRef.current.size} SKU(s) na fila…`,
+        text: `Bling: ${esteiraBlingQueueRef.current.size} SKU(s) pendentes de antes…`,
       });
-      if (esteiraBlingTimerRef.current) {
-        window.clearTimeout(esteiraBlingTimerRef.current);
+      agendarFlushEsteiraBling(3000);
+    }
+  }, [agendarFlushEsteiraBling]);
+
+  const enqueueEsteiraBlingDelta = useCallback(
+    (skuRaw, deltaRaw) => {
+      const sku = String(skuRaw || "").trim().toUpperCase();
+      const delta = Math.trunc(Number(deltaRaw) || 0);
+      if (!sku || !delta) return;
+      const fila = esteiraBlingQueueRef.current;
+      const novo = (fila.get(sku) || 0) + delta;
+      if (novo) fila.set(sku, novo);
+      else fila.delete(sku);
+      salvarFilaEsteiraBling(fila);
+      if (!fila.size) {
+        if (esteiraBlingTimerRef.current) {
+          window.clearTimeout(esteiraBlingTimerRef.current);
+          esteiraBlingTimerRef.current = null;
+        }
+        setEsteiraBlingStatus({ state: "idle", text: "" });
+        return;
       }
-      esteiraBlingTimerRef.current = window.setTimeout(() => {
-        flushEsteiraBlingQueue();
-      }, 8000);
+      setEsteiraBlingStatus({
+        state: "pending",
+        text: `Bling: ${fila.size} SKU(s) na fila…`,
+      });
+      agendarFlushEsteiraBling(8000);
     },
-    [flushEsteiraBlingQueue]
+    [agendarFlushEsteiraBling]
   );
 
   /**
@@ -2943,7 +3050,7 @@ const programacaoMontagem = useMemo(
 
     rowsRef.current = nextRows;
     setRows(nextRows);
-    if (sku) enqueueEsteiraBlingSkus([sku]);
+    if (sku) enqueueEsteiraBlingDelta(sku, 1);
 
     return { ok: true, tirouDeM, error: null };
   };
@@ -2998,6 +3105,8 @@ const programacaoMontagem = useMemo(
 
     rowsRef.current = nextRows;
     setRows(nextRows);
+    const sku = String(item?.sku || "").trim().toUpperCase();
+    if (sku) enqueueEsteiraBlingDelta(sku, -1);
     return { ok: true, error: null };
   };
 
@@ -5950,8 +6059,10 @@ const salvarVendasManuais = async () => {
                 <div className="font-semibold">Integração Bling (fase 1)</div>
                 <div className="text-sm text-slate-500 mt-1">
                   Conta principal: {BLING_DEPOSITO_PA_LABEL} (PA) + {BLING_DEPOSITO_EST_LABEL}{" "}
-                  (EST). <strong>DISP</strong> = PA + Geral das 4 contas secundárias. Esteira/push
-                  usam PA. Regra Shopee só no PA/EST: Bling = real + {BLING_STOCK_OFFSET}.
+                  (EST). <strong>DISP</strong> = PA + Geral das 4 contas secundárias. A Esteira
+                  lança entrada (+1) no PA do Bling, sem apagar vendas. &quot;Subir estoque&quot;
+                  substitui o saldo do Bling pelo do app. Regra Shopee só no PA/EST: Bling = real +{" "}
+                  {BLING_STOCK_OFFSET}.
                 </div>
                 <div className="text-xs text-amber-800 mt-2 rounded-xl bg-amber-50 border border-amber-100 px-3 py-2">
                   Conecte a principal e as 4 secundárias (logar no Bling da empresa certa em cada
@@ -5990,7 +6101,15 @@ const salvarVendasManuais = async () => {
                 </button>
                 <button
                   type="button"
-                  onClick={executarPushEstoqueBling}
+                  onClick={() => {
+                    const confirmar = window.confirm(
+                      "Subir estoque SUBSTITUI o saldo de PA e EST do Bling pelo número que está no app.\n\n" +
+                        "Vendas que o Bling baixou depois do último \"Puxar estoque\" seriam desfeitas, e a Shopee voltaria a mostrar pares já vendidos.\n\n" +
+                        "Use só para acerto, logo depois de Puxar estoque. Continuar?"
+                    );
+                    if (!confirmar) return;
+                    executarPushEstoqueBling();
+                  }}
                   disabled={!!blingSyncBusy || !blingStatus?.connected}
                   className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-900 shadow-sm hover:bg-sky-100 disabled:opacity-50"
                 >

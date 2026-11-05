@@ -598,3 +598,39 @@ export async function setEstoqueSaldo({
     }),
   });
 }
+
+/** Entrada (E) ou saída (S) relativa ao saldo do Bling: não apaga vendas lançadas no meio. */
+export async function lancarMovimentoEstoque({
+  accessToken,
+  produtoId,
+  depositoId,
+  operacao,
+  quantidade,
+  observacoes,
+}) {
+  if (operacao !== "E" && operacao !== "S") {
+    throw new Error(`Operação de estoque inválida: ${operacao}`);
+  }
+  return blingFetch("/estoques", accessToken, {
+    method: "POST",
+    body: JSON.stringify({
+      produto: { id: Number(produtoId) },
+      deposito: { id: Number(depositoId) },
+      operacao,
+      quantidade: Math.abs(Number(quantidade) || 0),
+      observacoes: observacoes || "Rock Star Produção",
+    }),
+  });
+}
+
+/**
+ * Quanto lançar no Bling para aplicar `deltaReal` pares mantendo a regra do offset
+ * (real > 0 → Bling = real + offset; real = 0 → Bling = 0).
+ */
+export function calcularAjusteComOffset(saldoBling, deltaReal, offset = STOCK_OFFSET) {
+  const realAntes = blingToReal(saldoBling, offset);
+  const realDepois = Math.max(0, realAntes + (Number(deltaReal) || 0));
+  const alvoBling = realToBling(realDepois, offset);
+  const diff = alvoBling - (Number(saldoBling) || 0);
+  return { realAntes, realDepois, alvoBling, diff };
+}
