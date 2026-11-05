@@ -7,8 +7,8 @@ import {
 } from "../_lib/bling.js";
 
 /**
- * Aplica +N/−N pares no depósito PA do Bling por SKU (Esteira) como entrada/saída.
- * Body: { movimentos: [{ sku, delta }] }. Responde o resultado de cada SKU para o app tirar da fila só o que deu certo.
+ * Aplica +N/−N pares no depósito PA do Bling por SKU (Esteira, ajuste manual) como entrada/saída.
+ * Body: { movimentos: [{ sku, delta }], observacao? }. Responde o resultado de cada SKU para o app tirar da fila só o que deu certo.
  */
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -17,6 +17,7 @@ export default async function handler(req, res) {
 
   try {
     const body = req.body && typeof req.body === "object" ? req.body : {};
+    const origemTexto = String(body.observacao || "").trim().slice(0, 200) || "Esteira";
     const porSku = new Map();
     (Array.isArray(body.movimentos) ? body.movimentos : []).forEach((m) => {
       const sku = String(m?.sku || "").trim().toUpperCase();
@@ -58,7 +59,7 @@ export default async function handler(req, res) {
           depositoId: depositoPaId,
           operacao: delta > 0 ? "E" : "S",
           quantidade: Math.abs(delta),
-          observacoes: `Rock Star Esteira: ${delta > 0 ? "+" : ""}${delta} par(es)`,
+          observacoes: `Rock Star ${origemTexto}: ${delta > 0 ? "+" : ""}${delta} par(es)`,
         });
 
         resultados.push({ sku, delta, ok: true });

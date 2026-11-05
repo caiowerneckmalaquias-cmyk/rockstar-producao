@@ -342,6 +342,12 @@ const cellDisponivel = (cell) => {
   return Math.max(0, Number(cell.pa) || 0);
 };
 
+/** Soma no DISP o que entrou/saiu do PA, para a tela refletir antes do próximo Puxar estoque. */
+const dispComDelta = (cell, delta) => {
+  if (cell?.disp == null || cell.disp === "") return cell?.disp;
+  return Math.max(0, (Number(cell.disp) || 0) + delta);
+};
+
 const calcTotal = (item) => item.pa + item.est + item.m + item.p;
 const round12 = (n) => (n <= 0 ? 0 : Math.ceil(n / 12) * 12);
 const normalizeKey = (value) =>
@@ -2146,6 +2152,15 @@ const [tempoProducaoDraft, setTempoProducaoDraft] = useState(initialTempoProduca
 const [fichasAbertas, setFichasAbertas] = useState({});
 const [costuraProntaRefsAbertas, setCosturaProntaRefsAbertas] = useState({});
 const [estoqueProntoRefsAbertas, setEstoqueProntoRefsAbertas] = useState({});
+const [ajusteProntoForm, setAjusteProntoForm] = useState({
+  ref: "",
+  cor: "",
+  tipo: "entrada",
+  grid: makeEmptyGrid(),
+  motivo: "",
+});
+const [ajusteProntoMsg, setAjusteProntoMsg] = useState(null);
+const [ajusteProntoBusy, setAjusteProntoBusy] = useState(false);
 const [programacaoDias, setProgramacaoDias] = useState(7);
 const [confirmAction, setConfirmAction] = useState(null);
 const [relatorioDataInicial, setRelatorioDataInicial] = useState("");
@@ -3076,6 +3091,7 @@ const programacaoMontagem = useMemo(
       ...atual,
       m: tirouDeM ? disponivelM - 1 : disponivelM,
       pa: (Number(atual.pa) || 0) + 1,
+      disp: dispComDelta(atual, 1),
     };
 
     const persist = await persistRowsToSupabase(nextRows);
@@ -3134,6 +3150,7 @@ const programacaoMontagem = useMemo(
       ...atual,
       pa: paAtual - 1,
       m: item?.tirouDeM ? (Number(atual.m) || 0) + 1 : Number(atual.m) || 0,
+      disp: dispComDelta(atual, -1),
     };
 
     const persist = await persistRowsToSupabase(nextRows);
@@ -7775,6 +7792,129 @@ const salvarVendasManuais = async () => {
     );
   };
 
+  /** Entrada/saída manual de PA: lança no PRODUTO ACABADO do Bling e, no que deu certo, atualiza PA e DISP do app. */
+  const aplicarAjusteEstoquePronto = async () => {
+    if (ajusteProntoBusy) return;
+    const { ref, cor, tipo, grid, motivo } = ajusteProntoForm;
+    if (!ref || !cor) {
+      setAjusteProntoMsg({ tipo: "erro", texto: "Escolha a referência e a cor." });
+      return;
+    }
+    const itens = sizes
+      .map((size) => ({ size, qtd: Math.trunc(Number(grid?.[size]) || 0) }))
+      .filter((item) => item.qtd > 0);
+    if (!itens.length) {
+      setAjusteProntoMsg({ tipo: "erro", texto: "Informe a quantidade em pelo menos um número." });
+      return;
+    }
+    const sigla = getBlingSigla(ref, cor);
+    if (!sigla) {
+      setAjusteProntoMsg({
+        tipo: "erro",
+        texto: `${ref} • ${cor} não tem sigla do Bling cadastrada. Cadastre no Controle Geral para montar o SKU.`,
+      });
+      return;
+    }
+    const rowAtual = (rowsRef.current || []).find((r) => r.ref === ref && r.cor === cor);
+    if (tipo === "saida") {
+      const excede = itens.find(({ size, qtd }) => qtd > (Number(rowAtual?.data?.[size]?.pa) || 0));
+      if (excede) {
+        setAjusteProntoMsg({
+          tipo: "erro",
+          texto: `Saída no número ${excede.size} (${excede.qtd}) é maior que o PA no app (${
+            Number(rowAtual?.data?.[excede.size]?.pa) || 0
+          }). Se o app estiver desatualizado, use Puxar estoque antes.`,
+        });
+        return;
+      }
+    }
+
+    const sinal = tipo === "entrada" ? 1 : -1;
+    const sizePorSku = new Map();
+    const movimentos = itens.map(({ size, qtd }) => {
+      const sku = buildBlingSku(ref, sigla, size);
+      sizePorSku.set(sku, size);
+      return { sku, delta: sinal * qtd };
+    });
+
+    setAjusteProntoBusy(true);
+    setAjusteProntoMsg(null);
+    try {
+      const res = await fetch("/api/bling/movimentar-pa", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          movimentos,
+          observacao: `${tipo === "entrada" ? "Entrada" : "Saída"} manual${
+            motivo.trim() ? ` (${motivo.trim()})` : ""
+          }`,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setAjusteProntoMsg({
+          tipo: "erro",
+          texto: `Bling recusou: ${data.error || `HTTP ${res.status}`}. Nada foi alterado.`,
+        });
+        return;
+      }
+
+      const okPorSize = new Map();
+      const falhas = [];
+      (Array.isArray(data.resultados) ? data.resultados : []).forEach((r) => {
+        const size = sizePorSku.get(String(r?.sku || "").toUpperCase());
+        if (size == null) return;
+        if (r.ok) okPorSize.set(size, Number(r.delta) || 0);
+        else falhas.push(`${size} (${r.error || "erro"})`);
+      });
+
+      if (okPorSize.size) {
+        const baseRows = rowsRef.current || [];
+        const nextRows = baseRows.map((row) => {
+          if (row.ref !== ref || row.cor !== cor) return row;
+          const novaData = cloneRowDataDeep(row);
+          okPorSize.forEach((delta, size) => {
+            const cell = novaData[size];
+            novaData[size] = {
+              ...cell,
+              pa: Math.max(0, (Number(cell.pa) || 0) + delta),
+              disp: dispComDelta(cell, delta),
+            };
+          });
+          return { ...row, data: novaData };
+        });
+        const persist = await persistRowsToSupabase(nextRows);
+        rowsRef.current = nextRows;
+        setRows(nextRows);
+        if (!persist.ok) {
+          falhas.push("o Bling foi atualizado, mas o app não salvou — use Puxar estoque");
+        }
+      }
+
+      const totalOk = [...okPorSize.values()].reduce((acc, d) => acc + Math.abs(d), 0);
+      if (falhas.length) {
+        setAjusteProntoMsg({
+          tipo: "erro",
+          texto: `${totalOk ? `Lançado ${totalOk} par(es). ` : ""}Falhou: ${falhas.join(", ")}.`,
+        });
+      } else {
+        setAjusteProntoMsg({
+          tipo: "ok",
+          texto: `${tipo === "entrada" ? "Entrada" : "Saída"} de ${totalOk} par(es) lançada no Bling em ${ref} • ${cor}.`,
+        });
+        setAjusteProntoForm((curr) => ({ ...curr, grid: makeEmptyGrid(), motivo: "" }));
+      }
+    } catch (err) {
+      setAjusteProntoMsg({
+        tipo: "erro",
+        texto: `Sem conexão com o servidor (${err?.message || "rede"}). Confira no Bling se o lançamento entrou antes de tentar de novo.`,
+      });
+    } finally {
+      setAjusteProntoBusy(false);
+    }
+  };
+
   const renderEstoquePronto = () => {
     const totalGeralDisp = sortedRowsByRefCor.reduce(
       (acc, row) =>
@@ -7786,9 +7926,9 @@ const salvarVendasManuais = async () => {
     return (
       <PageShell
         title="Estoque Pronto"
-        subtitle="Disponível pra venda (DISP) = PA da conta principal + Geral das contas secundárias, após Puxar estoque."
+        subtitle="Disponível pra venda (DISP) = PA da conta principal + Geral das contas secundárias. Entradas e saídas manuais vão direto para o Bling."
       >
-        <div className="grid grid-cols-1 xl:grid-cols-[1fr_320px] gap-6 items-start">
+        <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6 items-start">
           <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm overflow-auto p-6">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div className="text-sm text-slate-600">
@@ -7920,16 +8060,160 @@ const salvarVendasManuais = async () => {
             </table>
           </div>
 
+          <div className="space-y-6">
+          <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6 space-y-3">
+            <div className="font-bold text-lg">Entrada / Saída manual</div>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              Lança no depósito {BLING_DEPOSITO_PA_LABEL} do Bling (conta principal) e já atualiza
+              esta tela. Para devolução, par achado, defeito, acerto de contagem.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { id: "entrada", label: "Entrada (+)" },
+                { id: "saida", label: "Saída (−)" },
+              ].map((opt) => (
+                <button
+                  key={`ajp-tipo-${opt.id}`}
+                  type="button"
+                  onClick={() => {
+                    setAjusteProntoForm((curr) => ({ ...curr, tipo: opt.id }));
+                    setAjusteProntoMsg(null);
+                  }}
+                  className={`rounded-xl border px-3 py-2 text-sm font-semibold ${
+                    ajusteProntoForm.tipo === opt.id
+                      ? opt.id === "entrada"
+                        ? "bg-emerald-600 text-white border-emerald-600"
+                        : "bg-red-600 text-white border-red-600"
+                      : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <label className="block text-xs font-medium text-slate-700">
+              Referência
+              <select
+                value={ajusteProntoForm.ref}
+                onChange={(e) => {
+                  const ref = e.target.value;
+                  const cores = coresPorRef.get(ref) || [];
+                  setAjusteProntoForm((curr) => ({
+                    ...curr,
+                    ref,
+                    cor: cores.length === 1 ? cores[0] : "",
+                  }));
+                  setAjusteProntoMsg(null);
+                }}
+                className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
+              >
+                <option value="">Escolha…</option>
+                {refsUnicas.map((ref) => (
+                  <option key={`ajp-ref-${ref}`} value={ref}>
+                    {ref}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-xs font-medium text-slate-700">
+              Cor
+              <select
+                value={ajusteProntoForm.cor}
+                onChange={(e) => {
+                  setAjusteProntoForm((curr) => ({ ...curr, cor: e.target.value }));
+                  setAjusteProntoMsg(null);
+                }}
+                disabled={!ajusteProntoForm.ref}
+                className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm disabled:opacity-50"
+              >
+                <option value="">Escolha…</option>
+                {(coresPorRef.get(ajusteProntoForm.ref) || []).map((cor) => (
+                  <option key={`ajp-cor-${cor}`} value={cor}>
+                    {cor}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div>
+              <div className="text-xs font-medium text-slate-700">Quantidade por número</div>
+              <div className="mt-1 grid grid-cols-4 gap-1.5">
+                {sizes.map((size) => {
+                  const cellAtual = (rows.find(
+                    (r) => r.ref === ajusteProntoForm.ref && r.cor === ajusteProntoForm.cor
+                  ) || {}).data?.[size];
+                  return (
+                    <label key={`ajp-size-${size}`} className="block text-center">
+                      <span className="block text-[11px] font-semibold text-slate-600">
+                        {size}
+                        {ajusteProntoForm.ref && ajusteProntoForm.cor ? (
+                          <span className="font-normal text-slate-400"> · {Number(cellAtual?.pa) || 0}</span>
+                        ) : null}
+                      </span>
+                      <input
+                        type="number"
+                        min={0}
+                        inputMode="numeric"
+                        value={ajusteProntoForm.grid[size] || ""}
+                        onChange={(e) =>
+                          setAjusteProntoForm((curr) => ({
+                            ...curr,
+                            grid: { ...curr.grid, [size]: Math.max(0, Math.trunc(Number(e.target.value) || 0)) },
+                          }))
+                        }
+                        placeholder="0"
+                        className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-1 py-1.5 text-center text-sm font-semibold"
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+              <div className="mt-1 text-[11px] text-slate-400">O número cinza ao lado do tamanho é o PA atual.</div>
+            </div>
+            <label className="block text-xs font-medium text-slate-700">
+              Motivo
+              <input
+                type="text"
+                value={ajusteProntoForm.motivo}
+                onChange={(e) => setAjusteProntoForm((curr) => ({ ...curr, motivo: e.target.value }))}
+                placeholder="Ex.: devolução, defeito, contagem"
+                className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
+              />
+            </label>
+            {ajusteProntoMsg ? (
+              <div
+                className={`rounded-xl border px-3 py-2 text-xs font-medium ${
+                  ajusteProntoMsg.tipo === "ok"
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                    : "border-red-200 bg-red-50 text-red-700"
+                }`}
+              >
+                {ajusteProntoMsg.texto}
+              </div>
+            ) : null}
+            <button
+              type="button"
+              onClick={aplicarAjusteEstoquePronto}
+              disabled={ajusteProntoBusy}
+              className="w-full rounded-xl bg-[#8B1E2D] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#6F1421] disabled:opacity-50"
+            >
+              {ajusteProntoBusy
+                ? "Lançando no Bling…"
+                : ajusteProntoForm.tipo === "entrada"
+                  ? "Lançar entrada"
+                  : "Lançar saída"}
+            </button>
+          </div>
+
           <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6 space-y-3">
             <div className="font-bold text-lg">Como ler esta aba</div>
             <p className="text-sm text-slate-600 leading-relaxed">
-              Os números são o <span className="font-semibold">DISP</span> consolidado após{" "}
-              <span className="font-semibold">Puxar estoque</span> no Importar GCM: PA da conta
-              principal somado ao Geral de cada conta secundária conectada.
+              Os números são o <span className="font-semibold">DISP</span>: PA da conta principal
+              somado ao Geral de cada conta secundária conectada.
             </p>
             <p className="text-sm text-slate-600 leading-relaxed">
-              É a mesma base usada nas <span className="font-semibold">Sugestões</span> e na
-              programação. Somente leitura — não edita estoque.
+              Bips da Esteira e entradas/saídas manuais aparecem na hora. Vendas e mudanças feitas
+              direto no Bling aparecem depois de <span className="font-semibold">Puxar estoque</span>.
+              É a mesma base usada nas <span className="font-semibold">Sugestões</span> e na programação.
             </p>
             <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-sm">
               <div className="text-slate-500">Total DISP</div>
@@ -7937,6 +8221,7 @@ const salvarVendasManuais = async () => {
                 {totalGeralDisp.toLocaleString("pt-BR")}
               </div>
             </div>
+          </div>
           </div>
         </div>
       </PageShell>
