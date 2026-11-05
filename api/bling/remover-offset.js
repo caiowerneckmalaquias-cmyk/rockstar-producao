@@ -1,19 +1,18 @@
 import {
   OFFSET_LEGADO,
-  buildBlingSku,
   createServiceClient,
   fetchSaldosProduto,
   findProductByCodigo,
   getValidAccessToken,
   json,
   lancarMovimentoEstoque,
+  listarSkusComSigla,
   saldoNoDeposito,
   sleep,
 } from "../_lib/bling.js";
 
 export const config = { maxDuration: 300 };
 
-const SIZES = [34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44];
 const LOTE_PADRAO = 25;
 
 /**
@@ -43,21 +42,7 @@ export default async function handler(req, res) {
       });
     }
 
-    const supabase = createServiceClient();
-    const { data: produtos, error: erroProd } = await supabase
-      .from("produtos")
-      .select("ref,cor,bling_sigla");
-    if (erroProd) throw new Error(erroProd.message);
-
-    const skus = Array.from(
-      new Set(
-        (produtos || [])
-          .filter((p) => String(p.bling_sigla || "").trim())
-          .flatMap((p) => SIZES.map((size) => buildBlingSku(p.ref, p.bling_sigla, size)))
-          .filter(Boolean)
-      )
-    ).sort();
-    const semSigla = (produtos || []).filter((p) => !String(p.bling_sigla || "").trim()).length;
+    const { skus, semSigla } = await listarSkusComSigla(createServiceClient());
 
     const fatia = skus.slice(inicio, inicio + lote);
     let convertidos = 0;

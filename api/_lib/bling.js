@@ -604,6 +604,24 @@ export async function setEstoqueSaldo({
   });
 }
 
+const SKU_SIZES = [34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44];
+
+/** Todos os SKUs (REF+SIGLA+tamanho) dos produtos com sigla, em ordem fixa para processar em lotes. */
+export async function listarSkusComSigla(supabase) {
+  const { data: produtos, error } = await supabase.from("produtos").select("ref,cor,bling_sigla");
+  if (error) throw new Error(error.message);
+  const skus = Array.from(
+    new Set(
+      (produtos || [])
+        .filter((p) => String(p.bling_sigla || "").trim())
+        .flatMap((p) => SKU_SIZES.map((size) => buildBlingSku(p.ref, p.bling_sigla, size)))
+        .filter(Boolean)
+    )
+  ).sort();
+  const semSigla = (produtos || []).filter((p) => !String(p.bling_sigla || "").trim()).length;
+  return { skus, semSigla };
+}
+
 /** Entrada (E) ou saída (S) relativa ao saldo do Bling: não apaga vendas lançadas no meio. */
 export async function lancarMovimentoEstoque({
   accessToken,

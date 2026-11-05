@@ -2135,6 +2135,12 @@ const [zerarEstSenha, setZerarEstSenha] = useState("");
 const [zerarEstConfirmacao, setZerarEstConfirmacao] = useState("");
 const [zerarEstErro, setZerarEstErro] = useState("");
 const [zerarEstBusy, setZerarEstBusy] = useState(false);
+const [zerarPaModalOpen, setZerarPaModalOpen] = useState(false);
+const [zerarPaSenha, setZerarPaSenha] = useState("");
+const [zerarPaConfirmacao, setZerarPaConfirmacao] = useState("");
+const [zerarPaErro, setZerarPaErro] = useState("");
+const [zerarPaBusy, setZerarPaBusy] = useState(false);
+const [zerarPaProgresso, setZerarPaProgresso] = useState("");
 const [novaRefModalOpen, setNovaRefModalOpen] = useState(false);
 const [novaRefForm, setNovaRefForm] = useState({ ref: "", cores: "", aplicarMinimos: true });
 const [novaRefErro, setNovaRefErro] = useState("");
@@ -2388,6 +2394,15 @@ const previewBySelection = (form) => {
     () =>
       rows.reduce(
         (acc, row) => acc + sizes.reduce((sum, size) => sum + (Number(row.data?.[size]?.est) || 0), 0),
+        0
+      ),
+    [rows]
+  );
+
+  const totalPaAtual = useMemo(
+    () =>
+      rows.reduce(
+        (acc, row) => acc + sizes.reduce((sum, size) => sum + (Number(row.data?.[size]?.pa) || 0), 0),
         0
       ),
     [rows]
@@ -7792,6 +7807,96 @@ const salvarVendasManuais = async () => {
     );
   };
 
+  const fecharModalZerarPa = () => {
+    if (zerarPaBusy) return;
+    setZerarPaModalOpen(false);
+    setZerarPaSenha("");
+    setZerarPaConfirmacao("");
+    setZerarPaErro("");
+    setZerarPaProgresso("");
+  };
+
+  /** Zera o PRODUTO ACABADO no Bling (em lotes) e depois o PA do app; o DISP perde só a parte que era PA. */
+  const executarZerarProdutoAcabado = async () => {
+    if (zerarPaBusy) return;
+    const senha = String(zerarPaSenha || "").trim();
+    const confirmacao = String(zerarPaConfirmacao || "").trim().toUpperCase();
+    if (!senha) {
+      setZerarPaErro("Informe a senha.");
+      return;
+    }
+    if (senha !== SENHA_ZERAR_COSTURA_PRONTA) {
+      setZerarPaErro("Senha incorreta.");
+      return;
+    }
+    if (confirmacao !== "ZERAR") {
+      setZerarPaErro("Digite ZERAR no campo de confirmação (em maiúsculas).");
+      return;
+    }
+
+    setZerarPaErro("");
+    setZerarPaBusy(true);
+    let inicio = 0;
+    const totais = { zerados: 0, paresRemovidos: 0, naoAchados: 0, erros: 0 };
+    try {
+      for (;;) {
+        const res = await fetch("/api/bling/zerar-pa", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ senha, confirmacao, inicio }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setZerarPaErro(
+            `Parou no SKU ${inicio}: ${data.error || `HTTP ${res.status}`}. O que já foi zerado no Bling continua zerado; clique de novo para continuar.`
+          );
+          return;
+        }
+        totais.zerados += Number(data.zerados) || 0;
+        totais.paresRemovidos += Number(data.paresRemovidos) || 0;
+        totais.naoAchados += Number(data.naoAchados) || 0;
+        totais.erros += Number(data.erros) || 0;
+        setZerarPaProgresso(
+          `Zerando no Bling… ${data.fim} de ${data.total} SKUs · ${totais.zerados} zerado(s)`
+        );
+        if (data.proximo == null) break;
+        inicio = data.proximo;
+      }
+
+      const baseRows = rowsRef.current || [];
+      const nextRows = baseRows.map((row) => {
+        const novaData = cloneRowDataDeep(row);
+        sizes.forEach((size) => {
+          const cell = novaData[size];
+          const pa = Number(cell.pa) || 0;
+          novaData[size] = { ...cell, pa: 0, disp: dispComDelta(cell, -pa) };
+        });
+        return { ...row, data: novaData };
+      });
+      const persist = await persistRowsToSupabase(nextRows);
+      rowsRef.current = nextRows;
+      setRows(nextRows);
+
+      setZerarPaModalOpen(false);
+      setZerarPaSenha("");
+      setZerarPaConfirmacao("");
+      setZerarPaProgresso("");
+      alert(
+        `Produto acabado zerado no Bling: ${totais.zerados} SKU(s), ${totais.paresRemovidos.toLocaleString("pt-BR")} par(es).` +
+          (totais.erros ? `\n\n${totais.erros} SKU(s) deram erro no Bling — clique em Zerar de novo para tentar esses.` : "") +
+          (persist.ok ? "" : "\n\nO app não conseguiu salvar o PA zerado — use Puxar estoque.") +
+          "\n\nEST (costura pronta), Pesponto e Montagem não foram alterados."
+      );
+    } catch (err) {
+      setZerarPaErro(
+        `Conexão interrompida (${err?.message || "rede"}). O que já foi zerado no Bling continua zerado; clique de novo para continuar.`
+      );
+    } finally {
+      setZerarPaBusy(false);
+    }
+  };
+
   /** Entrada/saída manual de PA: lança no PRODUTO ACABADO do Bling e, no que deu certo, atualiza PA e DISP do app. */
   const aplicarAjusteEstoquePronto = async () => {
     if (ajusteProntoBusy) return;
@@ -8222,8 +8327,101 @@ const salvarVendasManuais = async () => {
               </div>
             </div>
           </div>
+
+          <div className="bg-white rounded-[28px] border border-red-200 shadow-sm p-6">
+            <div className="font-bold text-lg text-red-900">Zerar produto acabado (protegido)</div>
+            <p className="text-sm text-slate-600 mt-1">
+              Zera o depósito <span className="font-semibold">{BLING_DEPOSITO_PA_LABEL}</span> no Bling e o PA
+              do app, em todas as referências e cores. EST, Pesponto e Montagem não mudam, e o Geral das contas
+              das lojas também não.
+            </p>
+            <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
+              <span className="text-slate-500">PA atual no app:</span>{" "}
+              <span className="font-bold text-slate-900">{totalPaAtual.toLocaleString("pt-BR")} par(es)</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setZerarPaErro("");
+                setZerarPaSenha("");
+                setZerarPaConfirmacao("");
+                setZerarPaProgresso("");
+                setZerarPaModalOpen(true);
+              }}
+              className="mt-4 w-full rounded-2xl border border-red-300 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800 hover:bg-red-100"
+            >
+              Zerar todo o produto acabado
+            </button>
+          </div>
           </div>
         </div>
+
+        {zerarPaModalOpen && (
+          <div className="fixed inset-0 z-[65] flex items-center justify-center bg-slate-950/50 p-4">
+            <div className="w-full max-w-md rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6">
+              <div className="text-lg font-bold text-red-900">Zerar produto acabado</div>
+              <p className="text-sm text-slate-600 mt-2 leading-relaxed">
+                Coloca <span className="font-semibold">0</span> no depósito {BLING_DEPOSITO_PA_LABEL} do Bling
+                em todos os SKUs e <span className="font-semibold">PA = 0</span> no app (
+                {totalPaAtual.toLocaleString("pt-BR")} par(es) no app hoje). Não dá para desfazer. Pode levar
+                vários minutos — não feche a página.
+              </p>
+              <div className="mt-4 space-y-3">
+                <label className="text-sm font-medium text-slate-700 block">
+                  Senha
+                  <input
+                    type="password"
+                    value={zerarPaSenha}
+                    onChange={(e) => setZerarPaSenha(e.target.value)}
+                    disabled={zerarPaBusy}
+                    className="mt-1.5 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+                    autoComplete="off"
+                  />
+                </label>
+                <label className="text-sm font-medium text-slate-700 block">
+                  Confirmação — digite <span className="font-bold">ZERAR</span>
+                  <input
+                    type="text"
+                    value={zerarPaConfirmacao}
+                    onChange={(e) => setZerarPaConfirmacao(e.target.value)}
+                    disabled={zerarPaBusy}
+                    className="mt-1.5 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm uppercase"
+                    placeholder="ZERAR"
+                    autoComplete="off"
+                  />
+                </label>
+              </div>
+              {zerarPaProgresso ? (
+                <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                  {zerarPaProgresso}
+                </div>
+              ) : null}
+              {zerarPaErro ? (
+                <div className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+                  {zerarPaErro}
+                </div>
+              ) : null}
+              <div className="mt-6 flex gap-3 justify-end">
+                <button
+                  type="button"
+                  onClick={fecharModalZerarPa}
+                  disabled={zerarPaBusy}
+                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold bg-white disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={executarZerarProdutoAcabado}
+                  disabled={zerarPaBusy}
+                  className="rounded-2xl bg-red-700 text-white px-4 py-3 text-sm font-semibold hover:bg-red-800 disabled:opacity-50"
+                >
+                  {zerarPaBusy ? "Zerando…" : "Confirmar zeragem"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </PageShell>
     );
   };
