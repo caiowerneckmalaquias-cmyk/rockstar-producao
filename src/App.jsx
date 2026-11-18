@@ -18,13 +18,7 @@ import {
   ehRefMigracaoAntiga,
   refAntigaDe,
 } from "./constants/production";
-import {
-  BLING_DEPOSITO_PA_LABEL,
-  BLING_DEPOSITO_EST_LABEL,
-  buildBlingSku,
-  normalizeBlingSigla,
-  parseCorSiglaLine,
-} from "./constants/bling";
+import { buildSku, normalizeSigla, parseCorSiglaLine } from "./constants/sku";
 import EtiquetaCaixaPreview from "./EtiquetaCaixaPreview";
 import EsteiraAcabamento from "./EsteiraAcabamento";
 import { confirmarBipUnico, desfazerBipConfirmado } from "./etiquetasCaixaDb";
@@ -44,33 +38,6 @@ function deepClonePlain(obj) {
 }
 
 const PROG_FICHAS_LANCADAS_STORAGE_KEY = "rockstar-prog-fichas-lancadas-v1";
-
-/** Fila da Esteira → Bling: SKU → pares a lançar (+/−). Persistida para não perder bips se a página fechar. */
-const ESTEIRA_BLING_FILA_STORAGE_KEY = "rockstar-esteira-bling-fila-v1";
-
-function lerFilaEsteiraBling() {
-  try {
-    const raw = localStorage.getItem(ESTEIRA_BLING_FILA_STORAGE_KEY);
-    const obj = raw ? JSON.parse(raw) : {};
-    const fila = new Map();
-    Object.entries(obj || {}).forEach(([sku, delta]) => {
-      const d = Math.trunc(Number(delta) || 0);
-      if (sku && d) fila.set(sku, d);
-    });
-    return fila;
-  } catch {
-    return new Map();
-  }
-}
-
-function salvarFilaEsteiraBling(fila) {
-  try {
-    if (!fila.size) localStorage.removeItem(ESTEIRA_BLING_FILA_STORAGE_KEY);
-    else localStorage.setItem(ESTEIRA_BLING_FILA_STORAGE_KEY, JSON.stringify(Object.fromEntries(fila)));
-  } catch {
-    /* ignore */
-  }
-}
 
 function readProgFichasLancadasFromStorage() {
   try {
@@ -335,14 +302,14 @@ const normalizeProductData = (rawData) =>
     })
   );
 
-/** Disponível pra venda (Multiempresa). Fallback: PA. */
+/** Disponível pra venda. Fallback: PA. */
 const cellDisponivel = (cell) => {
   if (!cell) return 0;
   if (cell.disp != null && cell.disp !== "") return Math.max(0, Number(cell.disp) || 0);
   return Math.max(0, Number(cell.pa) || 0);
 };
 
-/** Soma no DISP o que entrou/saiu do PA, para a tela refletir antes do próximo Puxar estoque. */
+/** Soma no DISP o que entrou ou saiu do PA. */
 const dispComDelta = (cell, delta) => {
   if (cell?.disp == null || cell.disp === "") return cell?.disp;
   return Math.max(0, (Number(cell.disp) || 0) + delta);
@@ -933,7 +900,7 @@ function buildSuggestions(rows, minimos, vendas, tempoProducao) {
       const cellNova = familia.rowNova?.data?.[size] || { pa: 0, disp: 0, est: 0, m: 0, p: 0 };
       const cellSolo = familia.rowSolo?.data?.[size] || { pa: 0, disp: 0, est: 0, m: 0, p: 0 };
 
-      // Programação usa DISP (Multiempresa), não PA fábrica.
+      // Programação usa DISP, não o PA da fábrica.
       const pa = familia.migracao
         ? cellDisponivel(cellAntiga) + cellDisponivel(cellNova)
         : cellDisponivel(cellSolo);
@@ -2104,17 +2071,8 @@ const [previewFicha, setPreviewFicha] = useState(null);
 const [confirmImport, setConfirmImport] = useState(false);
 const [importMode, setImportMode] = useState("replace");
 const [importSoCoresCadastradas, setImportSoCoresCadastradas] = useState(true);
-const [blingStatus, setBlingStatus] = useState(null);
-const [blingStatusLoading, setBlingStatusLoading] = useState(false);
-const [blingFeedback, setBlingFeedback] = useState("");
-const [blingSiglas, setBlingSiglas] = useState({});
-const [blingSyncBusy, setBlingSyncBusy] = useState("");
-const [esteiraBlingStatus, setEsteiraBlingStatus] = useState({ state: "idle", text: "" });
-const esteiraBlingQueueRef = useRef(null);
-if (esteiraBlingQueueRef.current === null) esteiraBlingQueueRef.current = lerFilaEsteiraBling();
-const esteiraBlingTimerRef = useRef(null);
-const esteiraBlingFlushingRef = useRef(false);
-const esteiraBlingFlushFnRef = useRef(null);
+const [siglas, setSiglas] = useState({});
+const [siglaFeedback, setSiglaFeedback] = useState("");
 const [movError, setMovError] = useState({ Pesponto: "", Montagem: "" });
 const [confirmMov, setConfirmMov] = useState(null);
 const [editingMov, setEditingMov] = useState(null);
@@ -2712,8 +2670,8 @@ const programacaoMontagem = useMemo(
   const produtoSiglaKey = (ref, cor) =>
     `${normalizeKey(ref)}__${normalizeKey(cor)}`;
 
-  const getBlingSigla = (ref, cor) =>
-    normalizeBlingSigla(blingSiglas[produtoSiglaKey(ref, cor)] || "");
+  const getSigla = (ref, cor) =>
+    normalizeSigla(siglas[produtoSiglaKey(ref, cor)] || "");
 
   const carregarProdutosDoBanco = async () => {
     try {
@@ -2727,7 +2685,7 @@ const programacaoMontagem = useMemo(
       const map = {};
       (data || []).forEach((p) => {
         const key = produtoSiglaKey(p.ref, p.cor);
-        map[key] = normalizeBlingSigla(p.bling_sigla);
+        map[key] = normalizeSigla(p.bling_sigla);
       });
       return map;
     } catch (err) {
@@ -2736,8 +2694,8 @@ const programacaoMontagem = useMemo(
     }
   };
 
-  const salvarBlingSiglaProduto = async (ref, cor, sigla) => {
-    const clean = normalizeBlingSigla(sigla);
+  const salvarSiglaProduto = async (ref, cor, sigla) => {
+    const clean = normalizeSigla(sigla);
     const { error } = await salvarProdutosNoBanco([
       { ref, cor, bling_sigla: clean || null },
     ]);
@@ -2745,335 +2703,15 @@ const programacaoMontagem = useMemo(
       alert(`Erro ao salvar sigla: ${error.message || error}`);
       return false;
     }
-    setBlingSiglas((curr) => ({
+    setSiglas((curr) => ({
       ...curr,
       [produtoSiglaKey(ref, cor)]: clean,
     }));
     return true;
   };
 
-  const executarRelinkDepositosBling = async () => {
-    if (blingSyncBusy) return;
-    setBlingSyncBusy("relink");
-    setBlingFeedback("Vinculando depósitos do Bling…");
-    try {
-      const res = await fetch("/api/bling/relink-depositos", {
-        method: "POST",
-        credentials: "same-origin",
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setBlingFeedback(data.error || "Falha ao vincular depósitos");
-        return;
-      }
-      await carregarStatusBling();
-      const nomes = Array.isArray(data.depositos)
-        ? data.depositos.map((d) => d.nome).filter(Boolean)
-        : [];
-      if (data.multiVinculado) {
-        setBlingFeedback(
-          `Depósitos vinculados: PA ${data.matched?.depositoPaNome || "—"} · EST ${data.matched?.depositoEstNome || "—"} · Multiempresa ${data.matched?.depositoMultiNome || data.matched?.depositoMultiId} (id ${data.matched?.depositoMultiId}).`
-        );
-      } else {
-        setBlingFeedback(
-          `${data.warning || "Multiempresa não vinculado."}${
-            nomes.length ? ` Depósitos na API: ${nomes.join(", ")}.` : ""
-          } Se o Multiempresa não listar, use Puxar estoque (descoberta via saldos).`
-        );
-      }
-    } catch (err) {
-      setBlingFeedback(err?.message || "Erro de rede ao vincular depósitos");
-    } finally {
-      setBlingSyncBusy("");
-    }
-  };
-
-  const executarPullEstoqueBling = async () => {
-    if (blingSyncBusy) return;
-    setBlingSyncBusy("pull");
-    setBlingFeedback("Puxando estoque do Bling…");
-    try {
-      const res = await fetch("/api/bling/pull-estoque", {
-        method: "POST",
-        credentials: "same-origin",
-      });
-      const rawText = await res.text();
-      let data = {};
-      try {
-        data = rawText ? JSON.parse(rawText) : {};
-      } catch (_) {
-        data = {};
-      }
-      if (!res.ok) {
-        const detail = data.error || (rawText ? rawText.slice(0, 200) : "");
-        const timeoutHint =
-          res.status === 504 ||
-          res.status === 502 ||
-          /timeout|timed out|FUNCTION_INVOCATION_TIMEOUT/i.test(String(detail))
-            ? " Provável timeout — o pull demora com muitos SKUs; tente de novo."
-            : "";
-        setBlingFeedback(
-          `Falha ao puxar estoque (HTTP ${res.status})${
-            detail ? `: ${detail}` : " — resposta vazia (timeout ou rede)."
-          }${timeoutHint}`
-        );
-        return;
-      }
-      const estoqueBanco = await carregarEstoqueDoBanco();
-      if (estoqueBanco) setRows(estoqueBanco);
-      await carregarStatusBling();
-      const secN = Number(data.secundariasUsadas) || 0;
-      const dispNote =
-        secN > 0
-          ? ` · DISP = PA + Geral de ${secN} conta(s) secundária(s)`
-          : ` · DISP = PA (nenhuma secundária pronta)`;
-      setBlingFeedback(
-        `Puxado: ${data.updated || 0} linhas · SKUs ok ${data.skusOk || 0} · sem sigla ${data.semSigla || 0} · não achados ${data.notFound || 0}${
-          data.negativosNoBling ? ` · ${data.negativosNoBling} saldo(s) negativo(s) no Bling (contados como 0)` : ""
-        }${dispNote}${
-          data.warning ? ` — ${data.warning}` : ""
-        }`
-      );
-    } catch (err) {
-      const msg = String(err?.message || err || "");
-      const looksTimeout =
-        /abort|timeout|network|failed to fetch|load failed/i.test(msg);
-      setBlingFeedback(
-        looksTimeout
-          ? `Erro ao puxar estoque (rede/timeout): ${msg || "sem detalhe"}. O pull pode demorar vários minutos.`
-          : msg || "Erro de rede ao puxar estoque"
-      );
-    } finally {
-      setBlingSyncBusy("");
-    }
-  };
-
-  const executarRemoverOffsetBling = async () => {
-    if (blingSyncBusy) return;
-    const confirmar = window.confirm(
-      "Isso tira os +1000 antigos dos depósitos PRODUTO ACABADO e OVERLOQUE no Bling.\n\n" +
-        "Só mexe em SKUs com saldo de 1000 ou mais (lança uma saída de 1000). O depósito ESTOQUE 1000 não é tocado. " +
-        "Pode rodar de novo sem risco de descontar duas vezes.\n\nContinuar?"
-    );
-    if (!confirmar) return;
-
-    setBlingSyncBusy("offset");
-    let inicio = 0;
-    const totais = { convertidos: 0, naoAchados: 0, erros: 0 };
-    try {
-      for (;;) {
-        const res = await fetch("/api/bling/remover-offset", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ inicio }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          setBlingFeedback(
-            `Conversão parou no SKU ${inicio}: ${data.error || `HTTP ${res.status}`}. Clique de novo para continuar (não desconta duas vezes).`
-          );
-          return;
-        }
-        totais.convertidos += Number(data.convertidos) || 0;
-        totais.naoAchados += Number(data.naoAchados) || 0;
-        totais.erros += Number(data.erros) || 0;
-        setBlingFeedback(
-          `Removendo +1000 do Bling… ${data.fim} de ${data.total} SKUs · ${totais.convertidos} saldo(s) corrigido(s)`
-        );
-        if (data.proximo == null) break;
-        inicio = data.proximo;
-      }
-      setBlingFeedback(
-        `Regra +1000 removida do Bling: ${totais.convertidos} saldo(s) corrigido(s) · não achados ${totais.naoAchados}${
-          totais.erros ? ` · ${totais.erros} erro(s), clique de novo para tentar esses` : ""
-        }. Agora use "Puxar estoque".`
-      );
-    } catch (err) {
-      setBlingFeedback(
-        `Conversão interrompida (${err?.message || "rede"}). Clique de novo para continuar (não desconta duas vezes).`
-      );
-    } finally {
-      setBlingSyncBusy("");
-    }
-  };
-
-  const executarPushEstoqueBling = async (skuFilter) => {
-    if (blingSyncBusy && !skuFilter) return { ok: false, error: "Sync Bling ocupado." };
-    const skus = Array.isArray(skuFilter)
-      ? [...new Set(skuFilter.map((s) => String(s || "").trim().toUpperCase()).filter(Boolean))]
-      : null;
-    if (!skuFilter) {
-      setBlingSyncBusy("push");
-      setBlingFeedback("Subindo estoque para o Bling…");
-    }
-    try {
-      const res = await fetch("/api/bling/push-estoque", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: skus?.length ? JSON.stringify({ skus }) : JSON.stringify({}),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        const errMsg = data.error || "Falha ao subir estoque";
-        if (!skuFilter) setBlingFeedback(errMsg);
-        return { ok: false, error: errMsg, data };
-      }
-      if (!skuFilter) {
-        setBlingFeedback(
-          `Subido: ${data.pushed || 0} atualizações · sem sigla ${data.semSigla || 0} · não achados ${data.notFound || 0}`
-        );
-      }
-      return { ok: true, error: null, data };
-    } catch (err) {
-      const errMsg = err?.message || "Erro de rede ao subir estoque";
-      if (!skuFilter) setBlingFeedback(errMsg);
-      return { ok: false, error: errMsg };
-    } finally {
-      if (!skuFilter) setBlingSyncBusy("");
-    }
-  };
-
-  const agendarFlushEsteiraBling = useCallback((ms) => {
-    if (esteiraBlingTimerRef.current) {
-      window.clearTimeout(esteiraBlingTimerRef.current);
-    }
-    esteiraBlingTimerRef.current = window.setTimeout(() => {
-      esteiraBlingFlushFnRef.current?.();
-    }, ms);
-  }, []);
-
   /**
-   * Lança no Bling a fila de +1/−1 da Esteira como entrada/saída (não substitui o saldo,
-   * então vendas baixadas no Bling entre um Puxar e outro não são apagadas).
-   */
-  const flushEsteiraBlingQueue = useCallback(async () => {
-    if (esteiraBlingFlushingRef.current) return;
-    if (esteiraBlingTimerRef.current) {
-      window.clearTimeout(esteiraBlingTimerRef.current);
-      esteiraBlingTimerRef.current = null;
-    }
-    const enviados = [...esteiraBlingQueueRef.current.entries()].filter(([, delta]) => delta !== 0);
-    if (!enviados.length) {
-      esteiraBlingQueueRef.current = new Map();
-      salvarFilaEsteiraBling(esteiraBlingQueueRef.current);
-      setEsteiraBlingStatus({ state: "idle", text: "" });
-      return;
-    }
-
-    esteiraBlingFlushingRef.current = true;
-    setEsteiraBlingStatus({
-      state: "syncing",
-      text: `Bling: lançando ${enviados.length} SKU(s)…`,
-    });
-    let proximaTentativaMs = 0;
-    try {
-      const res = await fetch("/api/bling/movimentar-pa", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ movimentos: enviados.map(([sku, delta]) => ({ sku, delta })) }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setEsteiraBlingStatus({
-          state: "erro",
-          text: `Bling: falhou — ${data.error || "erro"} (continua na fila, tenta de novo)`,
-        });
-        proximaTentativaMs = 30000;
-        return;
-      }
-
-      const fila = esteiraBlingQueueRef.current;
-      const naoAchados = [];
-      let falhas = 0;
-      (Array.isArray(data.resultados) ? data.resultados : []).forEach((r) => {
-        const sku = String(r?.sku || "").trim().toUpperCase();
-        const enviado = enviados.find(([s]) => s === sku);
-        if (!enviado) return;
-        if (r.ok || r.permanente) {
-          const resto = (fila.get(sku) || 0) - enviado[1];
-          if (resto) fila.set(sku, resto);
-          else fila.delete(sku);
-          if (!r.ok) naoAchados.push(sku);
-        } else {
-          falhas += 1;
-        }
-      });
-      salvarFilaEsteiraBling(fila);
-
-      if (falhas) {
-        setEsteiraBlingStatus({
-          state: "erro",
-          text: `Bling: ${falhas} SKU(s) falharam (continuam na fila, tenta de novo)`,
-        });
-        proximaTentativaMs = 30000;
-      } else if (naoAchados.length) {
-        setEsteiraBlingStatus({
-          state: "erro",
-          text: `Bling: SKU não encontrado no Bling — ${naoAchados.join(", ")}`,
-        });
-      } else {
-        setEsteiraBlingStatus({
-          state: "ok",
-          text: `Bling: ok (${enviados.length} SKU(s) lançados)`,
-        });
-      }
-      if (!proximaTentativaMs && fila.size) proximaTentativaMs = 8000;
-    } catch (err) {
-      setEsteiraBlingStatus({
-        state: "erro",
-        text: `Bling: sem conexão — ${err?.message || "erro"} (continua na fila, tenta de novo)`,
-      });
-      proximaTentativaMs = 30000;
-    } finally {
-      esteiraBlingFlushingRef.current = false;
-      if (proximaTentativaMs) agendarFlushEsteiraBling(proximaTentativaMs);
-    }
-  }, [agendarFlushEsteiraBling]);
-
-  esteiraBlingFlushFnRef.current = flushEsteiraBlingQueue;
-
-  useEffect(() => {
-    if (esteiraBlingQueueRef.current.size) {
-      setEsteiraBlingStatus({
-        state: "pending",
-        text: `Bling: ${esteiraBlingQueueRef.current.size} SKU(s) pendentes de antes…`,
-      });
-      agendarFlushEsteiraBling(3000);
-    }
-  }, [agendarFlushEsteiraBling]);
-
-  const enqueueEsteiraBlingDelta = useCallback(
-    (skuRaw, deltaRaw) => {
-      const sku = String(skuRaw || "").trim().toUpperCase();
-      const delta = Math.trunc(Number(deltaRaw) || 0);
-      if (!sku || !delta) return;
-      const fila = esteiraBlingQueueRef.current;
-      const novo = (fila.get(sku) || 0) + delta;
-      if (novo) fila.set(sku, novo);
-      else fila.delete(sku);
-      salvarFilaEsteiraBling(fila);
-      if (!fila.size) {
-        if (esteiraBlingTimerRef.current) {
-          window.clearTimeout(esteiraBlingTimerRef.current);
-          esteiraBlingTimerRef.current = null;
-        }
-        setEsteiraBlingStatus({ state: "idle", text: "" });
-        return;
-      }
-      setEsteiraBlingStatus({
-        state: "pending",
-        text: `Bling: ${fila.size} SKU(s) na fila…`,
-      });
-      agendarFlushEsteiraBling(8000);
-    },
-    [agendarFlushEsteiraBling]
-  );
-
-  /**
-   * Esteira: 1 bip = PA +1 na hora (baixa M se houver). Bling vai pra fila.
+   * Esteira: 1 bip = PA +1 na hora (baixa M se houver).
    * @param {{contador:string, sku:string, ref:string, cor:string, tamanho:number}} item
    */
   const aplicarBipEsteira = async (item) => {
@@ -3081,7 +2719,6 @@ const programacaoMontagem = useMemo(
     const cor = String(item?.cor || "").trim();
     const tamanho = Number(item?.tamanho) || 0;
     const contador = String(item?.contador || "").trim();
-    const sku = String(item?.sku || "").trim().toUpperCase();
     if (!ref || !cor || !tamanho || !contador) {
       return { ok: false, error: "Dados do bip incompletos." };
     }
@@ -3129,7 +2766,6 @@ const programacaoMontagem = useMemo(
 
     rowsRef.current = nextRows;
     setRows(nextRows);
-    if (sku) enqueueEsteiraBlingDelta(sku, 1);
 
     return { ok: true, tirouDeM, error: null };
   };
@@ -3185,64 +2821,8 @@ const programacaoMontagem = useMemo(
 
     rowsRef.current = nextRows;
     setRows(nextRows);
-    const sku = String(item?.sku || "").trim().toUpperCase();
-    if (sku) enqueueEsteiraBlingDelta(sku, -1);
     return { ok: true, error: null };
   };
-
-  const carregarStatusBling = useCallback(async () => {
-    setBlingStatusLoading(true);
-    try {
-      const res = await fetch("/api/bling/status", { credentials: "same-origin" });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setBlingStatus({ connected: false, error: data.error || "Falha ao ler status" });
-        return;
-      }
-      setBlingStatus(data);
-    } catch (err) {
-      setBlingStatus({
-        connected: false,
-        error: err?.message || "API Bling indisponível (deploy Vercel + env)",
-      });
-    } finally {
-      setBlingStatusLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const bling = params.get("bling");
-    if (!bling) return;
-    if (bling === "connected") {
-      setBlingFeedback(
-        "Bling principal conectado (PA/EST). Conecte as 4 contas secundárias (Geral) e use Puxar estoque — DISP = PA + Gerais."
-      );
-      setActive("Importar GCM");
-    } else if (bling === "connected_sec") {
-      const slot = params.get("slot") || "?";
-      setBlingFeedback(
-        `Conta secundária ${slot} conectada (depósito Geral). Conecte as demais e use Puxar estoque.`
-      );
-      setActive("Importar GCM");
-    } else if (bling === "error") {
-      setBlingFeedback(
-        `Erro ao conectar Bling: ${params.get("msg") || "tente novamente"}`
-      );
-      setActive("Importar GCM");
-    }
-    params.delete("bling");
-    params.delete("msg");
-    params.delete("slot");
-    const next = params.toString();
-    const clean = `${window.location.pathname}${next ? `?${next}` : ""}${window.location.hash || ""}`;
-    window.history.replaceState({}, "", clean);
-    carregarStatusBling();
-  }, [carregarStatusBling]);
-
-  useEffect(() => {
-    carregarStatusBling();
-  }, [carregarStatusBling]);
 
 useEffect(() => {
   const carregarDadosIniciais = async () => {
@@ -3253,7 +2833,7 @@ useEffect(() => {
     const movimentacoesBanco = await carregarMovimentacoesDoBanco();
     const configProducao = await carregarConfiguracoesProducaoDoBanco();
 
-    setBlingSiglas(produtosSiglas || {});
+    setSiglas(produtosSiglas || {});
 
     if (estoqueBanco) {
       setRows(estoqueBanco);
@@ -5873,12 +5453,15 @@ const salvarVendasManuais = async () => {
       <section className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="font-bold text-lg">Siglas Bling</h2>
+            <h2 className="font-bold text-lg">Siglas</h2>
             <p className="text-sm text-slate-500 mt-1">
-              SKU = REF + SIGLA + tamanho (ex.: {buildBlingSku("TNCV010", "RS", 34) || "TNCV010RS34"}).
+              SKU da etiqueta = REF + SIGLA + tamanho (ex.: {buildSku("TNCV010", "RS", 34) || "TNCV010RS34"}).
               Edite cores já cadastradas aqui.
             </p>
           </div>
+          {siglaFeedback ? (
+            <div className="text-sm text-emerald-700">{siglaFeedback}</div>
+          ) : null}
         </div>
         <div className="mt-4 max-h-[360px] overflow-auto space-y-2 pr-1">
           {controleRows.length === 0 ? (
@@ -5888,8 +5471,8 @@ const salvarVendasManuais = async () => {
           ) : (
             controleRows.map((row) => {
               const key = produtoSiglaKey(row.ref, row.cor);
-              const valor = blingSiglas[key] || "";
-              const skuEx = buildBlingSku(row.ref, valor, 34);
+              const valor = siglas[key] || "";
+              const skuEx = buildSku(row.ref, valor, 34);
               return (
                 <div
                   key={`${row.ref}-${row.cor}-sigla`}
@@ -5903,9 +5486,9 @@ const salvarVendasManuais = async () => {
                     type="text"
                     value={valor}
                     onChange={(e) =>
-                      setBlingSiglas((curr) => ({
+                      setSiglas((curr) => ({
                         ...curr,
-                        [key]: normalizeBlingSigla(e.target.value),
+                        [key]: normalizeSigla(e.target.value),
                       }))
                     }
                     className="w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold uppercase tracking-wide"
@@ -5918,12 +5501,12 @@ const salvarVendasManuais = async () => {
                   <button
                     type="button"
                     onClick={async () => {
-                      const ok = await salvarBlingSiglaProduto(
+                      const ok = await salvarSiglaProduto(
                         row.ref,
                         row.cor,
-                        blingSiglas[key]
+                        siglas[key]
                       );
-                      if (ok) setBlingFeedback(`Sigla salva: ${row.ref} • ${row.cor}`);
+                      if (ok) setSiglaFeedback(`Sigla salva: ${row.ref} • ${row.cor}`);
                     }}
                     className="ml-auto rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
                   >
@@ -6131,193 +5714,6 @@ const salvarVendasManuais = async () => {
               </div>
             )}
             {importFeedback && <div className="mt-3 text-sm text-slate-600">{importFeedback}</div>}
-          </div>
-
-          <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <div className="font-semibold">Integração Bling (fase 1)</div>
-                <div className="text-sm text-slate-500 mt-1">
-                  Conta principal: {BLING_DEPOSITO_PA_LABEL} (PA) + {BLING_DEPOSITO_EST_LABEL}{" "}
-                  (EST). <strong>DISP</strong> = PA + Geral das 4 contas secundárias. A Esteira
-                  lança entrada (+1) no PA do Bling, sem apagar vendas. &quot;Subir estoque&quot;
-                  substitui o saldo do Bling pelo do app. PA e EST no Bling guardam o número real.
-                </div>
-                <div className="text-xs text-amber-800 mt-2 rounded-xl bg-amber-50 border border-amber-100 px-3 py-2">
-                  Conecte a principal e as 4 secundárias (logar no Bling da empresa certa em cada
-                  OAuth). Depois use &quot;Puxar estoque&quot;. Programação usa DISP, não PA.
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <a
-                  href="/api/bling/authorize"
-                  className="inline-flex items-center justify-center rounded-2xl bg-[#1B4F72] px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-[#163f5b]"
-                >
-                  Conectar Bling principal
-                </a>
-                <button
-                  type="button"
-                  onClick={carregarStatusBling}
-                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold shadow-sm hover:bg-slate-50"
-                >
-                  Atualizar status
-                </button>
-                <button
-                  type="button"
-                  onClick={executarRelinkDepositosBling}
-                  disabled={!!blingSyncBusy || !blingStatus?.connected}
-                  className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-950 shadow-sm hover:bg-amber-100 disabled:opacity-50"
-                >
-                  {blingSyncBusy === "relink" ? "Vinculando…" : "Vincular depósitos"}
-                </button>
-                <button
-                  type="button"
-                  onClick={executarPullEstoqueBling}
-                  disabled={!!blingSyncBusy || !blingStatus?.connected}
-                  className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-900 shadow-sm hover:bg-emerald-100 disabled:opacity-50"
-                >
-                  {blingSyncBusy === "pull" ? "Puxando…" : "Puxar estoque do Bling"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const confirmar = window.confirm(
-                      "Subir estoque SUBSTITUI o saldo de PA e EST do Bling pelo número que está no app.\n\n" +
-                        "Vendas que o Bling baixou depois do último \"Puxar estoque\" seriam desfeitas, e a Shopee voltaria a mostrar pares já vendidos.\n\n" +
-                        "Use só para acerto, logo depois de Puxar estoque. Continuar?"
-                    );
-                    if (!confirmar) return;
-                    executarPushEstoqueBling();
-                  }}
-                  disabled={!!blingSyncBusy || !blingStatus?.connected}
-                  className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-900 shadow-sm hover:bg-sky-100 disabled:opacity-50"
-                >
-                  {blingSyncBusy === "push" ? "Subindo…" : "Subir estoque para o Bling"}
-                </button>
-              </div>
-            </div>
-
-            {blingFeedback && (
-              <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                {blingFeedback}
-              </div>
-            )}
-
-            <div className="text-xs text-slate-500 mt-3">
-              Cadastre siglas no Controle Geral (ou em Nova referência com COR|SIGLA).
-              Exemplo SKU: {buildBlingSku("TNCV010", getBlingSigla("TNCV010", "ROSE") || "RS", 34)}.
-            </div>
-
-            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-              <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
-                <div className="text-slate-500">Status</div>
-                <div className="font-semibold text-slate-900 mt-1">
-                  {blingStatusLoading
-                    ? "Carregando…"
-                    : blingStatus?.connected
-                      ? blingStatus.expired
-                        ? "Conectado (token expirado — reconecte ou refresh)"
-                        : "Conectado"
-                      : blingStatus?.error
-                        ? `Desconectado — ${blingStatus.error}`
-                        : "Desconectado"}
-                </div>
-              </div>
-              <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
-                <div className="text-slate-500">Regra +1000</div>
-                <div className="font-semibold text-slate-900 mt-1">
-                  Desligada — a Shopee usa o depósito ESTOQUE 1000
-                </div>
-                <button
-                  type="button"
-                  onClick={executarRemoverOffsetBling}
-                  disabled={!!blingSyncBusy || !blingStatus?.connected}
-                  className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-950 hover:bg-amber-100 disabled:opacity-50"
-                >
-                  {blingSyncBusy === "offset" ? "Removendo…" : "Tirar +1000 antigos do Bling (PA/EST)"}
-                </button>
-              </div>
-              <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
-                <div className="text-slate-500">Depósito PA</div>
-                <div className="font-semibold text-slate-900 mt-1">
-                  {blingStatus?.depositoPaNome || BLING_DEPOSITO_PA_LABEL}
-                  {blingStatus?.depositoPaId != null ? ` · id ${blingStatus.depositoPaId}` : " · id —"}
-                </div>
-              </div>
-              <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
-                <div className="text-slate-500">Depósito EST</div>
-                <div className="font-semibold text-slate-900 mt-1">
-                  {blingStatus?.depositoEstNome || BLING_DEPOSITO_EST_LABEL}
-                  {blingStatus?.depositoEstId != null ? ` · id ${blingStatus.depositoEstId}` : " · id —"}
-                </div>
-              </div>
-              <div
-                className={`rounded-2xl border px-4 py-3 md:col-span-2 ${
-                  (blingStatus?.secundariasProntas || 0) >= 1
-                    ? "bg-emerald-50 border-emerald-200"
-                    : "bg-amber-50 border-amber-200"
-                }`}
-              >
-                <div className="text-slate-500">Contas secundárias (Geral → DISP)</div>
-                <div className="font-semibold text-slate-900 mt-1">
-                  {(blingStatus?.secundariasProntas || 0) > 0
-                    ? `${blingStatus.secundariasProntas} de 4 pronta(s) para somar no DISP`
-                    : "Nenhuma secundária pronta — DISP = PA até conectar"}
-                </div>
-                <div className="text-xs text-slate-500 mt-1">
-                  Em cada OAuth, entre no Bling da empresa secundária. O programa casa o depósito
-                  Geral automaticamente.
-                </div>
-                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {(blingStatus?.secundarias?.length
-                    ? blingStatus.secundarias
-                    : [1, 2, 3, 4].map((slot) => ({
-                        slot,
-                        label: `Conta secundária ${slot}`,
-                        connected: false,
-                        depositoGeralId: null,
-                        depositoGeralNome: null,
-                      }))
-                  ).map((sec) => {
-                    const pronta =
-                      sec.connected && !sec.expired && sec.depositoGeralId != null;
-                    return (
-                      <div
-                        key={sec.slot}
-                        className={`rounded-xl border px-3 py-2 ${
-                          pronta
-                            ? "border-emerald-200 bg-white"
-                            : "border-amber-200 bg-white/80"
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <div className="text-xs font-semibold text-slate-800">
-                              Slot {sec.slot}
-                            </div>
-                            <div className="text-xs text-slate-600 mt-0.5">
-                              {pronta
-                                ? `${sec.depositoGeralNome || "Geral"} · id ${sec.depositoGeralId}`
-                                : sec.connected
-                                  ? sec.expired
-                                    ? "Token expirado — reconecte"
-                                    : "Sem depósito Geral"
-                                  : "Desconectada"}
-                            </div>
-                          </div>
-                          <a
-                            href={`/api/bling/authorize?tipo=secundaria&slot=${sec.slot}`}
-                            className="shrink-0 rounded-lg bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-slate-800"
-                          >
-                            {sec.connected ? "Reconectar" : "Conectar"}
-                          </a>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
           </div>
 
           <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
@@ -7218,7 +6614,7 @@ const salvarVendasManuais = async () => {
         const key = normalizeKey(cor);
         if (seen.has(key)) return;
         seen.add(key);
-        cores.push({ cor, sigla: normalizeBlingSigla(sigla) });
+        cores.push({ cor, sigla: normalizeSigla(sigla) });
       });
     return cores;
   };
@@ -7348,10 +6744,10 @@ const salvarVendasManuais = async () => {
     }
 
     setRows((curr) => [...curr, ...novosRows]);
-    setBlingSiglas((curr) => {
+    setSiglas((curr) => {
       const next = { ...curr };
       novasCoresInfo.forEach(({ cor, sigla }) => {
-        next[produtoSiglaKey(ref, cor)] = normalizeBlingSigla(sigla);
+        next[produtoSiglaKey(ref, cor)] = normalizeSigla(sigla);
       });
       return next;
     });
@@ -7816,7 +7212,7 @@ const salvarVendasManuais = async () => {
     setZerarPaProgresso("");
   };
 
-  /** Zera o PRODUTO ACABADO no Bling (em lotes) e depois o PA do app; o DISP perde só a parte que era PA. */
+  /** Zera o PA do app em todas as refs e cores; o DISP perde só a parte que era PA. */
   const executarZerarProdutoAcabado = async () => {
     if (zerarPaBusy) return;
     const senha = String(zerarPaSenha || "").trim();
@@ -7836,45 +7232,27 @@ const salvarVendasManuais = async () => {
 
     setZerarPaErro("");
     setZerarPaBusy(true);
-    let inicio = 0;
-    const totais = { zerados: 0, paresRemovidos: 0, naoAchados: 0, erros: 0 };
+    setZerarPaProgresso("Zerando o produto acabado no app…");
     try {
-      for (;;) {
-        const res = await fetch("/api/bling/zerar-pa", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ senha, confirmacao, inicio }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          setZerarPaErro(
-            `Parou no SKU ${inicio}: ${data.error || `HTTP ${res.status}`}. O que já foi zerado no Bling continua zerado; clique de novo para continuar.`
-          );
-          return;
-        }
-        totais.zerados += Number(data.zerados) || 0;
-        totais.paresRemovidos += Number(data.paresRemovidos) || 0;
-        totais.naoAchados += Number(data.naoAchados) || 0;
-        totais.erros += Number(data.erros) || 0;
-        setZerarPaProgresso(
-          `Zerando no Bling… ${data.fim} de ${data.total} SKUs · ${totais.zerados} zerado(s)`
-        );
-        if (data.proximo == null) break;
-        inicio = data.proximo;
-      }
-
       const baseRows = rowsRef.current || [];
+      let paresRemovidos = 0;
       const nextRows = baseRows.map((row) => {
         const novaData = cloneRowDataDeep(row);
         sizes.forEach((size) => {
           const cell = novaData[size];
           const pa = Number(cell.pa) || 0;
+          paresRemovidos += Math.max(0, pa);
           novaData[size] = { ...cell, pa: 0, disp: dispComDelta(cell, -pa) };
         });
         return { ...row, data: novaData };
       });
       const persist = await persistRowsToSupabase(nextRows);
+      if (!persist.ok) {
+        setZerarPaErro(
+          `Não foi possível salvar o PA zerado: ${persist.error?.message || persist.error || "erro"}.`
+        );
+        return;
+      }
       rowsRef.current = nextRows;
       setRows(nextRows);
 
@@ -7883,24 +7261,19 @@ const salvarVendasManuais = async () => {
       setZerarPaConfirmacao("");
       setZerarPaProgresso("");
       alert(
-        `Produto acabado zerado no Bling: ${totais.zerados} SKU(s), ${totais.paresRemovidos.toLocaleString("pt-BR")} par(es).` +
-          (totais.erros ? `\n\n${totais.erros} SKU(s) deram erro no Bling — clique em Zerar de novo para tentar esses.` : "") +
-          (persist.ok ? "" : "\n\nO app não conseguiu salvar o PA zerado — use Puxar estoque.") +
-          "\n\nEST (costura pronta), Pesponto e Montagem não foram alterados."
+        `Produto acabado zerado no app: ${paresRemovidos.toLocaleString("pt-BR")} par(es).\n\nEST (costura pronta), Pesponto e Montagem não foram alterados.`
       );
     } catch (err) {
-      setZerarPaErro(
-        `Conexão interrompida (${err?.message || "rede"}). O que já foi zerado no Bling continua zerado; clique de novo para continuar.`
-      );
+      setZerarPaErro(err?.message || "Falha ao zerar o produto acabado.");
     } finally {
       setZerarPaBusy(false);
     }
   };
 
-  /** Entrada/saída manual de PA: lança no PRODUTO ACABADO do Bling e, no que deu certo, atualiza PA e DISP do app. */
+  /** Entrada/saída manual de PA no app. O DISP acompanha o mesmo delta. */
   const aplicarAjusteEstoquePronto = async () => {
     if (ajusteProntoBusy) return;
-    const { ref, cor, tipo, grid, motivo } = ajusteProntoForm;
+    const { ref, cor, tipo, grid } = ajusteProntoForm;
     if (!ref || !cor) {
       setAjusteProntoMsg({ tipo: "erro", texto: "Escolha a referência e a cor." });
       return;
@@ -7912,108 +7285,63 @@ const salvarVendasManuais = async () => {
       setAjusteProntoMsg({ tipo: "erro", texto: "Informe a quantidade em pelo menos um número." });
       return;
     }
-    const sigla = getBlingSigla(ref, cor);
-    if (!sigla) {
-      setAjusteProntoMsg({
-        tipo: "erro",
-        texto: `${ref} • ${cor} não tem sigla do Bling cadastrada. Cadastre no Controle Geral para montar o SKU.`,
-      });
+    const rowAtual = (rowsRef.current || []).find((r) => r.ref === ref && r.cor === cor);
+    if (!rowAtual) {
+      setAjusteProntoMsg({ tipo: "erro", texto: "Produto não encontrado no estoque." });
       return;
     }
-    const rowAtual = (rowsRef.current || []).find((r) => r.ref === ref && r.cor === cor);
     if (tipo === "saida") {
       const excede = itens.find(({ size, qtd }) => qtd > (Number(rowAtual?.data?.[size]?.pa) || 0));
       if (excede) {
         setAjusteProntoMsg({
           tipo: "erro",
-          texto: `Saída no número ${excede.size} (${excede.qtd}) é maior que o PA no app (${
+          texto: `Saída no número ${excede.size} (${excede.qtd}) é maior que o PA (${
             Number(rowAtual?.data?.[excede.size]?.pa) || 0
-          }). Se o app estiver desatualizado, use Puxar estoque antes.`,
+          }).`,
         });
         return;
       }
     }
 
     const sinal = tipo === "entrada" ? 1 : -1;
-    const sizePorSku = new Map();
-    const movimentos = itens.map(({ size, qtd }) => {
-      const sku = buildBlingSku(ref, sigla, size);
-      sizePorSku.set(sku, size);
-      return { sku, delta: sinal * qtd };
-    });
-
     setAjusteProntoBusy(true);
     setAjusteProntoMsg(null);
     try {
-      const res = await fetch("/api/bling/movimentar-pa", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          movimentos,
-          observacao: `${tipo === "entrada" ? "Entrada" : "Saída"} manual${
-            motivo.trim() ? ` (${motivo.trim()})` : ""
-          }`,
-        }),
+      const baseRows = rowsRef.current || [];
+      const nextRows = baseRows.map((row) => {
+        if (row.ref !== ref || row.cor !== cor) return row;
+        const novaData = cloneRowDataDeep(row);
+        itens.forEach(({ size, qtd }) => {
+          const delta = sinal * qtd;
+          const cell = novaData[size];
+          novaData[size] = {
+            ...cell,
+            pa: Math.max(0, (Number(cell.pa) || 0) + delta),
+            disp: dispComDelta(cell, delta),
+          };
+        });
+        return { ...row, data: novaData };
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
+      const persist = await persistRowsToSupabase(nextRows);
+      if (!persist.ok) {
         setAjusteProntoMsg({
           tipo: "erro",
-          texto: `Bling recusou: ${data.error || `HTTP ${res.status}`}. Nada foi alterado.`,
+          texto: `Não foi possível salvar: ${persist.error?.message || persist.error || "erro"}.`,
         });
         return;
       }
-
-      const okPorSize = new Map();
-      const falhas = [];
-      (Array.isArray(data.resultados) ? data.resultados : []).forEach((r) => {
-        const size = sizePorSku.get(String(r?.sku || "").toUpperCase());
-        if (size == null) return;
-        if (r.ok) okPorSize.set(size, Number(r.delta) || 0);
-        else falhas.push(`${size} (${r.error || "erro"})`);
+      rowsRef.current = nextRows;
+      setRows(nextRows);
+      const totalOk = itens.reduce((acc, item) => acc + item.qtd, 0);
+      setAjusteProntoMsg({
+        tipo: "ok",
+        texto: `${tipo === "entrada" ? "Entrada" : "Saída"} de ${totalOk} par(es) em ${ref} • ${cor}.`,
       });
-
-      if (okPorSize.size) {
-        const baseRows = rowsRef.current || [];
-        const nextRows = baseRows.map((row) => {
-          if (row.ref !== ref || row.cor !== cor) return row;
-          const novaData = cloneRowDataDeep(row);
-          okPorSize.forEach((delta, size) => {
-            const cell = novaData[size];
-            novaData[size] = {
-              ...cell,
-              pa: Math.max(0, (Number(cell.pa) || 0) + delta),
-              disp: dispComDelta(cell, delta),
-            };
-          });
-          return { ...row, data: novaData };
-        });
-        const persist = await persistRowsToSupabase(nextRows);
-        rowsRef.current = nextRows;
-        setRows(nextRows);
-        if (!persist.ok) {
-          falhas.push("o Bling foi atualizado, mas o app não salvou — use Puxar estoque");
-        }
-      }
-
-      const totalOk = [...okPorSize.values()].reduce((acc, d) => acc + Math.abs(d), 0);
-      if (falhas.length) {
-        setAjusteProntoMsg({
-          tipo: "erro",
-          texto: `${totalOk ? `Lançado ${totalOk} par(es). ` : ""}Falhou: ${falhas.join(", ")}.`,
-        });
-      } else {
-        setAjusteProntoMsg({
-          tipo: "ok",
-          texto: `${tipo === "entrada" ? "Entrada" : "Saída"} de ${totalOk} par(es) lançada no Bling em ${ref} • ${cor}.`,
-        });
-        setAjusteProntoForm((curr) => ({ ...curr, grid: makeEmptyGrid(), motivo: "" }));
-      }
+      setAjusteProntoForm((curr) => ({ ...curr, grid: makeEmptyGrid(), motivo: "" }));
     } catch (err) {
       setAjusteProntoMsg({
         tipo: "erro",
-        texto: `Sem conexão com o servidor (${err?.message || "rede"}). Confira no Bling se o lançamento entrou antes de tentar de novo.`,
+        texto: err?.message || "Falha ao lançar o ajuste.",
       });
     } finally {
       setAjusteProntoBusy(false);
@@ -8031,7 +7359,7 @@ const salvarVendasManuais = async () => {
     return (
       <PageShell
         title="Estoque Pronto"
-        subtitle="Disponível pra venda (DISP) = PA da conta principal + Geral das contas secundárias. Entradas e saídas manuais vão direto para o Bling."
+        subtitle="Disponível pra venda (DISP). Entradas, saídas e a Esteira atualizam o PA e o DISP neste app."
       >
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6 items-start">
           <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm overflow-auto p-6">
@@ -8169,8 +7497,7 @@ const salvarVendasManuais = async () => {
           <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6 space-y-3">
             <div className="font-bold text-lg">Entrada / Saída manual</div>
             <p className="text-xs text-slate-500 leading-relaxed">
-              Lança no depósito {BLING_DEPOSITO_PA_LABEL} do Bling (conta principal) e já atualiza
-              esta tela. Para devolução, par achado, defeito, acerto de contagem.
+              Atualiza o PA e o DISP neste app. Para devolução, par achado, defeito, acerto de contagem.
             </p>
             <div className="grid grid-cols-2 gap-2">
               {[
@@ -8302,7 +7629,7 @@ const salvarVendasManuais = async () => {
               className="w-full rounded-xl bg-[#8B1E2D] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#6F1421] disabled:opacity-50"
             >
               {ajusteProntoBusy
-                ? "Lançando no Bling…"
+                ? "Salvando…"
                 : ajusteProntoForm.tipo === "entrada"
                   ? "Lançar entrada"
                   : "Lançar saída"}
@@ -8312,12 +7639,10 @@ const salvarVendasManuais = async () => {
           <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6 space-y-3">
             <div className="font-bold text-lg">Como ler esta aba</div>
             <p className="text-sm text-slate-600 leading-relaxed">
-              Os números são o <span className="font-semibold">DISP</span>: PA da conta principal
-              somado ao Geral de cada conta secundária conectada.
+              Os números são o <span className="font-semibold">DISP</span> gravado no app.
             </p>
             <p className="text-sm text-slate-600 leading-relaxed">
-              Bips da Esteira e entradas/saídas manuais aparecem na hora. Vendas e mudanças feitas
-              direto no Bling aparecem depois de <span className="font-semibold">Puxar estoque</span>.
+              Bips da Esteira e entradas/saídas manuais aparecem na hora.
               É a mesma base usada nas <span className="font-semibold">Sugestões</span> e na programação.
             </p>
             <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-sm">
@@ -8331,9 +7656,7 @@ const salvarVendasManuais = async () => {
           <div className="bg-white rounded-[28px] border border-red-200 shadow-sm p-6">
             <div className="font-bold text-lg text-red-900">Zerar produto acabado (protegido)</div>
             <p className="text-sm text-slate-600 mt-1">
-              Zera o depósito <span className="font-semibold">{BLING_DEPOSITO_PA_LABEL}</span> no Bling e o PA
-              do app, em todas as referências e cores. EST, Pesponto e Montagem não mudam, e o Geral das contas
-              das lojas também não.
+              Zera o PA do app em todas as referências e cores. EST, Pesponto e Montagem não mudam.
             </p>
             <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
               <span className="text-slate-500">PA atual no app:</span>{" "}
@@ -8361,10 +7684,9 @@ const salvarVendasManuais = async () => {
             <div className="w-full max-w-md rounded-[28px] bg-white shadow-2xl border border-slate-200 p-6">
               <div className="text-lg font-bold text-red-900">Zerar produto acabado</div>
               <p className="text-sm text-slate-600 mt-2 leading-relaxed">
-                Coloca <span className="font-semibold">0</span> no depósito {BLING_DEPOSITO_PA_LABEL} do Bling
-                em todos os SKUs e <span className="font-semibold">PA = 0</span> no app (
-                {totalPaAtual.toLocaleString("pt-BR")} par(es) no app hoje). Não dá para desfazer. Pode levar
-                vários minutos — não feche a página.
+                Coloca <span className="font-semibold">PA = 0</span> no app (
+                {totalPaAtual.toLocaleString("pt-BR")} par(es) hoje). O DISP perde só a parte que era PA.
+                Não dá para desfazer.
               </p>
               <div className="mt-4 space-y-3">
                 <label className="text-sm font-medium text-slate-700 block">
@@ -8915,7 +8237,7 @@ const salvarVendasManuais = async () => {
     const menorCobertura = coberturaAnalise.slice(0, 5);
 
     return (
-      <PageShell title="Sugestões" subtitle={`Planejamento com DISP (Multiempresa / disponível pra venda), vendas, mínimos e tempo de produção (${tempoProducao.pesponto}d pesponto + ${tempoProducao.montagem}d montagem). PA fábrica não manda na programação.`}>
+      <PageShell title="Sugestões" subtitle={`Planejamento com DISP (disponível pra venda), vendas, mínimos e tempo de produção (${tempoProducao.pesponto}d pesponto + ${tempoProducao.montagem}d montagem).`}>
         <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
           <SummaryCard title="Sugestões de Montagem" value={suggestions.montagem.length} subtitle="Ordens sugeridas" />
           <SummaryCard title="Sugestões de Pesponto" value={suggestions.pesponto.length} subtitle="Ordens sugeridas" />
@@ -10422,7 +9744,7 @@ const salvarVendasManuais = async () => {
             <EtiquetaCaixaPreview
               refsUnicas={refsUnicas}
               coresPorRef={coresPorRef}
-              getBlingSigla={getBlingSigla}
+              getSigla={getSigla}
               startPrintWithTarget={startPrintWithTarget}
             />
           </PageShell>
@@ -10431,13 +9753,11 @@ const salvarVendasManuais = async () => {
         return (
           <PageShell
             title="Esteira / Acabamento"
-            subtitle="Cada bip sobe 1 par no PA na hora; Bling sincroniza sozinho. Não exige ficha/saldo em M."
+            subtitle="Cada bip sobe 1 par no PA na hora. Não exige ficha/saldo em M."
           >
             <EsteiraAcabamento
               onBipConfirmado={aplicarBipEsteira}
               onDesfazerBip={desfazerBipEsteira}
-              blingQueueStatus={esteiraBlingStatus}
-              onFlushBling={flushEsteiraBlingQueue}
             />
           </PageShell>
         );
@@ -11095,7 +10415,7 @@ const salvarVendasManuais = async () => {
               <div className="text-lg font-bold text-slate-900">Nova referência</div>
               <p className="text-sm text-slate-600 mt-2 leading-relaxed">
                 Cadastre uma referência com uma ou mais cores. O estoque (PA, EST, M, P) fica zerado em todas as numerações 34–44.
-                Opcional: informe a sigla Bling com <span className="font-semibold">COR|SIGLA</span> (ex.: ROSE|RS → SKU TNCV010RS34).
+                Opcional: informe a sigla com <span className="font-semibold">COR|SIGLA</span> (ex.: ROSE|RS → SKU TNCV010RS34).
               </p>
 
               <div className="mt-4 space-y-3">

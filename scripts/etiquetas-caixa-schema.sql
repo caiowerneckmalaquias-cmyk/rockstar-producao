@@ -17,7 +17,7 @@ create table if not exists public.etiquetas_caixa (
 );
 
 comment on table public.etiquetas_caixa is
-  'Etiquetas impressas (contador único). bipado_em = lido na esteira; confirmado_em = lote subiu PA/Bling.';
+  'Etiquetas impressas (contador único). bipado_em = lido na esteira; confirmado_em = bip confirmado no PA.';
 
 create index if not exists etiquetas_caixa_sku_idx
   on public.etiquetas_caixa (sku);

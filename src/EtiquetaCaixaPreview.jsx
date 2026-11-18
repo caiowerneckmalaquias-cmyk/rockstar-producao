@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import JsBarcode from "jsbarcode";
 import { sizes, refAntigaDe } from "./constants/production";
-import { buildBlingSku, normalizeBlingSigla } from "./constants/bling";
+import { buildSku, normalizeSigla } from "./constants/sku";
 import {
   buildAndDownloadEtiquetaLoteZpl,
   expandLoteToLabels,
@@ -154,7 +154,7 @@ function EtiquetaFace({ nomeLinha, corLinha, tamanho, prog, sku, contador, varia
 export default function EtiquetaCaixaPreview({
   refsUnicas = [],
   coresPorRef = new Map(),
-  getBlingSigla = () => "",
+  getSigla = () => "",
   startPrintWithTarget,
 }) {
   const firstRef = refsUnicas[0] || "RCCA010";
@@ -193,8 +193,8 @@ export default function EtiquetaCaixaPreview({
   }, []);
 
   const sigla = useMemo(
-    () => normalizeBlingSigla(getBlingSigla(ref, cor) || ""),
-    [getBlingSigla, ref, cor]
+    () => normalizeSigla(getSigla(ref, cor) || ""),
+    [getSigla, ref, cor]
   );
 
   const coresDaRef = coresPorRef.get?.(ref) || [];
@@ -233,7 +233,7 @@ export default function EtiquetaCaixaPreview({
   );
 
   const previewSku = useMemo(
-    () => buildBlingSku(ref, sigla, previewSize),
+    () => buildSku(ref, sigla, previewSize),
     [ref, sigla, previewSize]
   );
 
@@ -258,7 +258,7 @@ export default function EtiquetaCaixaPreview({
       return;
     }
     if (!sigla) {
-      setError(`Sem sigla Bling para ${ref} • ${cor}. Cadastre no Controle Geral.`);
+      setError(`Sem sigla para ${ref} • ${cor}. Cadastre no Controle Geral.`);
       return;
     }
     if (!totalForm) {
@@ -341,7 +341,7 @@ export default function EtiquetaCaixaPreview({
       const startContador = formatContador(peek.n, peek.width || 7);
       const { labels, nextContador, total } = expandLoteToLabels(lote, startContador);
       if (!total) {
-        setError("Nenhuma etiqueta no lote (grade vazia ou sem sigla Bling).");
+        setError("Nenhuma etiqueta no lote (grade vazia ou sem sigla).");
         setPrintBusy(false);
         return;
       }
@@ -478,7 +478,7 @@ export default function EtiquetaCaixaPreview({
 
           <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Sigla Bling</span>
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Sigla</span>
               <span className={`font-mono font-bold ${sigla ? "text-slate-900" : "text-red-600"}`}>
                 {sigla || "não cadastrada"}
               </span>

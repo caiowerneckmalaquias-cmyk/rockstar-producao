@@ -1,6 +1,6 @@
 /** Etiqueta de caixa 10×6 cm para Elgin L42 Pro (ZPL, 203 dpi). */
 
-import { buildBlingSku } from "./constants/bling";
+import { buildSku } from "./constants/sku";
 import { sizes } from "./constants/production";
 
 export const ETIQUETA_DPI = 203;
@@ -203,7 +203,7 @@ export function expandLoteToLabels(lote, contadorInicial) {
     sizes.forEach((size) => {
       const qtd = Math.max(0, Math.floor(Number(linha.grid?.[size]) || 0));
       if (!qtd) return;
-      const sku = buildBlingSku(ref, sigla, size);
+      const sku = buildSku(ref, sigla, size);
       if (!sku) return;
       for (let i = 0; i < qtd; i += 1) {
         labels.push({
@@ -255,7 +255,7 @@ export async function buildAndDownloadEtiquetaLoteZpl({
 }) {
   const { labels, nextContador, total } = expandLoteToLabels(lote, contadorInicial);
   if (!total) {
-    throw new Error("Nenhuma etiqueta no lote (grade vazia ou sem sigla Bling).");
+    throw new Error("Nenhuma etiqueta no lote (grade vazia ou sem sigla).");
   }
 
   const logoW = pctX(22);

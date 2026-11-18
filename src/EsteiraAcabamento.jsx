@@ -7,13 +7,11 @@ import {
 
 /**
  * Esteira / Acabamento — cada bip sobe 1 par no PA na hora.
- * Bling sincroniza em background (status discreto). Desfazer último reverte o bip.
+ * Desfazer último reverte o bip.
  */
 export default function EsteiraAcabamento({
   onBipConfirmado,
   onDesfazerBip,
-  blingQueueStatus = { state: "idle", text: "" },
-  onFlushBling,
 }) {
   const inputRef = useRef(null);
   const [scan, setScan] = useState("");
@@ -21,17 +19,8 @@ export default function EsteiraAcabamento({
   const [feedback, setFeedback] = useState({ type: "", text: "" });
   const [sessao, setSessao] = useState([]);
 
-  const flushRef = useRef(onFlushBling);
-  flushRef.current = onFlushBling;
-
   useEffect(() => {
     inputRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      flushRef.current?.();
-    };
   }, []);
 
   const totalPares = sessao.length;
@@ -163,29 +152,6 @@ export default function EsteiraAcabamento({
     }
   };
 
-  const blingState = blingQueueStatus?.state || "idle";
-  const blingText =
-    blingQueueStatus?.text ||
-    (blingState === "syncing"
-      ? "Bling: sincronizando…"
-      : blingState === "ok"
-        ? "Bling: ok"
-        : blingState === "erro"
-          ? "Bling: falhou (tenta de novo)"
-          : blingState === "pending"
-            ? "Bling: na fila…"
-            : "");
-  const blingBannerClass =
-    blingState === "ok"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-      : blingState === "erro"
-        ? "border-rose-200 bg-rose-50 text-rose-800"
-        : blingState === "syncing"
-          ? "border-sky-200 bg-sky-50 text-sky-800"
-          : blingState === "pending"
-            ? "border-amber-200 bg-amber-50 text-amber-900"
-            : "";
-
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
       <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
@@ -194,7 +160,7 @@ export default function EsteiraAcabamento({
         </div>
         <p className="mt-1 text-sm text-slate-500">
           Bipe o código da <strong>direita</strong>. Cada bip sobe <strong>1 par no PA</strong> na
-          hora. Caixa já lida = erro. Bling sincroniza sozinho.
+          hora. Caixa já lida = erro.
         </p>
 
         <label className="mt-4 block">
@@ -244,15 +210,6 @@ export default function EsteiraAcabamento({
             }`}
           >
             {feedback.text}
-          </div>
-        ) : null}
-
-        {blingText ? (
-          <div
-            className={`mt-4 rounded-2xl border px-4 py-3 text-sm font-semibold ${blingBannerClass}`}
-            role="status"
-          >
-            {blingText}
           </div>
         ) : null}
 
