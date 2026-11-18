@@ -521,12 +521,44 @@ function resolverDestinoImportacaoGcm(item, rowsList, soCadastradas) {
   };
 }
 
+const GCM_CURSOR_KEY = "rockstar-gcm-cursor";
+
+function cursorGcmValido(cursor) {
+  const codigo = Number(cursor?.codigo);
+  if (!Number.isFinite(codigo) || codigo <= 0) return null;
+  const data = String(cursor?.data || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) return null;
+  return { codigo, data };
+}
+
+function lerCursorGcm() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(GCM_CURSOR_KEY) || "{}");
+    return { pa: cursorGcmValido(raw?.pa), est: cursorGcmValido(raw?.est) };
+  } catch {
+    return { pa: null, est: null };
+  }
+}
+
+function gravarCursorGcm(parcial) {
+  const atual = lerCursorGcm();
+  const next = {
+    pa: cursorGcmValido(parcial?.pa) || atual.pa,
+    est: cursorGcmValido(parcial?.est) || atual.est,
+  };
+  localStorage.setItem(GCM_CURSOR_KEY, JSON.stringify(next));
+}
+
 /** OVERLOQUE presente no bloco — só então o apply altera EST. */
 function itemGcmTemOverloque(item) {
   if (item?.temOverloque === true) return true;
   if (item?.temOverloque === false) return false;
   if (item?.dataEst == null) return false;
   return sizes.some((s) => (Number(item.dataEst?.[s]) || 0) > 0);
+}
+
+function itemGcmAtualizaPa(item) {
+  return item?.atualizaPa !== false;
 }
 
 function statusFor(item, minimo) {
@@ -2046,6 +2078,9 @@ const [importText, setImportText] = useState("");
 const [importFileName, setImportFileName] = useState("");
 const [importFeedback, setImportFeedback] = useState("");
 const [importPreview, setImportPreview] = useState([]);
+const [gcmPullBusy, setGcmPullBusy] = useState(false);
+const [gcmPullAlvo, setGcmPullAlvo] = useState(null);
+const [gcmCursorPendente, setGcmCursorPendente] = useState(null);
 const [ultimaImportacaoGcm, setUltimaImportacaoGcm] = useState(null);
 const [salesImportFileName, setSalesImportFileName] = useState("");
 const [salesImportFeedback, setSalesImportFeedback] = useState("");
@@ -4097,6 +4132,8 @@ function parseGcmSheet(sheet) {
     setImportText(textParts.join("\n\n"));
     setImportFileName(file.name);
     setImportPreview(parsedFinal);
+    setGcmPullAlvo(null);
+    setGcmCursorPendente(null);
     setImportFeedback(
       `Arquivo carregado com ${parsedFinal.length} bloco(s) do GCM em ${sheetNames.length} aba(s).`
     );
@@ -4106,6 +4143,65 @@ function parseGcmSheet(sheet) {
     setImportPreview([]);
   }
 };
+
+  const puxarEstoqueGcm = async (modo) => {
+    if (gcmPullBusy) return;
+    const alvo = modo === "pa" || modo === "est" ? modo : "ambos";
+    setGcmPullBusy(true);
+    setImportMode("replace");
+    setGcmPullAlvo(alvo);
+    setImportFeedback(
+      alvo === "est"
+        ? "Puxando overloque do GCM…"
+        : alvo === "pa"
+          ? "Puxando produto acabado do GCM…"
+          : "Puxando produto acabado e overloque do GCM…"
+    );
+    try {
+      const cursorAtual = lerCursorGcm();
+      const catalogo = (rowsRef.current || []).map((row) => ({
+        ref: row.ref,
+        cor: row.cor,
+        sigla: getSigla(row.ref, row.cor),
+      }));
+      const base = (rowsRef.current || []).map((row) => ({
+        ref: row.ref,
+        cor: row.cor,
+        pa: Object.fromEntries(sizes.map((size) => [size, Number(row.data?.[size]?.pa) || 0])),
+        est: Object.fromEntries(sizes.map((size) => [size, Number(row.data?.[size]?.est) || 0])),
+      }));
+      const res = await fetch("/api/gcm/pull-estoque", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ catalogo, base, modo: alvo, cursor: cursorAtual }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      const itens = Array.isArray(data.itens) ? data.itens : [];
+      setImportPreview(itens);
+      setImportFileName("API GCM");
+      setImportText("");
+      setGcmCursorPendente(data.cursor || null);
+      const pares = (n) => Number(n || 0).toLocaleString("pt-BR");
+      const origem = (nome, historico, cursor) =>
+        historico ? `${nome} pelo histórico completo` : `${nome} desde ${cursor?.data || "o último pull"}`;
+      const texto =
+        alvo === "pa"
+          ? `GCM produto acabado: ${itens.length} cor(es) · PA ${pares(data.totalPares)} par(es). ${origem("PA", data.historico?.pa, cursorAtual.pa)}. O EST não muda. Confira o preview e aplique.`
+          : alvo === "est"
+            ? `GCM overloque: ${itens.length} cor(es) · EST ${pares(data.totalEst)} par(es). ${origem("EST", data.historico?.est, cursorAtual.est)}. O PA não muda. Confira o preview e aplique.`
+            : `GCM: ${itens.length} cor(es) · PA ${pares(data.totalPares)} par(es) · EST ${pares(data.totalEst)} par(es). ${origem("PA", data.historico?.pa, cursorAtual.pa)}. ${origem("EST", data.historico?.est, cursorAtual.est)}. Confira o preview e aplique.`;
+      setImportFeedback(texto);
+    } catch (err) {
+      setImportFeedback(err?.message || "Falha ao puxar estoque do GCM.");
+      setImportPreview([]);
+      setGcmCursorPendente(null);
+    } finally {
+      setGcmPullBusy(false);
+    }
+  };
 
 
 
@@ -4638,6 +4734,8 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
 
   const executeImport = async () => {
     if (importMode === "reset") {
+      const zeraPa = gcmPullAlvo !== "est";
+      const zeraEst = gcmPullAlvo !== "pa";
       setRows((current) =>
         current.map((row) => ({
           ...row,
@@ -4646,8 +4744,8 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
               size,
               {
                 ...row.data[size],
-                pa: 0,
-                est: 0,
+                pa: zeraPa ? 0 : Number(row.data[size]?.pa) || 0,
+                est: zeraEst ? 0 : Number(row.data[size]?.est) || 0,
               },
             ])
           ),
@@ -4696,14 +4794,16 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
     itensParaAplicar.forEach(({ item, destino }) => {
       const { refDestino, corDestino, rowExistente } = destino;
       const temOverloque = itemGcmTemOverloque(item);
+      const atualizaPa = itemGcmAtualizaPa(item);
       sizes.forEach((numero) => {
         const qtdPa = Math.max(0, Number(item.data?.[numero]) || 0);
         const qtdEst = Math.max(0, Number(item.dataEst?.[numero]) || 0);
         const cell = rowExistente?.data?.[numero] || { pa: 0, est: 0, m: 0, p: 0 };
-        const novoPa =
-          importMode === "sum"
+        const novoPa = atualizaPa
+          ? importMode === "sum"
             ? (Number(cell.pa) || 0) + qtdPa
-            : qtdPa;
+            : qtdPa
+          : Number(cell.pa) || 0;
         const novoEst = temOverloque
           ? importMode === "sum"
             ? (Number(cell.est) || 0) + qtdEst
@@ -4713,7 +4813,7 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
         // Persiste tamanhos com PA/EST do arquivo (inclui zeros no replace) ou alteração no sum.
         if (
           importMode === "sum" &&
-          qtdPa <= 0 &&
+          (!atualizaPa || qtdPa <= 0) &&
           (!temOverloque || qtdEst <= 0)
         ) {
           return;
@@ -4756,16 +4856,18 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
         atualizados += 1;
 
         const temOverloque = itemGcmTemOverloque(found.item);
+        const atualizaPa = itemGcmAtualizaPa(found.item);
         const nextData = { ...row.data };
         sizes.forEach((size) => {
           const qtdPa = Math.max(0, Number(found.item.data?.[size]) || 0);
           const qtdEst = Math.max(0, Number(found.item.dataEst?.[size]) || 0);
           nextData[size] = {
             ...nextData[size],
-            pa:
-              importMode === "sum"
+            pa: atualizaPa
+              ? importMode === "sum"
                 ? (nextData[size]?.pa || 0) + qtdPa
-                : qtdPa,
+                : qtdPa
+              : Number(nextData[size]?.pa) || 0,
             est: temOverloque
               ? importMode === "sum"
                 ? (nextData[size]?.est || 0) + qtdEst
@@ -4786,6 +4888,7 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
 
       const novosRows = novos.map(({ item, destino }) => {
         const temOverloque = itemGcmTemOverloque(item);
+        const atualizaPa = itemGcmAtualizaPa(item);
         return {
           ref: destino.refDestino,
           cor: destino.corDestino,
@@ -4793,7 +4896,7 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
             sizes.map((size) => [
               size,
               {
-                pa: Math.max(0, Number(item.data?.[size]) || 0),
+                pa: atualizaPa ? Math.max(0, Number(item.data?.[size]) || 0) : 0,
                 est: temOverloque
                   ? Math.max(0, Number(item.dataEst?.[size]) || 0)
                   : 0,
@@ -4869,8 +4972,17 @@ const carregarConfiguracoesProducaoDoBanco = async () => {
       preview: parsed.slice(0, 8),
     });
 
-    await salvarProdutosNoBanco(produtosParaSalvar);
-    await salvarEstoqueNoBanco(estoqueParaSalvar);
+    const produtosSalvos = await salvarProdutosNoBanco(produtosParaSalvar);
+    const estoqueSalvo = await salvarEstoqueNoBanco(estoqueParaSalvar);
+    if (
+      gcmCursorPendente &&
+      destinosPorKey.size > 0 &&
+      !produtosSalvos?.error &&
+      !estoqueSalvo?.error
+    ) {
+      gravarCursorGcm(gcmCursorPendente);
+      setGcmCursorPendente(null);
+    }
 
     setConfirmImport(false);
   };
@@ -5645,7 +5757,7 @@ const salvarVendasManuais = async () => {
     return (
     <PageShell
       title="Importar GCM"
-      subtitle="Importe o arquivo do GCM para atualizar o Produto Acabado (PA)."
+      subtitle="Puxe o produto acabado, o overloque, ou os dois. O arquivo Excel continua disponível."
       action={
         <div className="flex flex-wrap gap-2">
           <button
@@ -5699,13 +5811,41 @@ const salvarVendasManuais = async () => {
 
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
-                <div className="font-semibold">Importar arquivo do GCM</div>
-                <div className="text-sm text-slate-500 mt-1">Aceita .xls e .xlsx exportados do seu sistema.</div>
+                <div className="font-semibold">Estoque do GCM</div>
+                <div className="text-sm text-slate-500 mt-1">
+                  Produto acabado é a filial 100 menos as saídas das outras filiais, exceto a 200. Overloque é a filial 200. Puxar um deles não mexe no outro.
+                </div>
               </div>
-              <label className="inline-flex cursor-pointer items-center justify-center rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white shadow-sm">
-                Escolher arquivo
-                <input type="file" accept=".xls,.xlsx" onChange={handleFileUpload} className="hidden" />
-              </label>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => puxarEstoqueGcm("pa")}
+                  disabled={gcmPullBusy}
+                  className="inline-flex items-center justify-center rounded-2xl bg-[#1B4F72] px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-[#163f5b] disabled:opacity-50"
+                >
+                  {gcmPullBusy ? "Puxando…" : "Produto acabado"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => puxarEstoqueGcm("est")}
+                  disabled={gcmPullBusy}
+                  className="inline-flex items-center justify-center rounded-2xl border border-[#1B4F72] bg-white px-4 py-3 text-sm font-semibold text-[#1B4F72] shadow-sm hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {gcmPullBusy ? "Puxando…" : "Overloque"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => puxarEstoqueGcm("ambos")}
+                  disabled={gcmPullBusy}
+                  className="inline-flex items-center justify-center rounded-2xl bg-[#1B4F72] px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-[#163f5b] disabled:opacity-50"
+                >
+                  {gcmPullBusy ? "Puxando…" : "Os dois"}
+                </button>
+                <label className="inline-flex cursor-pointer items-center justify-center rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white shadow-sm">
+                  Escolher arquivo
+                  <input type="file" accept=".xls,.xlsx" onChange={handleFileUpload} className="hidden" />
+                </label>
+              </div>
             </div>
 
             {importFileName && (
@@ -5773,13 +5913,17 @@ const salvarVendasManuais = async () => {
                 <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-right">
                   <div className="text-xs text-slate-500">PA (Estoque)</div>
                   <div className="text-2xl font-bold text-slate-900">
-                    {previewAtualiza.reduce((acc, item) => acc + (item.total || 0), 0)}
+                    {previewAtualiza.some((item) => item.atualizaPa !== false)
+                      ? previewAtualiza.reduce((acc, item) => acc + (item.total || 0), 0)
+                      : "mantém"}
                   </div>
                 </div>
                 <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-right">
                   <div className="text-xs text-slate-500">EST (Overloque)</div>
                   <div className="text-2xl font-bold text-slate-900">
-                    {previewAtualiza.reduce((acc, item) => acc + (item.totalEst || 0), 0)}
+                    {previewAtualiza.some((item) => item.temOverloque === true)
+                      ? previewAtualiza.reduce((acc, item) => acc + (item.totalEst || 0), 0)
+                      : "mantém"}
                   </div>
                 </div>
               </div>
@@ -5822,10 +5966,10 @@ const salvarVendasManuais = async () => {
                     </div>
                     <div className="text-right space-y-1">
                       <div className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-xs font-semibold">
-                        PA {item.total || 0}
+                        {item.atualizaPa === false ? "PA mantém" : `PA ${item.total || 0}`}
                       </div>
                       <div className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-xs font-semibold">
-                        EST {item.totalEst || 0}
+                        {item.temOverloque === false ? "EST mantém" : `EST ${item.totalEst || 0}`}
                       </div>
                     </div>
                   </div>
